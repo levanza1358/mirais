@@ -2,7 +2,12 @@
 set -euo pipefail
 
 REPO_URL="${MIRAIS_REPO_URL:-https://github.com/levanza1358/mirais.git}"
-INSTALL_DIR="${MIRAIS_INSTALL_DIR:-/opt/mirais}"
+if [ "$(id -u)" -eq 0 ]; then
+  DEFAULT_INSTALL_DIR="/opt/mirais"
+else
+  DEFAULT_INSTALL_DIR="$HOME/mirais"
+fi
+INSTALL_DIR="${MIRAIS_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -24,8 +29,8 @@ echo "[mirais] cloning/updating repo"
 if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" pull --ff-only origin main
 else
-  sudo mkdir -p "$(dirname "$INSTALL_DIR")"
-  sudo rm -rf "$INSTALL_DIR"
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  rm -rf "$INSTALL_DIR"
   git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
@@ -45,12 +50,15 @@ echo "[mirais] building dashboard"
 bun run build
 
 echo "[mirais] installing CLI shortcut"
+mkdir -p "$HOME/.config/mirais"
+cat > "$HOME/.config/mirais/install.json" <<JSON
+{"root":"$INSTALL_DIR"}
+JSON
 sudo ln -sf "$INSTALL_DIR/mirais" /usr/local/bin/mirais
 sudo chmod +x "$INSTALL_DIR/mirais"
 
 echo
 echo "Mirais installed. Next commands:"
-echo "  cd $INSTALL_DIR"
 echo "  mirais start"
 echo "  mirais autostart on"
 echo "  mirais status"

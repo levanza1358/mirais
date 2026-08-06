@@ -1,3 +1,16 @@
 #!/usr/bin/env sh
 # mirais CLI wrapper for Linux/macOS — usage: ./mirais start|stop|restart|status
+ROOT_FILE="${HOME}/.config/mirais/install.json"
+if [ -f "$ROOT_FILE" ]; then
+	ROOT=$(python3 - <<'PY'
+import json, os
+path = os.path.expanduser('~/.config/mirais/install.json')
+with open(path, 'r', encoding='utf-8') as f:
+		print(json.load(f).get('root', ''))
+PY
+)
+	if [ -n "$ROOT" ]; then
+		exec bun run "$ROOT/scripts/cli.ts" "$@"
+	fi
+fi
 exec bun run "$(dirname "$0")/scripts/cli.ts" "$@"

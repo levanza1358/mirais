@@ -44,6 +44,9 @@ Write-Host '[mirais] building dashboard'
 bun run build
 
 Write-Host '[mirais] installing CLI shortcut'
+$infoDir = Join-Path ($env:ProgramData ?? 'C:\ProgramData') 'Mirais'
+New-Item -ItemType Directory -Force -Path $infoDir | Out-Null
+Set-Content -Path (Join-Path $infoDir 'install.json') -Value (@{ root = $InstallDir } | ConvertTo-Json)
 $shim = '@echo off`r`nsetlocal`r`ncd /d "' + $InstallDir + '"`r`nbun run scripts/cli.ts %*`r`n'
 Set-Content -Path 'C:\Windows\mirais.cmd' -Value $shim
 

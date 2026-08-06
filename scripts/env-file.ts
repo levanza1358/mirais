@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readInstallRoot } from "./install-path";
 
-export const repoRoot = path.resolve(import.meta.dir, "..");
+export const repoRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
 export const envFilePath = path.join(repoRoot, ".env");
 export const envExamplePath = path.join(repoRoot, ".env.example");
 

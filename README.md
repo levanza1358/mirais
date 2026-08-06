@@ -70,6 +70,8 @@ mirais autostart on
 mirais status
 ```
 
+No `cd` required after install. The global `mirais` command remembers the install location.
+
 ## Run as a background service
 
 ```bash

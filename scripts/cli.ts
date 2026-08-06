@@ -12,10 +12,13 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { config } from "../src/config";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
+import { readInstallRoot } from "./install-path";
+
+const installRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
 
 const pidFile = path.join(config.dataDir, "mirais.pid");
 const logFile = path.join(config.dataDir, "mirais.log");
-const serverEntry = path.join(import.meta.dir, "..", "src", "server.ts");
+const serverEntry = path.join(installRoot, "src", "server.ts");
 const healthHost = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
 const baseUrl = `http://${healthHost}:${config.port}`;
 const displayUrl = `http://${config.host}:${config.port}`;

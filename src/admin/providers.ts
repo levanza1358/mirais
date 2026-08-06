@@ -6,7 +6,7 @@ import { SettingsRepo } from "../store/repos/settings";
 import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
-import { codexHeaders, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isOAuthAccount } from "../proxy/codex";
+import { codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isOAuthAccount } from "../proxy/codex";
 import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
@@ -14,22 +14,7 @@ import { SseParser } from "../proxy/translator/stream";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
-  return /(rate limit|quota|429|exhausted|capacity)/i.test(detail);
-}
-
-function codexTestBody(modelId: string, prompt: string): Record<string, unknown> {
-  return {
-    model: modelId,
-    store: false,
-    stream: false,
-    input: [
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: prompt }],
-      },
-    ],
-  };
+  return /(rate limit|quota|429|exhausted|capacity|stream must be set to true|usage limit has been reached|limit has been reached)/i.test(detail);
 }
 
 export const CODEBUDDY_MODELS: Record<string, string[]> = {
@@ -165,6 +150,52 @@ async function readCodeBuddyPreviewFromSse(body: ReadableStream<Uint8Array>): Pr
           }
           else if (typeof payload.choices?.[0]?.message?.content === "string") {
             text += payload.choices?.[0]?.message?.content ?? "";
+          }
+          if (text.trim().length >= 32) break;
+        } catch {
+          // ignore malformed chunks
+        }
+      }
+      if (text.trim().length >= 32) break;
+    }
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+  const trimmed = text.trim();
+  return trimmed ? trimmed.slice(0, 220) : undefined;
+}
+
+async function readCodexPreviewFromSse(body: ReadableStream<Uint8Array>): Promise<string | undefined> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const parser = new SseParser();
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const ev of parser.feed(decoder.decode(value, { stream: true }))) {
+        if (!ev.data || ev.data === "[DONE]") continue;
+        try {
+          const payload = JSON.parse(ev.data) as {
+            type?: string;
+            delta?: string;
+            output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+            item?: { type?: string; content?: Array<{ type?: string; text?: string }> };
+          };
+          if (typeof payload.delta === "string") {
+            text += payload.delta;
+          }
+          const chunks = [
+            ...(Array.isArray(payload.output) ? payload.output : []),
+            ...(payload.item ? [payload.item] : []),
+          ];
+          for (const chunk of chunks) {
+            if (!Array.isArray(chunk?.content)) continue;
+            text += chunk.content
+              .filter((part) => part?.type === "output_text" && typeof part.text === "string")
+              .map((part) => part.text ?? "")
+              .join("");
           }
           if (text.trim().length >= 32) break;
         } catch {
@@ -488,7 +519,7 @@ export function providerRoutes(db: Database) {
             res = await fetch(codexUrl("/responses"), {
               method: "POST",
               headers: codexHeaders(account, accessToken, true),
-              body: JSON.stringify(codexTestBody(modelId, testPrompt)),
+              body: JSON.stringify(codexRequestBody({ model: modelId, messages: [{ role: "user", content: testPrompt }], stream: true }, modelId, true)),
               signal: AbortSignal.timeout(30_000),
             });
             if (res.ok) break;
@@ -590,13 +621,13 @@ export function providerRoutes(db: Database) {
           try {
             if (isCodeBuddyProviderType(p.type)) {
               preview_text = res.body ? await readCodeBuddyPreviewFromSse(res.body) : undefined;
+            } else if (isOAuthAccount(usedAccount)) {
+              preview_text = res.body ? await readCodexPreviewFromSse(res.body) : undefined;
             } else {
               const payload = await res.json();
-              preview_text = isOAuthAccount(usedAccount)
-                ? extractTestPreviewFromCodexPayload(payload)
-                : upstreamFormat(p) === "anthropic"
-                  ? extractTestPreviewFromAnthropicPayload(payload)
-                  : extractTestPreviewFromOpenAiPayload(payload);
+              preview_text = upstreamFormat(p) === "anthropic"
+                ? extractTestPreviewFromAnthropicPayload(payload)
+                : extractTestPreviewFromOpenAiPayload(payload);
             }
             const meta = resolveModelMeta(modelId, { contextLength: null, maxOutputTokens: null, capabilities: inferCapabilitiesFromPreview(preview_text) });
             context_length = meta?.contextLength ?? null;

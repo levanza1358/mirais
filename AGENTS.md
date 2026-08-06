@@ -50,6 +50,7 @@ bun run smoke          # post-deploy verification
 8. **Cross-platform always.** No hardcoded path separators, no OS-specific APIs; if it can't run on both Windows and Ubuntu, it doesn't merge.
 9. **Tests:** translators and token saver require golden-fixture unit tests; new endpoints require integration tests. See doc 02 §6.
 10. **Update docs in the same PR** when behavior, API, schema, or UI changes.
+11. **When a fix is verified complete, commit and push it to GitHub.** Do not leave validated fixes only in the local workspace.
 
 ## Do NOT
 
