@@ -14,6 +14,7 @@ export interface LogInsert {
   error: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  creditUsage?: number | null;
   latencyMs: number | null;
   tokensSaved: number;
   requestBody?: string | null;
@@ -31,8 +32,8 @@ export class LogsRepo {
       .query(
         `INSERT INTO request_logs
          (id, ts, key_id, endpoint, requested_model, provider, model, attempts, status, http_status, error,
-         input_tokens, output_tokens, latency_ms, tokens_saved, request_body, response_body, attempts_detail, kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         input_tokens, output_tokens, credit_usage, latency_ms, tokens_saved, request_body, response_body, attempts_detail, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         ulid(),
@@ -48,6 +49,7 @@ export class LogsRepo {
         entry.error,
         entry.inputTokens,
         entry.outputTokens,
+        entry.creditUsage ?? null,
         entry.latencyMs,
         entry.tokensSaved,
         entry.requestBody ?? null,
@@ -83,7 +85,7 @@ export class LogsRepo {
     const items = this.db
       .query(
         `SELECT id, ts, key_id, endpoint, requested_model, provider, model, attempts, status, http_status, error,
-                input_tokens, output_tokens, latency_ms, tokens_saved, request_body, response_body, kind
+                input_tokens, output_tokens, credit_usage, latency_ms, tokens_saved, request_body, response_body, kind
          FROM request_logs ${whereSql} ORDER BY ts DESC LIMIT ? OFFSET ?`,
       )
       .all(...params, filters.limit, (filters.page - 1) * filters.limit) as RequestLog[];

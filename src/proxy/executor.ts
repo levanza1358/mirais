@@ -499,14 +499,24 @@ async function upstreamError(res: Response): Promise<GatewayError> {
   let message = `Upstream HTTP ${res.status}`;
   let code: string | undefined;
   try {
-    const data = (await res.json()) as Record<string, unknown>;
-    const e = data.error as Record<string, unknown> | undefined;
-    if (e?.message) message = String(e.message);
-    if (e?.code) code = String(e.code);
+    const raw = await res.text();
+    if (raw) {
+      try {
+        const data = JSON.parse(raw) as Record<string, unknown>;
+        const e = data.error as Record<string, unknown> | undefined;
+        if (e?.message) message = String(e.message);
+        else if (typeof data.message === "string") message = data.message;
+        else if (typeof data.detail === "string") message = data.detail;
+        else message = raw;
+        if (e?.code) code = String(e.code);
+      } catch {
+        message = raw;
+      }
+    }
     const retryAfter = res.headers.get("retry-after");
     if (retryAfter) message += ` (retry-after: ${retryAfter})`;
   } catch {
-    // keep generic message
+    // keep generic message if body can't be read
   }
   const type =
     res.status === 401 || res.status === 403 ? "authentication_error"

@@ -127,6 +127,7 @@ export interface RequestLog {
   error: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  credit_usage: number | null;
   latency_ms: number | null;
   tokens_saved: number | null;
   request_body?: string | null;

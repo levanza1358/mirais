@@ -117,6 +117,7 @@ CREATE TABLE request_logs (
   error           TEXT,
   input_tokens    INTEGER,
   output_tokens   INTEGER,
+  credit_usage    REAL,                      -- provider credit units; null when unavailable
   latency_ms      INTEGER,
   tokens_saved    INTEGER DEFAULT 0,         -- by token saver
   request_body    TEXT,                      -- only when TRACK_PAYLOADS=full

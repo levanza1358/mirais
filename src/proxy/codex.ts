@@ -417,10 +417,9 @@ export function codexRequestBody(req: CanonicalRequest, modelId: string, stream:
     stream,
   };
   if (instructions.length) body.instructions = instructions.join("\n\n");
-  // NOTE: the ChatGPT Codex backend rejects max_output_tokens ("Unsupported
-  // parameter") — output length is server-managed for ChatGPT-account calls.
-  if (req.temperature !== undefined) body.temperature = req.temperature;
-  if (req.top_p !== undefined) body.top_p = req.top_p;
+  // NOTE: the ChatGPT Codex backend rejects max_output_tokens, temperature,
+  // and top_p — output length and sampling are server-managed for
+  // ChatGPT-account calls.
   if (req.tools?.length) {
     body.tools = req.tools.map((t) => ({
       type: "function",

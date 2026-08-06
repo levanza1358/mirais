@@ -1,0 +1,1 @@
+ALTER TABLE request_logs ADD COLUMN credit_usage REAL;

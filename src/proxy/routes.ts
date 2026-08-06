@@ -23,7 +23,7 @@ import { log } from "../utils/logger";
 // compact labels like `bb/gpt-5.4` instead of `blackboxai/openai/gpt-5.4`.
 const PROVIDER_SHORT: Record<string, string> = {
   blackboxai: "bb", blackbox: "bb", openai: "oa", anthropic: "an",
-  google: "gg", moonshotai: "ms", "x-ai": "x", "codebuddy-cn": "cbc", "codebuddy-global": "cbg",
+  google: "gg", moonshotai: "ms", "x-ai": "x",
 };
 function shortProv(name: string) { return PROVIDER_SHORT[name] ?? name; }
 function tailOfModel(modelId: string) {
@@ -62,7 +62,7 @@ export function v1Routes(db: Database) {
             id: `${shortProv(pname)}/${tailOfModel(m.model_id)}`,
             object: "model",
             created: 0,
-            owned_by: shortProv(pname),
+            owned_by: pname,
           };
         }),
         ...aliases.map((a) => ({ id: a.alias, object: "model", created: 0, owned_by: "mirais-alias" })),
@@ -256,6 +256,9 @@ export function v1Routes(db: Database) {
     try {
       const trackPayloads = config.trackPayloads;
       const storePayload = trackPayloads === "full";
+      const creditUsage = provider === "openai" || provider === "codebuddy-cn"
+        ? usage ? usage.prompt_tokens + usage.completion_tokens : null
+        : null;
       logs.insert({
         keyId,
         endpoint,
@@ -268,6 +271,7 @@ export function v1Routes(db: Database) {
         error,
         inputTokens: usage?.prompt_tokens ?? null,
         outputTokens: usage?.completion_tokens ?? null,
+        creditUsage,
         latencyMs: Date.now() - started,
         tokensSaved,
         requestBody: storePayload ? payload?.request ?? null : null,
