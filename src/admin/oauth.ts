@@ -69,7 +69,10 @@ function ensureCallbackServer(onResult: (q: URLSearchParams) => void): void {
         const url = new URL(req.url);
         if (url.pathname === "/auth/callback") {
           onResult(url.searchParams);
-          return new Response("OK", { status: 200 });
+          return new Response(callbackReceivedPage(), {
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          });
         }
         return new Response("Mirais OAuth callback listener", { status: 200 });
       },
@@ -397,4 +400,11 @@ function resultPage(ok: boolean, message: string): string {
 .card{background:#12161f;border:1px solid #232a3a;border-radius:16px;padding:32px;max-width:420px;text-align:center}
 h1{font-size:18px;margin:0 0 8px;color:${color}}p{font-size:13px;color:#8b94a7;margin:0}</style></head>
 <body><div class="card"><h1>${title}</h1><p>${message.replace(/</g, "&lt;")}</p></div></body></html>`;
+}
+
+function callbackReceivedPage(): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mirais — Login callback received</title>
+<style>body{background:#0b0e14;color:#e6e9f0;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:20px;box-sizing:border-box}
+.card{background:#12161f;border:1px solid #232a3a;border-radius:16px;padding:32px;max-width:420px;text-align:center;box-shadow:0 16px 48px #0006}h1{font-size:18px;margin:0 0 8px;color:#34D399}p{font-size:13px;line-height:1.6;color:#aab2c2;margin:0}.hint{margin-top:14px;color:#737d91;font-size:12px}</style></head>
+<body><div class="card"><h1>Login callback received</h1><p>Mirais is finishing the connection. Return to the Mirais dashboard; this page can be closed.</p><p class="hint">Do not close the dashboard while it is connecting.</p></div></body></html>`;
 }

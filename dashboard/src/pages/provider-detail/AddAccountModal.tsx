@@ -14,12 +14,16 @@ export function AddAccountModal({ provider: p, accountCount, onClose }: { provid
   const [bulkProgress, setBulkProgress] = useState(0);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["providers"] });
   const [oauthState, setOauthState] = useState<string | null>(null);
+  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
 
   const startOauth = useMutation({
     mutationFn: () => providers.oauthStart(p.id),
     onSuccess: (r) => {
       setOauthState(r.state);
-      window.open(providers.oauthRedirectUrl(r.url), "_blank", "noopener");
+      const url = providers.oauthRedirectUrl(r.url);
+      setOauthUrl(url);
+      const popup = window.open(url, "_blank", "noopener,noreferrer");
+      if (!popup) toast("The login tab was blocked. Use the Open login page link below.", "error");
     },
     onError: (e) => { toast(e.message, "error"); setMode("pick"); },
   });
@@ -112,6 +116,7 @@ export function AddAccountModal({ provider: p, accountCount, onClose }: { provid
           <Loader2 size={22} className="animate-spin text-accent" />
           <p className="text-sm font-medium">{oauthState ? "Waiting for browser login…" : "Opening login page…"}</p>
           <p className="max-w-xs text-xs text-text-muted">Complete the sign-in in the browser tab that just opened. This dialog closes automatically when the account is connected.</p>
+          {oauthUrl && <a href={oauthUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline underline-offset-2">Open login page</a>}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => { setOauthState(null); oauthStarted.current = false; setMode("pick"); }}>Back</Button>
             <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
