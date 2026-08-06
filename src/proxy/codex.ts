@@ -120,6 +120,11 @@ export interface CodexUsageSnapshot {
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
 }
 
+export interface CodexResetResult {
+  ok: boolean;
+  message: string;
+}
+
 function parseUsageWindow(v: unknown): CodexUsageWindow | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
@@ -159,6 +164,33 @@ export async function fetchCodexUsage(account: ProviderAccount, accessToken: str
         }
       : null,
   };
+}
+
+export async function resetCodexBankedUsage(account: ProviderAccount, accessToken: string): Promise<CodexResetResult> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    originator: "codex_cli_rs",
+    "content-type": "application/json",
+  };
+  if (account.account_id) headers["chatgpt-account-id"] = account.account_id;
+  const res = await fetch(`${WHAM_BASE}/banked-reset`, {
+    method: "POST",
+    headers,
+    body: "{}",
+    signal: AbortSignal.timeout(15_000),
+  });
+  const raw = await res.text();
+  let message = raw || (res.ok ? "Banked reset requested" : `HTTP ${res.status}`);
+  try {
+    const j = JSON.parse(raw) as { message?: string; detail?: string; error?: { message?: string } };
+    message = j.message ?? j.detail ?? j.error?.message ?? message;
+  } catch {
+    // keep text fallback
+  }
+  if (!res.ok) {
+    throw new GatewayError(res.status === 401 ? 401 : 502, res.status === 401 ? "authentication_error" : "server_error", `Banked reset failed: ${message}`);
+  }
+  return { ok: true, message };
 }
 
 // Fallback model list, used only when the live catalog fetch fails. The

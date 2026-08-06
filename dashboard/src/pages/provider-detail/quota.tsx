@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
 import { type CodexQuota, type CodexQuotaWindow, type ProviderAccount, providers } from "../../api";
-import { Badge, Button, Modal, fmtNum } from "../../components/ui";
+import { Badge, Button, Modal, fmtNum, toast } from "../../components/ui";
 
 export function windowLabel(windowData: CodexQuotaWindow | null, fallback: string): string {
   const seconds = windowData?.window_seconds;
@@ -131,8 +131,17 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
     queryFn: () => providers.codexQuota(account.id),
     retry: 1,
   });
+  const reset = useMutation({
+    mutationFn: () => providers.codexQuotaReset(account.id),
+    onSuccess: (result) => {
+      toast(result.message || "Banked reset requested");
+      void q.refetch();
+    },
+    onError: (error: Error) => toast(error.message, "error"),
+  });
   const d: CodexQuota | undefined = q.data;
   const codeBuddy = isCodeBuddyQuota(d, account);
+  const canReset = account.auth_kind === "oauth" && !codeBuddy;
 
   return (
     <Modal open onClose={onClose} title={quotaTitle(account, !!d || q.isError)}>
@@ -157,9 +166,17 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
             </>
           )}
           <div className="flex justify-end">
-            <Button size="sm" variant="outline" onClick={() => q.refetch()} disabled={q.isFetching}>
-              <RefreshCw size={13} className={q.isFetching ? "animate-spin" : ""} /> Refresh
-            </Button>
+            <div className="flex gap-2">
+              {canReset && (
+                <Button size="sm" variant="outline" onClick={() => reset.mutate()} disabled={reset.isPending}>
+                  {reset.isPending && <Loader2 size={13} className="animate-spin" />}
+                  Banked reset
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => q.refetch()} disabled={q.isFetching}>
+                <RefreshCw size={13} className={q.isFetching ? "animate-spin" : ""} /> Refresh
+              </Button>
+            </div>
           </div>
         </div>
       )}

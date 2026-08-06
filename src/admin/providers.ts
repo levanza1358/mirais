@@ -6,7 +6,7 @@ import { SettingsRepo } from "../store/repos/settings";
 import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
-import { codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isOAuthAccount } from "../proxy/codex";
+import { codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isOAuthAccount, resetCodexBankedUsage } from "../proxy/codex";
 import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
@@ -417,6 +417,13 @@ export function providerRoutes(db: Database) {
       if (!isOAuthAccount(account)) throw new AdminError(400, "Quota is only available for OAuth accounts");
       const accessToken = await ensureFreshToken(repo, account);
       return fetchCodexUsage(account, accessToken);
+    })
+    .post("/accounts/:accId/codex-quota/reset", async ({ params }) => {
+      const account = repo.getAccount(params.accId);
+      if (!account) throw new AdminError(404, "Account not found");
+      if (!isOAuthAccount(account)) throw new AdminError(400, "Quota reset is only available for OAuth accounts");
+      const accessToken = await ensureFreshToken(repo, account);
+      return resetCodexBankedUsage(account, accessToken);
     })
     // ── models ──
     .put("/:id/models/:modelId", ({ params, body }) => {
