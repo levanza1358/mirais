@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
 import { type CodexQuota, type CodexQuotaWindow, type ProviderAccount, providers } from "../../api";
-import { Badge, Button, Modal, fmtNum, toast } from "../../components/ui";
+import { Badge, Button, ConfirmModal, Modal, fmtNum, toast } from "../../components/ui";
 
 export function windowLabel(windowData: CodexQuotaWindow | null, fallback: string): string {
   const seconds = windowData?.window_seconds;
@@ -126,6 +127,7 @@ function CodeBuddyQuotaCard({ data }: {
 }
 
 export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount; onClose: () => void }) {
+  const [confirmReset, setConfirmReset] = useState(false);
   const q = useQuery({
     queryKey: ["codex-quota", account.id],
     queryFn: () => providers.codexQuota(account.id),
@@ -142,6 +144,9 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
   const d: CodexQuota | undefined = q.data;
   const codeBuddy = isCodeBuddyQuota(d, account);
   const canReset = account.auth_kind === "oauth" && !codeBuddy;
+  const bankedRemaining = d?.banked_resets?.remaining ?? 0;
+  const bankedTotal = d?.banked_resets?.total;
+  const bankedLabel = bankedTotal != null ? `${bankedRemaining}/${bankedTotal}` : `${bankedRemaining}`;
 
   return (
     <Modal open onClose={onClose} title={quotaTitle(account, !!d || q.isError)}>
@@ -158,6 +163,12 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
               </div>
               {d.secondary ? <QuotaBar title={windowLabel(d.secondary, "5-hour limit")} windowData={d.secondary} /> : <p className="text-[11px] text-text-muted">No 5-hour window for this plan.</p>}
               <QuotaBar title={windowLabel(d.primary, "Weekly limit")} windowData={d.primary} />
+              <div className="rounded-lg bg-bg-base/50 px-3 py-2 text-xs text-text-muted">
+                <div className="flex items-center justify-between gap-3">
+                  <span>Banked reset quota</span>
+                  <span className="font-medium text-text-primary">{bankedLabel}</span>
+                </div>
+              </div>
               {d.credits && (d.credits.has_credits || d.credits.unlimited) && (
                 <div className="rounded-lg bg-bg-base/50 px-3 py-2 text-xs text-text-muted">
                   {d.credits.unlimited ? "Unlimited credits" : `Credit balance: ${d.credits.balance ?? "—"}`}
@@ -168,9 +179,9 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
           <div className="flex justify-end">
             <div className="flex gap-2">
               {canReset && (
-                <Button size="sm" variant="outline" onClick={() => reset.mutate()} disabled={reset.isPending}>
+                <Button size="sm" variant="outline" onClick={() => setConfirmReset(true)} disabled={reset.isPending || bankedRemaining <= 0}>
                   {reset.isPending && <Loader2 size={13} className="animate-spin" />}
-                  Banked reset
+                  Banked reset ({bankedLabel})
                 </Button>
               )}
               <Button size="sm" variant="outline" onClick={() => q.refetch()} disabled={q.isFetching}>
@@ -180,6 +191,17 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
           </div>
         </div>
       )}
+      <ConfirmModal
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => {
+          setConfirmReset(false);
+          reset.mutate();
+        }}
+        title="Reset OpenAI quota"
+        message={`Do you want to reset quota for ${account.label}? Remaining banked reset quota: ${bankedLabel}.`}
+        loading={reset.isPending}
+      />
     </Modal>
   );
 }

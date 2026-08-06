@@ -251,6 +251,7 @@ export interface CodexQuota {
   limit_reached: boolean;
   primary: CodexQuotaWindow | null;
   secondary: CodexQuotaWindow | null;
+  banked_resets: { remaining: number | null; total: number | null } | null;
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
 }
 

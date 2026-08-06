@@ -117,6 +117,7 @@ export interface CodexUsageSnapshot {
   primary: CodexUsageWindow | null;
   /** Secondary rate-limit window (the shorter 5-hour window when present). */
   secondary: CodexUsageWindow | null;
+  banked_resets: { remaining: number | null; total: number | null } | null;
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
 }
 
@@ -149,6 +150,7 @@ export async function fetchCodexUsage(account: ProviderAccount, accessToken: str
   if (!res.ok) throw new GatewayError(res.status === 401 ? 401 : 502, "server_error", `Usage fetch failed: HTTP ${res.status}`);
   const j = (await res.json()) as Record<string, unknown>;
   const rl = (j.rate_limit ?? {}) as Record<string, unknown>;
+  const banked = (j.banked_resets ?? j.banked_reset ?? null) as Record<string, unknown> | null;
   const credits = (j.credits ?? null) as Record<string, unknown> | null;
   return {
     plan_type: typeof j.plan_type === "string" ? j.plan_type : null,
@@ -156,6 +158,12 @@ export async function fetchCodexUsage(account: ProviderAccount, accessToken: str
     limit_reached: rl.limit_reached === true,
     primary: parseUsageWindow(rl.primary_window),
     secondary: parseUsageWindow(rl.secondary_window),
+    banked_resets: banked
+      ? {
+          remaining: typeof banked.remaining === "number" ? banked.remaining : typeof banked.available === "number" ? banked.available : typeof banked.left === "number" ? banked.left : null,
+          total: typeof banked.total === "number" ? banked.total : typeof banked.limit === "number" ? banked.limit : null,
+        }
+      : null,
     credits: credits
       ? {
           has_credits: credits.has_credits === true,
