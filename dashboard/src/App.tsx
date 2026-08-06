@@ -1,0 +1,85 @@
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { auth } from "./api";
+import { Layout } from "./components/Layout";
+import { ToastHost } from "./components/ui";
+import Login from "./pages/Login";
+import Setup from "./pages/Setup";
+import Overview from "./pages/Overview";
+import Providers from "./pages/Providers";
+import ProviderDetail from "./pages/ProviderDetail";
+import Combos from "./pages/Combos";
+import Keys from "./pages/Keys";
+import Logs from "./pages/Logs";
+import WarmupLogs from "./pages/WarmupLogs";
+import UsageLog from "./pages/UsageLog";
+import Settings from "./pages/Settings";
+import { Skeleton } from "./components/ui";
+
+export default function App() {
+  const location = useLocation();
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["auth-check"],
+    queryFn: auth.check,
+    retry: false,
+  });
+
+  if (location.pathname === "/login") {
+    return (
+      <>
+        <Login />
+        <ToastHost />
+      </>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Skeleton className="h-10 w-40" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-2">
+        <p className="text-danger">Cannot reach the Mirais server.</p>
+        <p className="text-sm text-text-muted">Is it running on port 1463?</p>
+      </div>
+    );
+  }
+
+  if (data?.needs_setup) {
+    return (
+      <>
+        <Setup />
+        <ToastHost />
+      </>
+    );
+  }
+
+  if (!data?.authenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return (
+    <>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Overview />} />
+          <Route path="/providers" element={<Providers />} />
+          <Route path="/providers/:id" element={<ProviderDetail />} />
+          <Route path="/combos" element={<Combos />} />
+          <Route path="/keys" element={<Keys />} />
+          <Route path="/logs" element={<Logs />} />
+          <Route path="/warmup-logs" element={<WarmupLogs />} />
+          <Route path="/usage" element={<UsageLog />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
+      <ToastHost />
+    </>
+  );
+}

@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# mirais CLI wrapper for Linux/macOS — usage: ./mirais start|stop|restart|status
+exec bun run "$(dirname "$0")/scripts/cli.ts" "$@"

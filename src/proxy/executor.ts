@@ -1,0 +1,517 @@
+import type { CanonicalRequest, CanonicalResponse, AttemptRecord, RouteCandidate, Usage, RoutingPolicy } from "../shared/types";
+import { GatewayError, isRetriableStatus } from "../shared/errors";
+import { baseUrlFor, upstreamFormat } from "./router";
+import { openaiToAnthropicRequest } from "./translator/anthropic-to-openai";
+import { anthropicToOpenaiResponse } from "./translator/openai-to-anthropic";
+import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/stream";
+import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
+import { metaForModel } from "./modelMeta";
+import type { ProvidersRepo } from "../store/repos/providers";
+import { config } from "../config";
+import { log } from "../utils/logger";
+
+// ── in-memory health state ──
+
+interface CooldownEntry {
+  until: number;
+  failures: number;
+}
+
+const cooldowns = new Map<string, CooldownEntry>();
+const rrCursor = new Map<string, number>();
+
+function cooldownKey(candidate: RouteCandidate, accountId: string): string {
+  return `${candidate.provider.name}:${candidate.modelId}:${accountId}`;
+}
+
+function isCoolingDown(key: string): boolean {
+  const c = cooldowns.get(key);
+  if (!c) return false;
+    if (c.until <= Date.now()) {
+    cooldowns.delete(key);
+    return false;
+  }
+  return true;
+}
+
+export function markCooldown(key: string, retryAfterMs?: number): void {
+  const cur = cooldowns.get(key);
+  const failures = (cur?.failures ?? 0) + 1;
+  const backoff = retryAfterMs ?? (failures === 1 ? 60_000 : failures === 2 ? 300_000 : 900_000);
+  cooldowns.set(key, { until: Date.now() + backoff, failures });
+  log.debug("candidate cooled down", { key, failures, cooldown_ms: backoff });
+}
+
+export function markSuccess(key: string): void {
+  cooldowns.delete(key);
+}
+
+export function cooldownSnapshot(): Array<{ key: string; until: number; failures: number }> {
+  return [...cooldowns.entries()]
+    .filter(([, v]) => v.until > Date.now())
+    .map(([key, v]) => ({ key, until: v.until, failures: v.failures }));
+}
+
+export interface ExecutorContext {
+  signal?: AbortSignal;
+}
+
+export interface ExecuteSuccess {
+  kind: "json";
+  response: CanonicalResponse;
+  candidate: RouteCandidate;
+  accountLabel: string;
+  attempts: AttemptRecord[];
+  latencyMs: number;
+}
+
+export interface ExecuteStreamSuccess {
+  kind: "stream";
+  stream: ReadableStream<Uint8Array>;
+  candidate: RouteCandidate;
+  accountLabel: string;
+  attempts: AttemptRecord[];
+  usagePromise: Promise<Usage | null>;
+}
+
+export type ExecuteResult = ExecuteSuccess | ExecuteStreamSuccess;
+
+const MAX_ATTEMPTS = 3;
+
+function isCodeBuddyProvider(type: string): boolean {
+  return type === "codebuddy-global" || type === "codebuddy-cn";
+}
+
+function withRequiredSystemMessage(req: CanonicalRequest): CanonicalRequest {
+  if (req.messages.some((m) => m.role === "system")) return req;
+  return {
+    ...req,
+    messages: [{ role: "system", content: "You are a helpful AI assistant." }, ...req.messages],
+  };
+}
+
+function codeBuddyHeaders(apiKey: string, accept: "text/event-stream" | "application/json"): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+    "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
+    "X-Product": "SaaS",
+    "X-IDE-Type": "CLI",
+    "X-IDE-Name": "CLI",
+    "x-codebuddy-request": "1",
+    accept,
+  };
+}
+
+export async function executeRequest(
+  req: CanonicalRequest,
+  candidates: RouteCandidate[],
+  ctx: ExecutorContext = {},
+  providersRepo?: ProvidersRepo,
+  policy?: RoutingPolicy,
+): Promise<ExecuteResult> {
+  const attempts: AttemptRecord[] = [];
+  let lastError: GatewayError | null = null;
+
+  // Flatten candidates × accounts, skipping cooled-down pairs, round-robin start
+  const plan: Array<{ candidate: RouteCandidate; account: RouteCandidate["accounts"][number] }> = [];
+  for (const candidate of candidates) {
+    const start = (rrCursor.get(candidate.provider.name) ?? 0) % candidate.accounts.length;
+    const ordered = [...candidate.accounts.slice(start), ...candidate.accounts.slice(0, start)];
+    rrCursor.set(candidate.provider.name, start + 1);
+    for (const account of ordered) {
+      const key = cooldownKey(candidate, account.id);
+      if (!isCoolingDown(key)) plan.push({ candidate, account });
+    }
+  }
+
+  if (!plan.length) {
+    throw new GatewayError(503, "server_error", "All candidates are cooling down. Try again shortly.");
+  }
+
+  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, MAX_ATTEMPTS, plan.length);
+  for (let attemptNo = 0; attemptNo < maxAttempts; attemptNo++) {
+    const { candidate, account } = plan[attemptNo]!;
+    const started = Date.now();
+    const format = upstreamFormat(candidate.provider);
+    const base = baseUrlFor(candidate.provider);
+    const cdKey = cooldownKey(candidate, account.id);
+
+    try {
+      // OAuth accounts (ChatGPT login) can't call api.openai.com — their
+      // tokens only work against the ChatGPT Codex backend (Responses API).
+      if (isOAuthAccount(account)) {
+        if (!providersRepo) throw new GatewayError(500, "server_error", "OAuth account requires a providers repo in the executor");
+        const accessToken = await ensureFreshToken(providersRepo, account);
+        if (req.stream) {
+          const result = await openCodexStream(req, candidate, account, accessToken, ctx.signal);
+          markSuccess(cdKey);
+          attempts.push({
+            provider: candidate.provider.name,
+            model: candidate.modelId,
+            accountLabel: account.label,
+            outcome: "success",
+            latencyMs: Date.now() - started,
+          });
+          return { kind: "stream", stream: result.stream, candidate, accountLabel: account.label, attempts, usagePromise: result.usagePromise };
+        }
+        const response = await callCodex(req, candidate, account, accessToken, ctx.signal);
+        markSuccess(cdKey);
+        attempts.push({
+          provider: candidate.provider.name,
+          model: candidate.modelId,
+          accountLabel: account.label,
+          outcome: "success",
+          latencyMs: Date.now() - started,
+          reason: attemptNo === 0 ? "primary candidate" : "fallback candidate",
+        });
+        return { kind: "json", response, candidate, accountLabel: account.label, attempts, latencyMs: Date.now() - started };
+      }
+
+      if (req.stream) {
+        const result = await openUpstreamStream(req, candidate, account.api_key, base, format, ctx.signal);
+        markSuccess(cdKey);
+        attempts.push({
+          provider: candidate.provider.name,
+          model: candidate.modelId,
+          accountLabel: account.label,
+          outcome: "success",
+          latencyMs: Date.now() - started,
+          reason: attemptNo === 0 ? "primary candidate" : "fallback candidate",
+        });
+        return {
+          kind: "stream",
+          stream: result.stream,
+          candidate,
+          accountLabel: account.label,
+          attempts,
+          usagePromise: result.usagePromise,
+        };
+      }
+
+      const result = await callUpstream(req, candidate, account.api_key, base, format, ctx.signal);
+      markSuccess(cdKey);
+      attempts.push({
+        provider: candidate.provider.name,
+        model: candidate.modelId,
+        accountLabel: account.label,
+        outcome: "success",
+        latencyMs: Date.now() - started,
+        reason: attemptNo === 0 ? "primary candidate" : "fallback candidate",
+      });
+      return {
+        kind: "json",
+        response: result,
+        candidate,
+        accountLabel: account.label,
+        attempts,
+        latencyMs: Date.now() - started,
+      };
+    } catch (err) {
+      const latencyMs = Date.now() - started;
+      const gErr = toGatewayError(err);
+      const retriable = gErr instanceof GatewayError
+        ? isRetriableStatus(gErr.status) || gErr.type === "authentication_error"
+        : true;
+
+      attempts.push({
+        provider: candidate.provider.name,
+        model: candidate.modelId,
+        accountLabel: account.label,
+        outcome: "error",
+        httpStatus: gErr.status,
+        error: gErr.message,
+        latencyMs,
+        reason: attemptNo === 0 ? "primary candidate failed" : "fallback candidate failed",
+      });
+
+      if (retriable) {
+        markCooldown(cdKey, gErr.status === 429 ? retryAfterMsFrom(gErr) : undefined);
+        lastError = gErr;
+        log.warn("upstream attempt failed, failing over", {
+          provider: candidate.provider.name,
+          model: candidate.modelId,
+          status: gErr.status,
+          attempt: attemptNo + 1,
+        });
+        continue;
+      }
+      throw gErr;
+    }
+  }
+
+  throw lastError ?? new GatewayError(503, "server_error", "All upstream attempts failed");
+}
+
+function retryAfterMsFrom(err: GatewayError): number | undefined {
+  const m = /retry[_ -]after[":= ]+(\d+)/i.exec(err.message);
+  return m ? Number(m[1]) * 1000 : undefined;
+}
+
+function toGatewayError(err: unknown): GatewayError {
+  if (err instanceof GatewayError) return err;
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/abort|timeout/i.test(msg)) return new GatewayError(504, "server_error", "Upstream timeout");
+  return new GatewayError(502, "server_error", `Upstream network error: ${msg}`);
+}
+
+async function callUpstream(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  apiKey: string,
+  base: string,
+  format: "openai" | "anthropic",
+  signal?: AbortSignal,
+): Promise<CanonicalResponse> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+
+  if (isCodeBuddyProvider(candidate.provider.type)) {
+    const forced = withRequiredSystemMessage(clampMaxTokens(req, candidate.modelId));
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: codeBuddyHeaders(apiKey, "text/event-stream"),
+      body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
+      signal: combined,
+    });
+    if (!res.ok) throw await upstreamError(res);
+    if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");
+    // CodeBuddy returns standard OpenAI Chat Completions SSE — aggregate into one response
+    return await aggregateChatCompletionsStream(res.body, req.model);
+  }
+
+  if (format === "anthropic") {
+    const body = openaiToAnthropicRequest({ ...req, stream: false }, candidate.modelId);
+    const res = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+      signal: combined,
+    });
+    if (!res.ok) throw await upstreamError(res);
+    const data = (await res.json()) as Record<string, unknown>;
+    return anthropicToOpenaiResponse(data, req.model);
+  }
+
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ ...clampMaxTokens(req, candidate.modelId), model: candidate.modelId, stream: false }),
+    signal: combined,
+  });
+  if (!res.ok) throw await upstreamError(res);
+  return (await res.json()) as CanonicalResponse;
+}
+
+/** Cap max_tokens at the model's documented output limit (never hardcoded per
+ * account — it follows the model's own spec). Leaves the request untouched
+ * when no limit is known or the client didn't set max_tokens. */
+function clampMaxTokens(req: CanonicalRequest, modelId: string): CanonicalRequest {
+  if (req.max_tokens == null) return req;
+  const cap = metaForModel(modelId)?.maxOutputTokens;
+  if (!cap || req.max_tokens <= cap) return req;
+  log.debug("clamping max_tokens to model limit", { model: modelId, requested: req.max_tokens, cap });
+  return { ...req, max_tokens: cap };
+}
+
+async function openUpstreamStream(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  apiKey: string,
+  base: string,
+  format: "openai" | "anthropic",
+  signal?: AbortSignal,
+): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+
+  let res: Response;
+  if (isCodeBuddyProvider(candidate.provider.type)) {
+    const forced = withRequiredSystemMessage(clampMaxTokens(req, candidate.modelId));
+    res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: codeBuddyHeaders(apiKey, "text/event-stream"),
+      body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
+      signal: combined,
+    });
+  } else if (format === "anthropic") {
+    const body = openaiToAnthropicRequest({ ...req, stream: true }, candidate.modelId);
+    res = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify(body),
+      signal: combined,
+    });
+  } else {
+    res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify({ ...clampMaxTokens(req, candidate.modelId), model: candidate.modelId, stream: true }),
+      signal: combined,
+    });
+  }
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  if (format === "anthropic") {
+    // translate Anthropic SSE → OpenAI SSE chunks
+    const parser = new SseParser();
+    const translator = new AnthropicToOpenAIStreamTranslator(req.model);
+    let resolveUsage: (u: Usage | null) => void;
+    const usagePromise = new Promise<Usage | null>((r) => { resolveUsage = r; });
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const reader = res.body!.getReader();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true });
+            for (const ev of parser.feed(text)) {
+              for (const line of translator.handleEvent(ev.event, ev.data)) {
+                controller.enqueue(encoder.encode(line));
+              }
+            }
+          }
+        } catch (err) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: "upstream stream error", type: "server_error" } })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          void err;
+        } finally {
+          resolveUsage!(translator.result().usage);
+          controller.close();
+        }
+      },
+      cancel() {
+        res.body?.cancel().catch(() => undefined);
+      },
+    });
+    return { stream, usagePromise };
+  }
+
+  // openai passthrough (model name inside chunks replaced with requested model)
+  const parser = new SseParser();
+  let usage: Usage | null = null;
+  let resolveUsage: (u: Usage | null) => void;
+  const usagePromise = new Promise<Usage | null>((r) => { resolveUsage = r; });
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = res.body!.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value, { stream: true });
+          for (const ev of parser.feed(text)) {
+            if (ev.data === "[DONE]") {
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              continue;
+            }
+            try {
+              const obj = JSON.parse(ev.data) as Record<string, unknown>;
+              obj.model = req.model;
+              const u = obj.usage as Usage | undefined;
+              if (u) usage = u;
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+            } catch {
+              controller.enqueue(encoder.encode(`data: ${ev.data}\n\n`));
+            }
+          }
+        }
+      } catch (err) {
+        void err;
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      } finally {
+        resolveUsage!(usage);
+        controller.close();
+      }
+    },
+    cancel() {
+      res.body?.cancel().catch(() => undefined);
+    },
+  });
+  return { stream, usagePromise };
+}
+
+// ── ChatGPT Codex backend (OAuth accounts) ──
+
+async function callCodex(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  account: RouteCandidate["accounts"][number],
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<CanonicalResponse> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  // The Codex backend requires stream=true even for non-streaming callers —
+  // stream internally and aggregate the events into one chat completion.
+  const res = await fetch(codexUrl("/responses"), {
+    method: "POST",
+    headers: codexHeaders(account, accessToken, true),
+    body: JSON.stringify(codexRequestBody(req, candidate.modelId, true)),
+    signal: combined,
+  });
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");
+  return aggregateResponsesStream(res.body, req.model);
+}
+
+async function openCodexStream(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  account: RouteCandidate["accounts"][number],
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const res = await fetch(codexUrl("/responses"), {
+    method: "POST",
+    headers: codexHeaders(account, accessToken, true),
+    body: JSON.stringify(codexRequestBody(req, candidate.modelId, true)),
+    signal: combined,
+  });
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");
+  return responsesStreamToChat(res.body, req.model);
+}
+
+async function upstreamError(res: Response): Promise<GatewayError> {
+  let message = `Upstream HTTP ${res.status}`;
+  let code: string | undefined;
+  try {
+    const data = (await res.json()) as Record<string, unknown>;
+    const e = data.error as Record<string, unknown> | undefined;
+    if (e?.message) message = String(e.message);
+    if (e?.code) code = String(e.code);
+    const retryAfter = res.headers.get("retry-after");
+    if (retryAfter) message += ` (retry-after: ${retryAfter})`;
+  } catch {
+    // keep generic message
+  }
+  const type =
+    res.status === 401 || res.status === 403 ? "authentication_error"
+    : res.status === 429 ? "rate_limit_error"
+    : res.status >= 400 && res.status < 500 ? "invalid_request_error"
+    : "server_error";
+  return new GatewayError(res.status, type, message, code);
+}

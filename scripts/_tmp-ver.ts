@@ -1,0 +1,11 @@
+import { Database } from "bun:sqlite";
+import { ProvidersRepo } from "../src/store/repos/providers";
+import { codexHeaders, ensureFreshToken } from "../src/proxy/codex";
+const db = new Database("data/mirais.db");
+const repo = new ProvidersRepo(db);
+const acc = db.query("SELECT * FROM provider_accounts WHERE auth_kind='oauth'").get() as never;
+const token = await ensureFreshToken(repo, acc);
+const res = await fetch("https://chatgpt.com/backend-api/codex/models?client_version=" + (process.argv[2] ?? "0.99.0"), { headers: codexHeaders(acc, token, false) });
+const data = (await res.json()) as { models: Array<Record<string, unknown>> };
+console.log("count:", data.models?.length);
+for (const m of data.models ?? []) console.log(m.slug, "|", m.visibility, "| api:", m.supported_in_api, "| ctx:", m.context_window);

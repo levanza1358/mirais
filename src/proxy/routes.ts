@@ -1,0 +1,483 @@
+import { Elysia } from "elysia";
+import type { Database } from "bun:sqlite";
+import { config } from "../config";
+import { authenticateGatewayKey, authorizeModel } from "../auth";
+import { checkRateLimit, acquireSlot, releaseSlot } from "../ratelimit";
+import { Router } from "./router";
+import { executeRequest, cooldownSnapshot } from "./executor";
+import { applyTokenSaver } from "./saver/rules";
+import type { TokenSaverConfig } from "./saver/compress";
+import { chatCompletionsSchema, anthropicMessagesSchema } from "../shared/schemas";
+import { anthropicToOpenaiRequest } from "./translator/anthropic-to-openai";
+import { openaiToAnthropicResponse } from "./translator/openai-to-anthropic";
+import { OpenAIToAnthropicStreamTranslator } from "./translator/stream";
+import { GatewayError } from "../shared/errors";
+import { ProvidersRepo } from "../store/repos/providers";
+import { AliasesRepo, CombosRepo } from "../store/repos/routing";
+import { LogsRepo } from "../store/repos/logs";
+import { SettingsRepo } from "../store/repos/settings";
+import type { CanonicalRequest, CanonicalResponse, RoutingPolicy } from "../shared/types";
+import { log } from "../utils/logger";
+
+// Short names for the `owned_by` field and model-id trimming so clients see
+// compact labels like `bb/gpt-5.4` instead of `blackboxai/openai/gpt-5.4`.
+const PROVIDER_SHORT: Record<string, string> = {
+  blackboxai: "bb", blackbox: "bb", openai: "oa", anthropic: "an",
+  google: "gg", moonshotai: "ms", "x-ai": "x", "codebuddy-cn": "cbc", "codebuddy-global": "cbg",
+};
+function shortProv(name: string) { return PROVIDER_SHORT[name] ?? name; }
+function tailOfModel(modelId: string) {
+  const parts = modelId.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? modelId;
+}
+
+export function v1Routes(db: Database) {
+  const providersRepo = new ProvidersRepo(db);
+  const router = new Router(providersRepo, new AliasesRepo(db), new CombosRepo(db));
+  const logs = new LogsRepo(db);
+  const settings = new SettingsRepo(db);
+  const defaultRoutingPolicy: RoutingPolicy = {
+    mode: "balanced",
+    preferProviders: [],
+    denyProviders: [],
+    denyModels: [],
+    maxAttempts: 3,
+    respectPriority: true,
+  };
+
+  const app = new Elysia({ prefix: "/v1" });
+
+  app.get("/models", ({ request }) => {
+    authenticateGatewayKey(db, request.headers.get("authorization"));
+    const providers = new ProvidersRepo(db);
+    const models = providers.listAllModels().filter((m) => m.enabled);
+    const aliases = new AliasesRepo(db).list();
+    const combos = new CombosRepo(db).list();
+    return {
+      object: "list",
+      data: [
+        ...models.map((m) => {
+          const pname = providers.get(m.provider_id)?.name ?? "unknown";
+          return {
+            id: `${shortProv(pname)}/${tailOfModel(m.model_id)}`,
+            object: "model",
+            created: 0,
+            owned_by: shortProv(pname),
+          };
+        }),
+        ...aliases.map((a) => ({ id: a.alias, object: "model", created: 0, owned_by: "mirais-alias" })),
+        ...combos.map((c) => ({ id: c.name, object: "model", created: 0, owned_by: "mirais-combo" })),
+      ],
+    };
+  });
+
+  app.post("/chat/completions", async ({ request, set }) => {
+    const started = Date.now();
+    const key = authenticateGatewayKey(db, request.headers.get("authorization"));
+    const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
+
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON");
+    }
+    const parsed = chatCompletionsSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+    }
+    let req = parsed.data as unknown as CanonicalRequest & { max_completion_tokens?: number };
+    if (req.max_completion_tokens && !req.max_tokens) req.max_tokens = req.max_completion_tokens;
+
+    authorizeModel(key, req.model, db);
+
+    const rl = checkRateLimit(db, key);
+    if (rl.retryAfterSec !== undefined) {
+      set.status = 429;
+      set.headers["retry-after"] = String(rl.retryAfterSec);
+      logRequest(key.id, "/v1/chat/completions", req.model, null, null, 1, "rate_limited", 429, "rate limit", started);
+      return new GatewayError(429, "rate_limit_error", "Rate limit exceeded").toJSON();
+    }
+
+    // token saver
+    const saverCfg = settings.getJson<TokenSaverConfig>("token_saver") ?? {
+      enabled: config.tokenSaverDefault,
+      rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
+    };
+    const saver = applyTokenSaver(req, saverCfg);
+    req = saver.request;
+
+    // terse mode
+    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    if (terse?.enabled) {
+      req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
+    }
+
+    const routingPolicy = settings.getJson<RoutingPolicy>("routing_policy") ?? defaultRoutingPolicy;
+    const route = router.resolveWithPolicy(req.model, routingPolicy);
+    acquireSlot(key.id);
+    try {
+      const result = await executeRequest(req, route.candidates, {}, providersRepo, routingPolicy);
+
+      if (result.kind === "stream") {
+        set.headers["content-type"] = "text/event-stream; charset=utf-8";
+        set.headers["cache-control"] = "no-cache";
+        set.headers["connection"] = "keep-alive";
+        const tap = tapOpenAiStream(result.stream);
+        Promise.all([result.usagePromise, tap.textPromise])
+          .then(([usage, text]) => {
+            logRequest(key.id, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+              result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
+              { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
+          })
+          .catch(() => undefined)
+          .finally(() => releaseSlot(key.id));
+        return tap.stream;
+      }
+
+      logRequest(key.id, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+        result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
+        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
+      return result.response;
+    } catch (err) {
+      const status = err instanceof GatewayError ? err.status : 500;
+      const msg = err instanceof Error ? err.message : String(err);
+      logRequest(key.id, "/v1/chat/completions", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+        undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind);
+      throw err;
+    } finally {
+      if (req.stream !== true) releaseSlot(key.id);
+    }
+  });
+
+  app.post("/messages", async ({ request, set }) => {
+    const started = Date.now();
+    const key = authenticateGatewayKey(db, request.headers.get("authorization"));
+    const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
+
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON");
+    }
+    const parsed = anthropicMessagesSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+    }
+    const anthropicBody = rawBody as Record<string, unknown>;
+    let req = anthropicToOpenaiRequest(anthropicBody);
+
+    authorizeModel(key, req.model, db);
+
+    const rl = checkRateLimit(db, key);
+    if (rl.retryAfterSec !== undefined) {
+      set.status = 429;
+      set.headers["retry-after"] = String(rl.retryAfterSec);
+      return { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } };
+    }
+
+    const saverCfg = settings.getJson<TokenSaverConfig>("token_saver") ?? {
+      enabled: config.tokenSaverDefault,
+      rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
+    };
+    const saver = applyTokenSaver(req, saverCfg);
+    req = saver.request;
+
+    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    if (terse?.enabled) {
+      req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
+    }
+
+    const routingPolicy = settings.getJson<RoutingPolicy>("routing_policy") ?? defaultRoutingPolicy;
+    const route = router.resolveWithPolicy(req.model, routingPolicy);
+    acquireSlot(key.id);
+    try {
+      const result = await executeRequest(req, route.candidates, {}, providersRepo, routingPolicy);
+
+      if (result.kind === "stream") {
+        // need Anthropic-shaped SSE back to client
+        const translator = new OpenAIToAnthropicStreamTranslator(req.model);
+        const tap = tapOpenAiStream(result.stream);
+        const outStream = translateOpenAiSseToAnthropic(tap.stream, translator);
+        set.headers["content-type"] = "text/event-stream; charset=utf-8";
+        set.headers["cache-control"] = "no-cache";
+        Promise.all([result.usagePromise, tap.textPromise])
+          .then(([, text]) => {
+            const u = translator.result().usage;
+            logRequest(key.id, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
+              result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
+              { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
+          })
+          .catch(() => undefined)
+          .finally(() => releaseSlot(key.id));
+        return outStream;
+      }
+
+      const anthropicResp = openaiToAnthropicResponse(result.response);
+      logRequest(key.id, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
+        result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
+        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
+      return anthropicResp;
+    } catch (err) {
+      const status = err instanceof GatewayError ? err.status : 500;
+      const msg = err instanceof Error ? err.message : String(err);
+      logRequest(key.id, "/v1/messages", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+        undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind);
+      if (err instanceof GatewayError) {
+        set.status = err.status;
+        return { type: "error", error: { type: err.type, message: err.message } };
+      }
+      throw err;
+    } finally {
+      if (req.stream !== true) releaseSlot(key.id);
+    }
+  });
+
+  app.get("/health", () => ({ status: "ok", cooldowns: cooldownSnapshot() }));
+
+  function logRequest(
+    keyId: string | null,
+    endpoint: string,
+    requestedModel: string,
+    provider: string | null,
+    model: string | null,
+    attempts: number,
+    status: "success" | "error" | "client_error" | "rate_limited",
+    httpStatus: number,
+    error: string | null,
+    started: number,
+    usage?: { prompt_tokens: number; completion_tokens: number } | null,
+    tokensSaved = 0,
+    attemptsDetail?: unknown[],
+    payload?: { request?: string | null; response?: string | null },
+    kind: "request" | "warmup" = "request",
+  ) {
+    try {
+      const trackPayloads = config.trackPayloads;
+      const storePayload = trackPayloads === "full";
+      logs.insert({
+        keyId,
+        endpoint,
+        requestedModel,
+        provider,
+        model,
+        attempts,
+        status,
+        httpStatus,
+        error,
+        inputTokens: usage?.prompt_tokens ?? null,
+        outputTokens: usage?.completion_tokens ?? null,
+        latencyMs: Date.now() - started,
+        tokensSaved,
+        requestBody: storePayload ? payload?.request ?? null : null,
+        responseBody: storePayload ? payload?.response ?? null : null,
+        attemptsDetail: attemptsDetail as never,
+        kind,
+      });
+    } catch (err) {
+      log.warn("failed to write request log", { err: String(err) });
+    }
+  }
+
+  function stringifyUnknown(value: unknown): string {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  function summarizeMessageContent(content: CanonicalRequest["messages"][number]["content"]): string {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return stringifyUnknown(content);
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return stringifyUnknown(part);
+        if ((part as { type?: string }).type === "text") return (part as { text?: string }).text ?? "";
+        if ((part as { type?: string }).type === "image_url") return "[image]";
+        if ((part as { type?: string }).type === "tool_result") {
+          const toolPart = part as { tool_use_id?: string; content?: unknown };
+          return `[tool_result:${toolPart.tool_use_id ?? "unknown"}] ${stringifyUnknown(toolPart.content)}`;
+        }
+        return stringifyUnknown(part);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function summarizeRequest(r: CanonicalRequest): string {
+    const parts: string[] = [];
+
+    parts.push(`model: ${r.model}`);
+    if (typeof r.stream === "boolean") parts.push(`stream: ${r.stream}`);
+    if (typeof r.temperature === "number") parts.push(`temperature: ${r.temperature}`);
+    if (typeof r.top_p === "number") parts.push(`top_p: ${r.top_p}`);
+    if (typeof r.max_tokens === "number") parts.push(`max_tokens: ${r.max_tokens}`);
+    if (r.stop) parts.push(`stop: ${stringifyUnknown(r.stop)}`);
+    if (r.tool_choice) parts.push(`tool_choice: ${stringifyUnknown(r.tool_choice)}`);
+    if (r.response_format) parts.push(`response_format: ${stringifyUnknown(r.response_format)}`);
+
+    if (r.tools?.length) {
+      parts.push("tools:");
+      for (const tool of r.tools) {
+        parts.push(`- ${tool.function.name}${tool.function.description ? ` — ${tool.function.description}` : ""}`);
+        if (tool.function.parameters) parts.push(`  params: ${stringifyUnknown(tool.function.parameters)}`);
+      }
+    }
+
+    parts.push("messages:");
+    for (const [index, m] of r.messages.entries()) {
+      parts.push(`[${index + 1}] ${m.role}${m.name ? ` (${m.name})` : ""}`);
+      const text = summarizeMessageContent(m.content);
+      if (text) parts.push(text);
+      if (m.tool_call_id) parts.push(`tool_call_id: ${m.tool_call_id}`);
+      if (m.tool_calls?.length) {
+        parts.push("tool_calls:");
+        for (const tc of m.tool_calls) {
+          parts.push(`- ${tc.function.name}`);
+          if (tc.function.arguments) parts.push(tc.function.arguments);
+        }
+      }
+      parts.push("");
+    }
+
+    const joined = parts.join("\n").trim();
+    return joined.length > 12000 ? joined.slice(0, 12000) + "\n…[truncated]" : joined;
+  }
+
+  function summarizeResponse(resp: CanonicalResponse | null, errMsg: string | null): string {
+    if (errMsg) return `ERROR: ${errMsg}`;
+    if (!resp) return "";
+
+    const parts: string[] = [];
+    parts.push(`model: ${resp.model}`);
+    if (resp.usage) {
+      parts.push(`usage: prompt=${resp.usage.prompt_tokens}, completion=${resp.usage.completion_tokens}, total=${resp.usage.total_tokens}`);
+    }
+
+    for (const [index, choice] of (resp.choices ?? []).entries()) {
+      parts.push(`choice[${index}] finish_reason=${choice.finish_reason ?? "null"}`);
+      const text = summarizeMessageContent(choice.message.content);
+      if (text) parts.push(text);
+      if (choice.message.tool_calls?.length) {
+        parts.push("tool_calls:");
+        for (const tc of choice.message.tool_calls) {
+          parts.push(`- ${tc.function.name}`);
+          if (tc.function.arguments) parts.push(tc.function.arguments);
+        }
+      }
+      parts.push("");
+    }
+
+    const out = parts.join("\n").trim();
+    return out.length > 12000 ? out.slice(0, 12000) + "\n…[truncated]" : out;
+  }
+
+  return app;
+}
+
+/**
+ * Tee an OpenAI chat.completion.chunk SSE stream: the client receives the
+ * untouched stream while we accumulate the assistant's text deltas so the
+ * request log can show the actual reply instead of "[streamed]".
+ */
+function tapOpenAiStream(stream: ReadableStream<Uint8Array>): { stream: ReadableStream<Uint8Array>; textPromise: Promise<string> } {
+  const [clientBranch, tapBranch] = stream.tee();
+  const textPromise = (async () => {
+    const reader = tapBranch.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    const toolCalls = new Map<number, { name: string; arguments: string }>();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const raw = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const dataLine = raw.split("\n").find((l) => l.startsWith("data:"));
+          if (!dataLine) continue;
+          const data = dataLine.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+          try {
+            const chunk = JSON.parse(data) as {
+              choices?: Array<{
+                delta?: {
+                  content?: string | null;
+                  reasoning_content?: string | null;
+                  tool_calls?: Array<{ index?: number; function?: { name?: string; arguments?: string } }>;
+                };
+              }>;
+            };
+            const choice = chunk.choices?.[0];
+            const contentDelta = choice?.delta?.content;
+            const reasoningDelta = choice?.delta?.reasoning_content;
+            if (typeof reasoningDelta === "string") text += reasoningDelta;
+            if (typeof contentDelta === "string") text += contentDelta;
+            for (const tc of choice?.delta?.tool_calls ?? []) {
+              const idx = tc.index ?? 0;
+              const current = toolCalls.get(idx) ?? { name: "", arguments: "" };
+              if (tc.function?.name) current.name = tc.function.name;
+              if (tc.function?.arguments) current.arguments += tc.function.arguments;
+              toolCalls.set(idx, current);
+            }
+          } catch { /* ignore non-JSON keep-alives */ }
+        }
+      }
+    } catch { /* client disconnected mid-stream — keep what we have */ }
+    const parts: string[] = [];
+    if (text) parts.push(text);
+    if (toolCalls.size) {
+      parts.push("tool_calls:");
+      for (const tc of [...toolCalls.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value)) {
+        parts.push(`- ${tc.name || "unknown"}`);
+        if (tc.arguments) parts.push(tc.arguments);
+      }
+    }
+    const out = parts.join("\n").trim();
+    const MAX = 12000;
+    return out.length > MAX ? out.slice(0, MAX) + "\n…[truncated]" : out;
+  })();
+  return { stream: clientBranch, textPromise };
+}
+
+function translateOpenAiSseToAnthropic(stream: ReadableStream<Uint8Array>, translator: OpenAIToAnthropicStreamTranslator): ReadableStream<Uint8Array> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const dataLines: string[] = [];
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+        }
+        const data = dataLines.join("\n");
+        if (!data) continue;
+        for (const out of translator.handleData(data)) {
+          controller.enqueue(encoder.encode(out));
+        }
+      }
+    },
+    cancel() {
+      reader.cancel().catch(() => undefined);
+    },
+  });
+}
