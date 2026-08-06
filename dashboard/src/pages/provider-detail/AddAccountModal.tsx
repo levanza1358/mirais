@@ -20,9 +20,8 @@ export function AddAccountModal({ provider: p, accountCount, onClose }: { provid
     mutationFn: () => providers.oauthStart(p.id),
     onSuccess: (r) => {
       setOauthState(r.state);
-      const url = providers.oauthRedirectUrl(r.url);
-      setOauthUrl(url);
-      const popup = window.open(url, "_blank", "noopener,noreferrer");
+      setOauthUrl(r.url);
+      const popup = window.open(r.url, "_blank", "noopener,noreferrer");
       if (!popup) toast("The login tab was blocked. Use the Open login page link below.", "error");
     },
     onError: (e) => { toast(e.message, "error"); setMode("pick"); },
