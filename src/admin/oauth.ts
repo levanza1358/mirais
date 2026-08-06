@@ -18,6 +18,7 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CODEBUDDY_DEVICE_PLATFORM = "CLI";
+const OPENAI_ALLOWED_PROVIDER_TYPES = new Set(["openai"]);
 
 const CODEBUDDY_OAUTH: Record<string, { stateUrl: string; tokenUrl: string; refreshUrl: string }> = {
   "codebuddy-global": {
@@ -314,7 +315,7 @@ export function oauthRoutes(db: Database) {
           return { url: data.data.authUrl, state };
         });
       }
-      if (!["openai", "codebuddy-global", "codebuddy-cn"].includes(p.type)) {
+      if (!OPENAI_ALLOWED_PROVIDER_TYPES.has(p.type)) {
         throw new AdminError(400, "OAuth login is only available for supported OpenAI-compatible providers");
       }
 
