@@ -189,6 +189,7 @@ export interface RequestLog {
   requested_model: string;
   provider: string | null;
   model: string | null;
+  account_label: string | null;
   attempts: number;
   status: "success" | "error" | "client_error" | "rate_limited";
   http_status: number | null;

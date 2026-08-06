@@ -165,7 +165,7 @@ function LogRow({ log: l, expanded, onToggle }: { log: RequestLog; expanded: boo
               <span className="text-xs text-text-muted">{fmtTime(l.ts)}</span>
             </div>
             <p className="mt-2 font-mono text-sm text-text-primary" title={l.requested_model}>{labelForProvider(l.provider ?? "", l.requested_model)}</p>
-            <p className="mt-1 text-xs text-text-muted">{l.provider ?? "—"} · upstream {l.model ?? "—"}</p>
+            <p className="mt-1 text-xs text-text-muted">{l.provider ?? "—"} · upstream {l.model ?? "—"}{l.account_label ? ` · account ${l.account_label}` : ""}</p>
           </div>
 
           <div className="grid gap-1 text-xs text-text-muted">
@@ -189,6 +189,7 @@ function LogRow({ log: l, expanded, onToggle }: { log: RequestLog; expanded: boo
             <Detail k="Requested model" v={l.requested_model} mono />
             <Detail k="Upstream model" v={l.model ?? "—"} mono />
             <Detail k="Provider" v={l.provider ?? "—"} />
+            <Detail k="Account / API key" v={l.account_label ?? "—"} />
             <Detail k="Attempts" v={String(l.attempts)} />
             <Detail k="HTTP status" v={l.http_status != null ? String(l.http_status) : "—"} />
             <Detail k="Input tokens" v={fmtNum(l.input_tokens)} />

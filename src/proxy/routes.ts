@@ -256,6 +256,11 @@ export function v1Routes(db: Database) {
     try {
       const trackPayloads = config.trackPayloads;
       const storePayload = trackPayloads === "full";
+      const accountLabel = Array.isArray(attemptsDetail)
+        ? (attemptsDetail as Array<{ accountLabel?: unknown; outcome?: unknown }>)
+            .find((attempt) => attempt.outcome === "success" && typeof attempt.accountLabel === "string")?.accountLabel
+          ?? (attemptsDetail as Array<{ accountLabel?: unknown }>).find((attempt) => typeof attempt.accountLabel === "string")?.accountLabel
+        : null;
       const creditUsage = provider === "openai" || provider === "codebuddy-cn"
         ? usage ? usage.prompt_tokens + usage.completion_tokens : null
         : null;
@@ -277,6 +282,7 @@ export function v1Routes(db: Database) {
         requestBody: storePayload ? payload?.request ?? null : null,
         responseBody: storePayload ? payload?.response ?? null : null,
         attemptsDetail: attemptsDetail as never,
+        accountLabel: typeof accountLabel === "string" ? accountLabel : null,
         kind,
       });
     } catch (err) {

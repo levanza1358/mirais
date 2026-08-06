@@ -111,6 +111,7 @@ CREATE TABLE request_logs (
   requested_model TEXT NOT NULL,             -- as sent by client (incl. combo:)
   provider        TEXT,                      -- winning provider name
   model           TEXT,                      -- upstream model id
+  account_label   TEXT,                      -- selected account label; never a plaintext API key
   attempts        INTEGER NOT NULL DEFAULT 1,
   status          TEXT NOT NULL,             -- success | error | client_error | rate_limited
   http_status     INTEGER,
