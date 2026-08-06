@@ -11,6 +11,7 @@ export default function Settings() {
       <PageHeader title="Settings" />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <GatewaySection />
+        <NetworkSection />
         <ModelSyncSection />
         <TokenSaverSection />
         <SecuritySection />
@@ -22,6 +23,33 @@ export default function Settings() {
         </div>
       </div>
     </div>
+  );
+}
+
+function NetworkSection() {
+  const qc = useQueryClient();
+  const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const exposed = s.data?.network_binding?.exposed ?? (s.data?.env.host === "0.0.0.0");
+
+  const save = useMutation({
+    mutationFn: (next: boolean) => settings.update({ network_binding: { exposed: next, host: next ? "0.0.0.0" : "127.0.0.1" } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Network binding saved — restart Mirais to apply"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  return (
+    <Card>
+      <h3 className="mb-1 text-sm font-medium">Network exposure</h3>
+      <p className="mb-4 text-xs text-text-muted">Default is exposed. When enabled, Mirais binds to <code className="font-mono">0.0.0.0</code> so it can be reached from LAN, Tailscale, or the internet depending on your firewall and routing.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-xs text-text-primary">Expose to network</p>
+          <p className="mt-0.5 text-xs text-text-muted">Current configured host: <code className="font-mono">{s.data?.network_binding?.host ?? s.data?.env.host ?? "0.0.0.0"}</code></p>
+        </div>
+        <Switch checked={exposed} onChange={(v) => save.mutate(v)} disabled={save.isPending || !s.data} />
+      </div>
+      <p className="mt-3 text-xs text-amber-300">Changing this only updates the saved binding preference. Restart Mirais to actually switch between <code className="font-mono">0.0.0.0</code> and <code className="font-mono">127.0.0.1</code>.</p>
+    </Card>
   );
 }
 

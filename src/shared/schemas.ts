@@ -147,6 +147,10 @@ export const settingsUpdateSchema = z.object({
   }).optional(),
   log_retention_days: z.number().int().min(1).max(365).optional(),
   session_remember_default: z.boolean().optional(),
+  network_binding: z.object({
+    exposed: z.boolean(),
+    host: z.enum(["0.0.0.0", "127.0.0.1"]),
+  }).optional(),
   model_sync_mode: z.enum(["curated", "all"]).optional(),
   routing_policy: z.object({
     mode: z.enum(["balanced", "priority", "sticky"]).optional(),

@@ -5,7 +5,7 @@ import fs from "node:fs";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(1463),
-  HOST: z.string().default("127.0.0.1"),
+  HOST: z.string().default("0.0.0.0"),
   DATA_DIR: z.string().default("./data"),
   DASHBOARD_PASSWORD: z.string().default(""),
   SESSION_SECRET: z.string().default(""),

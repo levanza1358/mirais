@@ -2,7 +2,7 @@
 
 **Mirais** is a self-hosted AI gateway & router: one local endpoint that routes LLM requests across multiple providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — with a beautiful password-protected dashboard.
 
-- **Default address:** `http://localhost:1463`
+- **Default address:** `http://0.0.0.0:1463` (exposed by default; can be switched back to localhost-only)
 - **Dashboard:** `http://localhost:1463/` (password protected)
 - **API base:** `http://localhost:1463/v1`
 - **Platforms:** Windows 10/11, Ubuntu 22.04+ / Ubuntu Server
@@ -48,6 +48,28 @@ bun run dev
 
 Open `http://localhost:1463` → login with your `DASHBOARD_PASSWORD`.
 
+## One-shot install
+
+### Ubuntu / Ubuntu Server
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/levanza1358/mirais/main/install.sh | bash
+```
+
+### Windows PowerShell
+
+```powershell
+irm https://raw.githubusercontent.com/levanza1358/mirais/main/install.ps1 | iex
+```
+
+After install:
+
+```bash
+mirais start
+mirais autostart on
+mirais status
+```
+
 ## Run as a background service
 
 ```bash
@@ -59,6 +81,9 @@ mirais stop
 
 # Linux/macOS
 ./mirais start|status|restart|stop
+mirais autostart on|off
+mirais update
+mirais expose on|off
 
 # Or via bun from anywhere in the project
 bun run mirais start
@@ -66,7 +91,7 @@ bun run svc:status   # svc:start / svc:stop / svc:restart also available
 ```
 
 State is tracked via `data/mirais.pid`; server output goes to `data/mirais.log`.
-For a real always-on service (auto-start on boot), see [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md) (NSSM / systemd).
+For a real always-on service (auto-start on boot), use `mirais autostart on`. See [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md).
 
 ## Quick Start (client usage)
 

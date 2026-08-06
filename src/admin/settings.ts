@@ -11,12 +11,21 @@ import { log } from "../utils/logger";
 export function settingsRoutes(db: Database) {
   const settings = new SettingsRepo(db);
 
+  const currentNetworkBinding = () => {
+    const saved = settings.getJson<{ exposed?: boolean; host?: string }>("network_binding");
+    if (saved?.host === "0.0.0.0" || saved?.host === "127.0.0.1") {
+      return { exposed: saved.host === "0.0.0.0", host: saved.host as "0.0.0.0" | "127.0.0.1" };
+    }
+    return { exposed: config.host === "0.0.0.0", host: config.host === "127.0.0.1" ? "127.0.0.1" as const : "0.0.0.0" as const };
+  };
+
   return new Elysia({ prefix: "/api/settings" })
     .get("/", () => ({
       token_saver: settings.getJson("token_saver"),
       terse_mode: settings.getJson("terse_mode"),
       log_retention_days: Number(settings.get("log_retention_days") ?? 30),
       session_remember_default: settings.get("session_remember_default") === "1",
+      network_binding: currentNetworkBinding(),
       model_sync_mode: settings.getJson("model_sync_mode") ?? "curated",
       routing_policy: settings.getJson("routing_policy") ?? {
         mode: "balanced",
@@ -45,6 +54,7 @@ export function settingsRoutes(db: Database) {
       if (parsed.data.session_remember_default !== undefined) {
         settings.set("session_remember_default", parsed.data.session_remember_default ? "1" : "0");
       }
+      if (parsed.data.network_binding) settings.setJson("network_binding", parsed.data.network_binding);
       if (parsed.data.model_sync_mode !== undefined) {
         settings.setJson("model_sync_mode", parsed.data.model_sync_mode);
       }

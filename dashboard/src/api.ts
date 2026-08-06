@@ -173,6 +173,7 @@ export interface Settings {
   terse_mode: unknown;
   log_retention_days: number;
   session_remember_default: boolean;
+  network_binding?: { exposed: boolean; host: "0.0.0.0" | "127.0.0.1" };
   model_sync_mode: "curated" | "all";
   warmup_config?: { enabled: boolean; interval_minutes: number } | null;
   ui: { theme?: string; accent?: string } | null;

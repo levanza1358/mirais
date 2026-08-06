@@ -1,6 +1,6 @@
 # 07 — Deployment: Windows & Ubuntu / Ubuntu Server
 
-Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. Pick the path that fits your machine.
+Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. By default it binds to **`0.0.0.0`** so it is reachable from LAN / Tailscale / internet depending on your firewall.
 
 ---
 
@@ -16,6 +16,26 @@ Verify: `bun --version`
 
 ## 2. Get & Configure
 
+### Fast path — one-shot installers
+
+Ubuntu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/levanza1358/mirais/main/install.sh | bash
+mirais start
+mirais autostart on
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/levanza1358/mirais/main/install.ps1 | iex
+mirais start
+mirais autostart on
+```
+
+### Manual path
+
 ```bash
 git clone <your-repo> mirais && cd mirais
 bun install
@@ -28,7 +48,7 @@ Edit `.env`:
 
 ```bash
 PORT=1463
-HOST=127.0.0.1            # use 0.0.0.0 on a server you reach from other machines
+HOST=0.0.0.0             # default exposed binding; use 127.0.0.1 for localhost-only
 DATA_DIR=./data
 DASHBOARD_PASSWORD=<strong-password>
 SESSION_SECRET=<64 random hex chars>   # generate: bun -e "console.log(crypto.getRandomValues(new Uint8Array(32)).reduce((s,b)=>s+b.toString(16).padStart(2,'0'),''))"
@@ -50,6 +70,10 @@ mirais start      # detached background process; logs → data\mirais.log; pid �
 mirais status     # exit 0 = healthy, 1 = process up but unhealthy, 3 = not running
 mirais restart
 mirais stop
+mirais autostart on
+mirais autostart off
+mirais update
+mirais expose off  # switch back to localhost-only; restart required
 ```
 (Equivalents: `bun run mirais start`, `bun run svc:start|svc:stop|svc:restart|svc:status`.)
 
@@ -76,6 +100,10 @@ Alternative without extra tools: **Task Scheduler** → trigger "At log on", act
 ./mirais status
 ./mirais restart
 ./mirais stop
+mirais autostart on
+mirais autostart off
+mirais update
+mirais expose off
 ```
 
 **Auto-start on boot — systemd:**
