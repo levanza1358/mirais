@@ -52,6 +52,20 @@ export function cooldownSnapshot(): Array<{ key: string; until: number; failures
     .map(([key, v]) => ({ key, until: v.until, failures: v.failures }));
 }
 
+function nextCoolingCandidate(candidates: RouteCandidate[]): { accountLabel: string; retryAt: number } | null {
+  let next: { accountLabel: string; retryAt: number } | null = null;
+  for (const candidate of candidates) {
+    for (const account of candidate.accounts) {
+      const cd = cooldowns.get(cooldownKey(candidate, account.id));
+      if (!cd || cd.until <= Date.now()) continue;
+      if (!next || cd.until < next.retryAt) {
+        next = { accountLabel: account.label, retryAt: cd.until };
+      }
+    }
+  }
+  return next;
+}
+
 export interface ExecutorContext {
   signal?: AbortSignal;
 }
@@ -126,12 +140,21 @@ export async function executeRequest(
   }
 
   if (!plan.length) {
+    const next = nextCoolingCandidate(candidates);
+    if (next) {
+      const seconds = Math.max(1, Math.ceil((next.retryAt - Date.now()) / 1000));
+      throw new GatewayError(503, "server_error", `All candidates are cooling down. Next ready account: ${next.accountLabel} in ${seconds}s.`);
+    }
     throw new GatewayError(503, "server_error", "All candidates are cooling down. Try again shortly.");
   }
 
-  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, MAX_ATTEMPTS, plan.length);
+  const preferredPlan = plan.filter(({ account }) => account.last_warmup_status === "healthy");
+  const fallbackPlan = plan.filter(({ account }) => account.last_warmup_status !== "healthy");
+  const orderedPlan = preferredPlan.length ? [...preferredPlan, ...fallbackPlan] : plan;
+
+  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, Math.max(MAX_ATTEMPTS, preferredPlan.length || 0), orderedPlan.length);
   for (let attemptNo = 0; attemptNo < maxAttempts; attemptNo++) {
-    const { candidate, account } = plan[attemptNo]!;
+    const { candidate, account } = orderedPlan[attemptNo]!;
     const started = Date.now();
     const format = upstreamFormat(candidate.provider);
     const base = baseUrlFor(candidate.provider);
@@ -149,6 +172,7 @@ export async function executeRequest(
           attempts.push({
             provider: candidate.provider.name,
             model: candidate.modelId,
+            accountId: account.id,
             accountLabel: account.label,
             outcome: "success",
             latencyMs: Date.now() - started,
@@ -160,6 +184,7 @@ export async function executeRequest(
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
+          accountId: account.id,
           accountLabel: account.label,
           outcome: "success",
           latencyMs: Date.now() - started,
@@ -174,6 +199,7 @@ export async function executeRequest(
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
+          accountId: account.id,
           accountLabel: account.label,
           outcome: "success",
           latencyMs: Date.now() - started,
@@ -217,6 +243,7 @@ export async function executeRequest(
       attempts.push({
         provider: candidate.provider.name,
         model: candidate.modelId,
+        accountId: account.id,
         accountLabel: account.label,
         outcome: "error",
         httpStatus: gErr.status,

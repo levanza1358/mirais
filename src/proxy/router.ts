@@ -158,6 +158,10 @@ export class Router {
   }
 
   private pickAccounts(provider: Provider): ProviderAccount[] {
+    const healthy: ProviderAccount[] = [];
+    const unknown: ProviderAccount[] = [];
+    const degraded: ProviderAccount[] = [];
+
     const accounts = this.providers
       .listAccounts(provider.id)
       .filter((a) => a.enabled)
@@ -165,6 +169,13 @@ export class Router {
     if (!accounts.length) {
       throw new GatewayError(503, "server_error", `Provider '${provider.name}' has no enabled accounts`);
     }
-    return accounts;
+
+    for (const account of accounts) {
+      if (account.last_warmup_status === "healthy") healthy.push(account);
+      else if (!account.last_warmup_status) unknown.push(account);
+      else degraded.push(account);
+    }
+
+    return [...healthy, ...unknown, ...degraded];
   }
 }

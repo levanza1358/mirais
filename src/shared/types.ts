@@ -208,6 +208,7 @@ export interface RequestLog {
 export interface AttemptRecord {
   provider: string;
   model: string;
+  accountId?: string;
   accountLabel?: string;
   outcome: "success" | "error";
   httpStatus?: number;
