@@ -288,11 +288,12 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* main — `min-h-0 overflow-hidden` lets individual pages (e.g. Playground)
           fill the viewport and own their own scroll region without the main
           scrollbar fighting them. Other pages still opt into overflow-y-auto
-          if they need to grow. */}
+          if they need to grow. `pt-14 md:pt-0` reserves space for the mobile
+          menu button so it doesn't overlap page content on phones. */}
       <main className="flex min-h-0 flex-1 overflow-hidden">
         {/* key=pathname forces the page-enter animation to re-run on every
             route change. CSS animations only fire on mount. */}
-        <div key={useLocation().pathname} className="page-enter min-h-0 w-full overflow-y-auto p-6">
+        <div key={useLocation().pathname} className="page-enter min-h-0 w-full overflow-y-auto p-4 pt-14 md:p-6 md:pt-6">
           {children}
         </div>
       </main>
@@ -309,12 +310,12 @@ function formatUptime(sec: number): string {
 
 export function PageHeader({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="mb-8 flex items-center justify-between anim-fade-in-down">
-      <div>
-        <p className="mb-1 text-xs uppercase tracking-[0.24em] text-text-muted">Mirais dashboard</p>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 anim-fade-in-down md:mb-8">
+      <div className="min-w-0">
+        <p className="mb-1 text-[10px] uppercase tracking-[0.24em] text-text-muted md:text-xs">Mirais dashboard</p>
+        <h1 className="truncate text-xl font-semibold tracking-tight md:text-2xl">{title}</h1>
       </div>
-      <div className="flex items-center gap-2">{children}</div>
+      <div className="flex flex-wrap items-center gap-2">{children}</div>
     </div>
   );
 }
