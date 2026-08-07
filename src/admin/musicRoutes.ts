@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import { sessionGuardHandle } from "../session";
 import { MusicRepo } from "../store/repos/music";
@@ -6,6 +6,22 @@ import { searchMusic, resolveAudioStreamUrl, videoIdFromInput, fetchTrending } f
 
 const DEFAULT_SEARCH_LIMIT = 12;
 const MAX_SEARCH_LIMIT = 25;
+
+// Body schemas. Elysia enforces strict validation by default; without these
+// schemas, JSON bodies throw a "Bad Request" before our handlers run.
+const nameBody = { body: t.Object({ name: t.String({ minLength: 1 }) }) };
+const trackBody = {
+  body: t.Object({
+    source: t.Optional(t.String()),
+    url: t.Optional(t.String()),
+    videoId: t.Optional(t.String()),
+    title: t.String({ minLength: 1 }),
+    channel: t.Optional(t.String()),
+    durationSec: t.Optional(t.Number()),
+    thumbnailUrl: t.Optional(t.String()),
+  }),
+};
+const positionBody = { body: t.Object({ position: t.Number({ minimum: 0 }) }) };
 
 export function musicRoutes(db: Database) {
   const music = new MusicRepo(db);
@@ -15,66 +31,44 @@ export function musicRoutes(db: Database) {
 
     // ── Playlists ──
     .get("/playlists", () => ({ playlists: music.listPlaylists() }))
-    .post("/playlists", ({ body }) => {
-      const input = (body ?? {}) as { name?: string };
-      if (!input.name?.trim()) throw new Error("name is required");
-      return music.createPlaylist(input.name);
+    .post("/playlists", ({ body }) => music.createPlaylist(body.name), {
+      body: t.Object({ name: t.String({ minLength: 1 }) }),
     })
     .get("/playlists/:id", ({ params }) => {
       const playlist = music.getPlaylist(params.id);
       if (!playlist) throw new Error("playlist not found");
       return playlist;
     })
-    .patch("/playlists/:id", ({ params, body }) => {
-      const input = (body ?? {}) as { name?: string };
-      if (!input.name?.trim()) throw new Error("name is required");
-      const out = music.renamePlaylist(params.id, input.name);
-      if (!out) throw new Error("playlist not found");
-      return out;
-    })
+    .patch("/playlists/:id", ({ params, body }) => music.renamePlaylist(params.id, body.name), nameBody)
     .delete("/playlists/:id", ({ params }) => music.deletePlaylist(params.id))
 
     // ── Tracks ──
     .post("/playlists/:id/tracks", ({ params, body }) => {
-      const playlist = music.getPlaylist(params.id);
-      if (!playlist) throw new Error("playlist not found");
-      const input = (body ?? {}) as {
-        source?: string;
-        url?: string;
-        videoId?: string;
-        title?: string;
-        channel?: string;
-        durationSec?: number;
-        thumbnailUrl?: string;
-      };
-      const sourceId = input.videoId ?? videoIdFromInput(input.url ?? "");
+      const sourceId = body.videoId ?? videoIdFromInput(body.url ?? "");
       if (!sourceId) throw new Error("videoId or url is required");
-      if (!input.title?.trim()) throw new Error("title is required");
       return music.addTrack(params.id, {
-        source: input.source ?? "youtube",
+        source: body.source,
         sourceId,
-        title: input.title,
-        channel: input.channel ?? null,
-        durationSec: input.durationSec ?? null,
-        thumbnailUrl: input.thumbnailUrl ?? null,
+        title: body.title,
+        channel: body.channel ?? null,
+        durationSec: body.durationSec ?? null,
+        thumbnailUrl: body.thumbnailUrl ?? null,
       });
-    })
+    }, trackBody)
     .delete("/tracks/:trackId", ({ params }) => music.removeTrack(params.trackId))
-    .patch("/tracks/:trackId/position", ({ params, body }) => {
-      const input = (body ?? {}) as { position?: number };
-      if (input.position === undefined) throw new Error("position is required");
-      return music.reorderTrack("", params.trackId, input.position);
-    })
+    .patch("/tracks/:trackId/position", ({ params, body }) =>
+      music.reorderTrack("", params.trackId, body.position),
+    positionBody)
 
     // ── Search ──
-    .get("/search", async ({ query }) => {
+    .get("/search", ({ query }) => {
       const q = (query?.q ?? "").toString();
       const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, Number(query?.limit ?? DEFAULT_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT));
       return searchMusic(q, limit);
     })
 
     // ── Trending ──
-    .get("/trending", async ({ query }) => {
+    .get("/trending", ({ query }) => {
       const limit = Math.min(50, Math.max(1, Number(query?.limit ?? 20) || 20));
       return fetchTrending(limit);
     })

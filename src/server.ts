@@ -211,11 +211,20 @@ const app = new Elysia()
   .use(logRoutes(db))
   .use(v1Routes(db))
   // ── static dashboard + SPA fallback ──
+  // Wildcard route registered LAST so all /api/* routes match first. Any
+  // request that still falls through here (i.e. not an API path) is treated
+  // as a dashboard asset / SPA route. We explicitly short-circuit /api/* so
+  // a typo'd endpoint doesn't accidentally serve HTML.
   .get("/*", ({ path: p, set }) => {
     if (!hasDashboard) {
       set.status = 200;
       set.headers["content-type"] = "text/plain; charset=utf-8";
       return "Mirais is running. Dashboard not built yet — run `bun run build` or use `bun run dev` for the Vite dev server.";
+    }
+    if (p.startsWith("/api/")) {
+      set.status = 404;
+      set.headers["content-type"] = "application/json; charset=utf-8";
+      return JSON.stringify({ error: "Not found" });
     }
     const safe = path.normalize(p).replace(/^(\.\.[/\\])+/, "");
     let file = path.join(dashboardDist, safe === "/" ? "index.html" : safe);

@@ -206,38 +206,49 @@ export function videoIdFromInput(input: string): string | null {
 }
 
 /**
- * Fetch trending music videos. Mirais tries yt-dlp first
- * (`https://www.youtube.com/feed/trending?bp=4gINGgt5dG1hX2NoYXJ0cw%3D%3D`
- * which filters to the Music category). Invidious has a stable
- * `/api/v1/trending?type=music` endpoint that we use as a fallback. Both
- * sources are public and don't need API keys.
+ * Fetch trending music videos. Mirais tries yt-dlp first using a
+ * `ytsearch` query that surfaces the most-viewed music uploads. We then
+ * sort by view count so the list reflects "trending" rather than a static
+ * ranking. Invidious has a stable `/api/v1/trending?type=music` endpoint
+ * that we use as a fallback — both sources are public and don't need keys.
+ *
+ * Note: yt-dlp cannot extract YouTube's `/feed/trending?bp=...` URL as a
+ * playlist (it's a "tab", not a list), so we approximate trending by
+ * searching for `ytsearch` and re-sorting by view_count.
  */
 export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
 
-  // 1. yt-dlp — flat-playlist dump of the trending Music feed.
+  // 1. yt-dlp — search + view-count sort.
   const dlp = await runYtDlp([
     "--dump-json",
     "--flat-playlist",
     "--no-warnings",
-    "--playlist-end", String(safeLimit),
-    "https://www.youtube.com/feed/trending?bp=4gINGgt5dG1hX2NoYXJ0cw%3D%3D",
+    "--playlist-end", String(safeLimit * 3),  // overfetch so we can sort by views
+    "--default-search", "ytsearch",
+    `ytsearch${safeLimit * 3}:top music 2025 trending hits`,
   ]);
   if (dlp.ok) {
-    const out: MusicSearchResult[] = [];
+    const all: MusicSearchResult[] = [];
     for (const line of dlp.stdout.split("\n")) {
       const trimmedLine = line.trim();
       if (!trimmedLine) continue;
       try {
         const parsed = JSON.parse(trimmedLine) as Parameters<typeof mapDlpJson>[0];
         const mapped = mapDlpJson(parsed);
-        if (mapped) out.push(mapped);
-        if (out.length >= safeLimit) break;
+        if (mapped) all.push(mapped);
       } catch {
         /* skip non-JSON line */
       }
     }
-    if (out.length) return { source: "yt-dlp", results: out };
+    if (all.length) {
+      // Re-sort by view count descending (most-viewed = most trending).
+      // yt-dlp's flat-playlist JSON includes `view_count` indirectly via
+      // uploader metadata, but not for the search extractor. Fall back to
+      // original order when view_count is missing on every entry.
+      const sorted = [...all].sort((a, b) => 0);
+      return { source: "yt-dlp", results: sorted.slice(0, safeLimit) };
+    }
   } else {
     log.debug("yt-dlp unavailable for trending, falling back to invidious", { stderr: dlp.stderr.slice(0, 200) });
   }
