@@ -12,6 +12,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { Database } from "bun:sqlite";
 import { config } from "../src/config";
+import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { readInstallRoot } from "./install-path";
 
@@ -223,14 +224,16 @@ async function doctor(): Promise<void> {
   let failed = false;
   const check = async (label: string, ok: boolean, repair?: () => Promise<void> | void) => {
     console.log(`${ok ? "OK" : "ERROR"}  ${label}`);
-    if (!ok) failed = true;
     if (!ok && repair) {
       try {
         await repair();
         console.log(`FIXED ${label}`);
       } catch (err) {
+        failed = true;
         console.error(`FAIL  repair ${label}: ${err instanceof Error ? err.message : err}`);
       }
+    } else if (!ok) {
+      failed = true;
     }
   };
 
@@ -244,7 +247,11 @@ async function doctor(): Promise<void> {
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.mkdirSync(path.join(config.dataDir, "backups"), { recursive: true });
   const dbExists = fs.existsSync(config.dbPath);
-  await check("database file", dbExists);
+  await check("database file", dbExists, () => {
+    const database = getDb(config.dbPath);
+    database.close();
+    closeDb();
+  });
   if (dbExists) {
     try {
       const database = new Database(config.dbPath, { readonly: true });
@@ -259,7 +266,7 @@ async function doctor(): Promise<void> {
   const pid = readPid();
   if (pid && !isRunning(pid)) {
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-    await check("stale PID file repaired", false);
+    console.log("FIXED stale PID file removed");
   } else {
     await check("service process", !!pid && isRunning(pid));
   }
