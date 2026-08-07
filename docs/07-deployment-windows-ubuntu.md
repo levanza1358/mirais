@@ -2,6 +2,8 @@
 
 Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. By default it binds to **`0.0.0.0`** so it is reachable from LAN / Tailscale / internet depending on your firewall.
 
+> Security rule: if `HOST=0.0.0.0`, `::`, or any non-loopback address, `DASHBOARD_PASSWORD` must be set. Passwordless dashboard mode is allowed only on loopback (`127.0.0.1`, `::1`, `localhost`).
+
 ---
 
 ## 1. Prerequisites (both OS)
@@ -48,7 +50,7 @@ Edit `.env`:
 
 ```bash
 PORT=1463
-HOST=0.0.0.0             # default exposed binding; use 127.0.0.1 for localhost-only
+HOST=0.0.0.0             # exposed binding; requires DASHBOARD_PASSWORD
 DATA_DIR=./data
 DASHBOARD_PASSWORD=<strong-password>
 SESSION_SECRET=<64 random hex chars>   # generate: bun -e "console.log(crypto.getRandomValues(new Uint8Array(32)).reduce((s,b)=>s+b.toString(16).padStart(2,'0'),''))"
@@ -73,7 +75,9 @@ mirais stop
 mirais autostart on
 mirais autostart off
 mirais update
+mirais fix          # force update/install/build/start from remembered install root
 mirais doctor       # diagnose and repair safe installation issues
+mirais doctor --fix # run the full repair flow
 mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry
 mirais expose off  # switch back to localhost-only; restart required
 ```
@@ -242,6 +246,7 @@ curl http://localhost:1463/v1/chat/completions \
 | Task | How |
 |---|---|
 | Update | `git pull && bun install && (cd dashboard && bun install) && bun run build && restart service` |
+| Repair stale install / bad root | `mirais fix` |
 | Backup | Dashboard → Settings → Data → **Backup now** (or `bun run scripts/backup.ts`, cron it) |
 | Logs | journalctl / `data/service.log` / in-app Logs page |
 | Reset password | stop → delete `dashboard_password_hash` from `settings` table (sqlite3 CLI) → start → setup screen appears |
@@ -252,6 +257,7 @@ curl http://localhost:1463/v1/chat/completions \
 | Symptom | Fix |
 |---|---|
 | `EADDRINUSE :1463` | Another instance/app on the port → change `PORT` or stop it (`netstat -ano \| findstr 1463` / `ss -ltnp \| grep 1463`) |
+| `Refusing to start: no dashboard password is set and HOST=0.0.0.0 is not loopback` | Either set `DASHBOARD_PASSWORD` in `.env` and restart, or run `mirais expose off` for loopback-only passwordless mode |
 | Login loop | `SESSION_SECRET` changed or cookie blocked; check HTTPS vs http `Secure` cookie |
 | All providers 401 | Re-enter upstream API keys; check clock skew (OAuth) |
 | DB locked | Two processes on same `DATA_DIR` — run only one |

@@ -137,11 +137,11 @@ mirais/
 ```bash
 # ── Server ──
 PORT=1463
-HOST=127.0.0.1                 # 0.0.0.0 to expose on LAN (Ubuntu Server)
+HOST=127.0.0.1                 # use 0.0.0.0 to expose on LAN/Tailscale; requires DASHBOARD_PASSWORD
 DATA_DIR=./data                # SQLite + logs live here
 
 # ── Dashboard auth ──
-DASHBOARD_PASSWORD=change-me
+DASHBOARD_PASSWORD=change-me    # required for any non-loopback HOST
 SESSION_SECRET=replace-with-64-random-hex
 SESSION_TTL_HOURS=12
 

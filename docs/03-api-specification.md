@@ -158,6 +158,12 @@ All `/api/*` routes require the session cookie `mirais_session`, **except** `/ap
 | GET | `/api/settings/export` | Full config export (JSON, secrets redacted) |
 | POST | `/api/settings/import` | Import config (merge) |
 
+### Dashboard exposure and auth behavior
+
+- Dashboard passwordless mode is supported only when Mirais is bound to loopback (`127.0.0.1`, `::1`, or `localhost`).
+- If Mirais is configured with a non-loopback host such as `0.0.0.0`, startup is rejected unless a dashboard password is configured through `DASHBOARD_PASSWORD` or the stored password hash.
+- The dashboard Settings page can toggle network binding, but switching to exposed mode still requires a password before the server can successfully start.
+
 ---
 
 ## C. Static & Misc

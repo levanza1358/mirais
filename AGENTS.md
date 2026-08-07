@@ -51,6 +51,7 @@ bun run smoke          # post-deploy verification
 9. **Tests:** translators and token saver require golden-fixture unit tests; new endpoints require integration tests. See doc 02 §6.
 10. **Update docs in the same PR** when behavior, API, schema, or UI changes.
 11. **Only commit and push after verification and user confirmation.** First run the relevant tests and checks, then report the results and wait for the user to confirm that the fix is correct. Do not commit or push before that confirmation. After confirmation, commit and push the verified fix to GitHub.
+12. **Respect exposure safety rules.** If `HOST` is non-loopback (`0.0.0.0`, `::`, public/LAN/Tailscale bind), Mirais must require a dashboard password. Passwordless dashboard mode is allowed only on loopback.
 
 ## Do NOT
 

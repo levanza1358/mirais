@@ -1,8 +1,8 @@
 # Mirais
 
-**Mirais** is a self-hosted AI gateway & router: one local endpoint that routes LLM requests across multiple providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — with a beautiful password-protected dashboard.
+**Mirais** is a self-hosted AI gateway & router: one local endpoint that routes LLM requests across multiple providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — with a beautiful dashboard that can run password-protected or passwordless on loopback only.
 
-- **Default address:** `http://0.0.0.0:1463` (exposed by default; can be switched back to localhost-only)
+- **Default address:** `http://0.0.0.0:1463` (exposed by default)
 - **Dashboard:** `http://localhost:1463/` (password protected)
 - **API base:** `http://localhost:1463/v1`
 - **Platforms:** Windows 10/11, Ubuntu 22.04+ / Ubuntu Server
@@ -46,7 +46,10 @@ cp .env.example .env      # set DASHBOARD_PASSWORD
 bun run dev
 ```
 
-Open `http://localhost:1463` → login with your `DASHBOARD_PASSWORD`.
+Open `http://localhost:1463`.
+
+- If `HOST=127.0.0.1` or `localhost`, passwordless dashboard mode is allowed.
+- If `HOST=0.0.0.0`, you must set `DASHBOARD_PASSWORD` before Mirais will start.
 
 ## One-shot install
 
@@ -80,6 +83,8 @@ mirais start      # start in background (detached, logs to data/mirais.log)
 mirais status     # running? healthy? (exit 0 = healthy, 3 = not running)
 mirais restart
 mirais stop
+mirais fix        # update/install/build/start using the remembered install root
+mirais doctor --fix
 
 # Linux/macOS
 ./mirais start|status|restart|stop
@@ -94,6 +99,13 @@ bun run svc:status   # svc:start / svc:stop / svc:restart also available
 
 State is tracked via `data/mirais.pid`; server output goes to `data/mirais.log`.
 For a real always-on service (auto-start on boot), use `mirais autostart on`. See [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md).
+
+### Exposure and dashboard safety
+
+- `mirais expose on` sets `HOST=0.0.0.0` so Mirais is reachable from LAN, Tailscale, or any interface allowed by your firewall.
+- `mirais expose off` sets `HOST=127.0.0.1` for localhost-only access.
+- When exposed (`HOST=0.0.0.0`), Mirais refuses to start unless `DASHBOARD_PASSWORD` is configured.
+- Passwordless mode is supported only on loopback (`127.0.0.1`, `::1`, or `localhost`).
 
 ## Quick Start (client usage)
 
