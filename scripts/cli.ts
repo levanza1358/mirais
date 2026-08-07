@@ -153,6 +153,17 @@ async function updateApp(): Promise<void> {
   console.log("mirais updated");
 }
 
+async function fix(): Promise<void> {
+  console.log("Mirais fix — updating source, dependencies, dashboard, and service");
+  await shell("git", ["pull", "--ff-only", "origin", "main"], installRoot);
+  await shell("bun", ["install"], installRoot);
+  await shell("bun", ["install"], path.join(installRoot, "dashboard"));
+  await shell("bun", ["run", "build"], installRoot);
+  try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+  await start();
+  console.log("Mirais fixed");
+}
+
 async function restart(): Promise<void> {
   await stop();
   await start();
@@ -307,8 +318,12 @@ switch (cmd) {
     break;
   }
   case "uninstall": await uninstall(); break;
-  case "doctor": await doctor(); break;
+  case "doctor":
+    if (process.argv[3] === "--fix") await fix();
+    else await doctor();
+    break;
+  case "fix": await fix(); break;
   default:
-    console.log("Usage: mirais <start|stop|restart|status|doctor|update|autostart on|off|expose on|off|uninstall --yes>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix]|fix|update|autostart on|off|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }
