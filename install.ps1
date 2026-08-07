@@ -50,6 +50,13 @@ Set-Content -Path (Join-Path $infoDir 'install.json') -Value (@{ root = $Install
 $shim = '@echo off`r`nsetlocal`r`ncd /d "' + $InstallDir + '"`r`nbun run scripts/cli.ts %*`r`n'
 Set-Content -Path 'C:\Windows\mirais.cmd' -Value $shim
 
+Write-Host '[mirais] installing optional runtime helpers (yt-dlp, ffmpeg) for the Music player'
+try {
+  bun run scripts/extras.ts
+} catch {
+  Write-Host '  (optional helpers could not be installed — Music will fall back to public Invidious instances)'
+}
+
 Write-Host ''
 Write-Host 'Mirais installed. Next commands:'
 Write-Host '  mirais start'

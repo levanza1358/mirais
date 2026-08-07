@@ -57,6 +57,11 @@ JSON
 sudo ln -sf "$INSTALL_DIR/mirais" /usr/local/bin/mirais
 sudo chmod +x "$INSTALL_DIR/mirais"
 
+echo "[mirais] installing optional runtime helpers (yt-dlp, ffmpeg) for the Music player"
+if bun run scripts/extras.ts 2>&1 | sed 's/^/  /'; then :; else
+  echo "  (optional helpers could not be installed — Music will fall back to public Invidious instances)"
+fi
+
 echo
 echo "Mirais installed. Next commands:"
 echo "  mirais start"

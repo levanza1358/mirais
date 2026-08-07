@@ -15,6 +15,7 @@ import { config } from "../src/config";
 import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { readInstallRoot } from "./install-path";
+import { ensureExtras, ensureYtDlp } from "./extras";
 
 const installRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
 
@@ -151,6 +152,9 @@ async function updateApp(): Promise<void> {
   await shell("bun", ["run", "build"]);
   await restart();
   console.log("mirais updated");
+  // Auto-install optional runtime helpers (yt-dlp, ffmpeg) so the Music
+  // player works out-of-the-box. Failures are logged, never fatal.
+  await ensureExtras();
 }
 
 async function fix(): Promise<void> {
@@ -160,6 +164,7 @@ async function fix(): Promise<void> {
   await shell("bun", ["install"], path.join(installRoot, "dashboard"));
   await shell("bun", ["run", "build"], installRoot);
   try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+  await ensureExtras();
   await start();
   console.log("Mirais fixed");
 }
@@ -282,6 +287,11 @@ async function doctor(): Promise<void> {
     await check("service process", !!pid && isRunning(pid));
   }
 
+  // yt-dlp is optional — the Music page falls back to Invidious when it's
+  // missing. Doctor still surfaces it so the user knows the upgrade path.
+  const ytdlp = await ensureYtDlp();
+  console.log(`${ytdlp.ok ? "OK" : "WARN"}  yt-dlp (Music) — ${ytdlp.message}${ytdlp.via ? ` [${ytdlp.via}]` : ""}`);
+
   if (failed) {
     console.log("Doctor found issues. Safe repairs were applied where possible; run `mirais restart` and inspect data/mirais.log.");
     process.exitCode = 1;
@@ -323,7 +333,8 @@ switch (cmd) {
     else await doctor();
     break;
   case "fix": await fix(); break;
+  case "extras": await ensureExtras(); break;
   default:
-    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix]|fix|update|autostart on|off|expose on|off|uninstall --yes>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix]|fix|update|extras|autostart on|off|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }
