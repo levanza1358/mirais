@@ -36,6 +36,16 @@ curl http://localhost:1463/v1/chat/completions \
 - `X-Mirais-Token-Saver: off` — skip compression for this request.
 - `X-Mirais-No-Fallback: 1` — fail on first upstream error instead of trying the chain.
 
+**Universal reasoning/thinking block:**
+Clients can control reasoning/thinking without speaking provider-specific dialect:
+```json
+{ "reasoning": { "enabled": true, "effort": "medium", "budget_tokens": 2048 } }
+```
+- `enabled` (default true) — turns thinking-style output on/off for this request.
+- `effort` — `minimal | low | medium | high | xhigh`. Mapped to OpenAI/Codex `reasoning.effort`.
+- `budget_tokens` — Anthropic extended-thinking budget (Anthropic providers only).
+When enabled, the executor strips `temperature`/`top_p` for Anthropic upstreams as required by their API.
+
 ### POST `/v1/responses`
 OpenAI Responses API shape. Translated to canonical and routed the same way. Streaming supported.
 

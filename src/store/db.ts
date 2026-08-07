@@ -40,7 +40,9 @@ function migrate(d: Database) {
     // `Database.transaction()` causes Bun/SQLite to try committing after the
     // migration already committed: "cannot commit - no transaction is active".
     // Execute each migration as authored, then record it only after success.
-    d.exec(sql);
+    const tx = d.transaction(() => {
+      d.exec(sql);
+    });
     d.query("INSERT INTO _migrations (name) VALUES (?)").run(file);
     log.info("migration applied", { name: file });
   }

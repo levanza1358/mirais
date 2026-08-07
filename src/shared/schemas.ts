@@ -42,6 +42,11 @@ export const chatCompletionsSchema = z.object({
   tool_choice: z.unknown().optional(),
   response_format: z.unknown().optional(),
   stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
+  reasoning: z.object({
+    enabled: z.boolean().optional(),
+    effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
+    budget_tokens: z.number().int().min(0).max(2_000_000).optional(),
+  }).optional(),
 }).passthrough();
 
 // ── Anthropic Messages ──

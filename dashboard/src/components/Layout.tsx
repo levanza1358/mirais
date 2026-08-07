@@ -15,6 +15,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ChevronDown,
+  FlaskConical,
 } from "lucide-react";
 import { auth, health } from "../api";
 import { APP_BUILD } from "../main";
@@ -30,7 +31,10 @@ const GROUPS: NavGroup[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    items: [{ to: "/", label: "Overview", icon: LayoutDashboard, end: true }],
+    items: [
+      { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
+      { to: "/playground", label: "Playground", icon: FlaskConical },
+    ],
   },
   {
     id: "infrastructure",

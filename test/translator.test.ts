@@ -129,6 +129,41 @@ describe("openaiToAnthropicRequest", () => {
     expect(out.top_p).toBe(0.9);
     expect(out.stream).toBe(true);
   });
+
+  test("reasoning enabled → thinking block with default budget", () => {
+    const req: CanonicalRequest = {
+      model: "m",
+      max_tokens: 3000,
+      messages: [{ role: "user", content: "hi" }],
+      reasoning: { effort: "medium" },
+    };
+    const out = openaiToAnthropicRequest(req, "claude-sonnet-4-5");
+    // 3000/3 = 1000, but the helper enforces a 1024-token minimum.
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+    expect(out.temperature).toBeUndefined();
+  });
+
+  test("reasoning with explicit budget wins over default", () => {
+    const req: CanonicalRequest = {
+      model: "m",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: "hi" }],
+      reasoning: { enabled: true, budget_tokens: 2048 },
+    };
+    const out = openaiToAnthropicRequest(req, "m");
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
+  });
+
+  test("reasoning disabled → no thinking block", () => {
+    const req: CanonicalRequest = {
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning: { enabled: false },
+    };
+    const out = openaiToAnthropicRequest(req, "m");
+    expect(out.thinking).toBeUndefined();
+    expect(out.temperature).toBeUndefined();
+  });
 });
 
 // ── Anthropic → OpenAI request ──

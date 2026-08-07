@@ -41,6 +41,29 @@ export interface ToolDef {
   };
 }
 
+/**
+ * Universal reasoning/thinking control.
+ *
+ * Mirais is a multi-provider gateway — clients shouldn't have to know whether
+ * a model wants `reasoning_effort`, `budget_tokens`, or Anthropic's
+ * `thinking` blocks. The `reasoning` block is translated per provider by the
+ * executor (see `src/proxy/executor.ts` and `src/proxy/codex.ts`).
+ */
+export interface ReasoningSpec {
+  /** Enable thinking-style output. Defaults to `true` when the block is present. */
+  enabled?: boolean;
+  /**
+   * Lightweight effort hint — mapped to OpenAI/Codex `reasoning.effort`,
+   * ignored on providers that don't accept an effort enum.
+   */
+  effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  /**
+   * Token budget for thinking — Anthropic `thinking.budget_tokens` and a
+   * server-side cap on Codex reasoning tokens.
+   */
+  budget_tokens?: number;
+}
+
 export interface CanonicalRequest {
   model: string;
   messages: ChatMessage[];
@@ -52,6 +75,8 @@ export interface CanonicalRequest {
   tools?: ToolDef[];
   tool_choice?: unknown;
   response_format?: unknown;
+  /** Universal reasoning/thinking configuration. */
+  reasoning?: ReasoningSpec;
 }
 
 export interface RoutingPolicy {

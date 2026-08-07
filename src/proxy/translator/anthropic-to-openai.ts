@@ -13,11 +13,13 @@ export interface AnthropicRequest {
   messages: AnthropicMessage[];
   system?: string | Array<Record<string, unknown>>;
   stream?: boolean;
-  temperature?: number;
-  top_p?: number;
+  temperature?: number | undefined;
+  top_p?: number | undefined;
   stop_sequences?: string[];
   tools?: Array<Record<string, unknown>>;
   tool_choice?: unknown;
+  /** Anthropic extended-thinking configuration (only present when reasoning is enabled). */
+  thinking?: { type: "enabled"; budget_tokens: number };
 }
 
 function contentToAnthropic(content: MessageContent): string | Array<Record<string, unknown>> {
@@ -111,6 +113,19 @@ export function openaiToAnthropicRequest(req: CanonicalRequest, modelId: string)
       out.tool_choice = { type: "tool", name };
     } else {
       out.tool_choice = tc;
+    }
+  }
+
+  // Anthropic extended thinking: budget defaults to a third of max_tokens (or
+  // 4 096 tokens), and we leave temperature unset since Anthropic requires
+  // temperature to be omitted when thinking is on.
+  if (req.reasoning?.enabled !== false && req.reasoning) {
+    const budget = req.reasoning.budget_tokens
+      ?? Math.min(8192, Math.max(1024, Math.floor((req.max_tokens ?? 4096) / 3)));
+    if (budget > 0) {
+      out.thinking = { type: "enabled", budget_tokens: budget };
+      delete out.temperature;
+      delete out.top_p;
     }
   }
   return out;

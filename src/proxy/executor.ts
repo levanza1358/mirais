@@ -10,6 +10,22 @@ import type { ProvidersRepo } from "../store/repos/providers";
 import { config } from "../config";
 import { log } from "../utils/logger";
 
+/**
+ * Strip universal fields from the canonical request and translate the
+ * universal `reasoning` block into the OpenAI Chat Completions dialect
+ * (`reasoning_effort`). Providers that don't understand the field simply
+ * ignore it, but we still send it for the ones that do.
+ */
+function toOpenAiBody(req: CanonicalRequest, modelId: string): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...req, model: modelId };
+  // Don't leak our canonical name back upstream; the upstream already knows the model.
+  delete (body as { reasoning?: unknown }).reasoning;
+  if (req.reasoning?.effort) {
+    body.reasoning_effort = req.reasoning.effort;
+  }
+  return body;
+}
+
 // ── in-memory health state ──
 
 interface CooldownEntry {
@@ -327,7 +343,7 @@ async function callUpstream(
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ ...clampMaxTokens(req, candidate.modelId), model: candidate.modelId, stream: false }),
+    body: JSON.stringify(toOpenAiBody({ ...clampMaxTokens(req, candidate.modelId), stream: false }, candidate.modelId)),
     signal: combined,
   });
   if (!res.ok) throw await upstreamError(res);
@@ -386,7 +402,7 @@ async function openUpstreamStream(
         Authorization: `Bearer ${apiKey}`,
         accept: "text/event-stream",
       },
-      body: JSON.stringify({ ...clampMaxTokens(req, candidate.modelId), model: candidate.modelId, stream: true }),
+      body: JSON.stringify(toOpenAiBody({ ...clampMaxTokens(req, candidate.modelId), stream: true }, candidate.modelId)),
       signal: combined,
     });
   }

@@ -429,6 +429,10 @@ export function codexRequestBody(req: CanonicalRequest, modelId: string, stream:
     }));
     if (req.tool_choice !== undefined) body.tool_choice = req.tool_choice;
   }
+  // Universal reasoning → Codex Responses API `reasoning.effort`.
+  if (req.reasoning?.enabled !== false && req.reasoning?.effort) {
+    body.reasoning = { effort: req.reasoning.effort };
+  }
   return body;
 }
 
