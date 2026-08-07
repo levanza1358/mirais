@@ -124,7 +124,7 @@ export default function Music() {
 
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[260px_1fr]">
         {/* ── Playlists ─────────────────────────────────────────────── */}
-        <Card className="flex min-h-0 flex-col p-3">
+        <Card className="flex min-h-0 flex-col p-3 max-h-48 overflow-hidden lg:max-h-none">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="flex items-center gap-1.5 text-sm font-semibold"><ListMusic size={14} /> Playlists</h2>
             <CreatePlaylistButton onCreate={(name) => createPlaylist.mutate(name)} pending={createPlaylist.isPending} />

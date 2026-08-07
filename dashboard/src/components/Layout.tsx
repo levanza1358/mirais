@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -17,6 +17,8 @@ import {
   ChevronDown,
   FlaskConical,
   Music,
+  Menu,
+  X,
 } from "lucide-react";
 import { auth, health } from "../api";
 import { APP_BUILD } from "../main";
@@ -79,6 +81,23 @@ export function Layout({ children }: { children: ReactNode }) {
   });
   const [collapsed, setCollapsed] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(DEFAULT_OPEN_GROUPS);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Auto-collapse the sidebar below the sm breakpoint, and turn it into an
+  // overlay drawer on mobile so the content can use the full width.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 767px)");
+    const apply = () => {
+      if (mq.matches) {
+        setCollapsed(true);
+        setMobileOpen(false);
+      }
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
 
   const online = h?.status === "ok";
 
@@ -91,18 +110,40 @@ export function Layout({ children }: { children: ReactNode }) {
     });
   };
 
+  const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
+  const effectiveCollapsed = isMobile ? !mobileOpen : collapsed;
+
   return (
     <div className="flex h-screen bg-[radial-gradient(circle_at_top,#1a2030_0%,#0b0e14_45%,#090c12_100%)] text-text-primary">
+      {/* Mobile backdrop */}
+      {isMobile && mobileOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setMobileOpen(false)}
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] md:hidden"
+        />
+      )}
+      {/* Mobile menu toggle — floating button at top-left of the content area */}
+      <button
+        type="button"
+        onClick={() => setMobileOpen((v) => !v)}
+        className="fixed left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-xl border border-border/80 bg-bg-surface/90 text-text-primary shadow-md backdrop-blur md:hidden"
+        aria-label={mobileOpen ? "Close menu" : "Open menu"}
+      >
+        {mobileOpen ? <X size={16} /> : <Menu size={16} />}
+      </button>
+
       {/* sidebar */}
       <aside
-        className={`group/sidebar relative m-3 flex shrink-0 flex-col rounded-3xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width] duration-300 ease-out ${collapsed ? "w-[76px]" : "w-[260px]"}`}
+        className={`group/sidebar relative m-3 flex shrink-0 flex-col rounded-3xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width,transform] duration-300 ease-out md:translate-x-0 ${effectiveCollapsed ? "w-[76px]" : "w-[260px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50" : ""} ${isMobile && !mobileOpen ? "-translate-x-[120%]" : "translate-x-0"}`}
       >
         {/* Header */}
-        <div className={`flex items-center gap-3 border-b border-border/70 px-4 py-4 ${collapsed ? "justify-center" : ""}`}>
+        <div className={`flex items-center gap-3 border-b border-border/70 px-4 py-4 ${effectiveCollapsed ? "justify-center" : ""}`}>
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent shadow-inner shadow-accent/15">
             <img src={miraisLogo} alt="Mirais" className="size-5" />
           </div>
-          {!collapsed && (
+          {!effectiveCollapsed && (
             <div className="min-w-0 flex-1 anim-fade-in">
               <p className="truncate text-sm font-semibold tracking-tight">Mirais</p>
               <p className="text-[11px] text-text-muted" title={`Build ${APP_BUILD.time}`}>
@@ -110,7 +151,7 @@ export function Layout({ children }: { children: ReactNode }) {
               </p>
             </div>
           )}
-          {!collapsed && (
+          {!effectiveCollapsed && !isMobile && (
             <button
               onClick={() => setCollapsed(true)}
               className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary"
@@ -120,10 +161,20 @@ export function Layout({ children }: { children: ReactNode }) {
               <PanelLeftClose size={15} />
             </button>
           )}
+          {isMobile && mobileOpen && (
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary"
+              title="Close menu"
+              aria-label="Close menu"
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
 
-        {/* Expand handle when collapsed */}
-        {collapsed && (
+        {/* Expand handle when collapsed (desktop only) */}
+        {collapsed && !isMobile && (
           <button
             onClick={() => setCollapsed(false)}
             className="absolute -right-3 top-20 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-border/80 bg-bg-surface text-text-muted shadow-md transition-colors hover:bg-bg-raised hover:text-text-primary"
@@ -135,12 +186,12 @@ export function Layout({ children }: { children: ReactNode }) {
         )}
 
         {/* Nav */}
-        <nav className={`flex-1 overflow-y-auto py-3 ${collapsed ? "px-2" : "px-3"}`}>
+        <nav className={`flex-1 overflow-y-auto py-3 ${effectiveCollapsed ? "px-2" : "px-3"}`}>
           {GROUPS.map((group) => {
-            const isOpen = collapsed ? true : openGroups.has(group.id);
+            const isOpen = effectiveCollapsed ? true : openGroups.has(group.id);
             return (
               <div key={group.id} className="mb-2">
-                {!collapsed && (
+                {!effectiveCollapsed && (
                   <button
                     onClick={() => toggleGroup(group.id)}
                     className="flex w-full items-center gap-2 px-2 pb-1.5 pt-1 text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted/80 transition-colors hover:text-text-muted"
@@ -160,13 +211,14 @@ export function Layout({ children }: { children: ReactNode }) {
                         <NavLink
                           to={to}
                           end={end}
-                          title={collapsed ? label : undefined}
+                          onClick={() => isMobile && setMobileOpen(false)}
+                          title={effectiveCollapsed ? label : undefined}
                           className={({ isActive }) =>
                             `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all ${
                               isActive
                                 ? "bg-accent/15 text-text-primary shadow-[inset_0_0_0_1px_rgba(124,92,255,0.25)]"
                                 : "text-text-muted hover:bg-bg-raised/60 hover:text-text-primary"
-                            } ${collapsed ? "justify-center" : ""}`
+                            } ${effectiveCollapsed ? "justify-center" : ""}`
                           }
                         >
                           {({ isActive }) => (
@@ -180,7 +232,7 @@ export function Layout({ children }: { children: ReactNode }) {
                               >
                                 <Icon size={15} strokeWidth={1.75} />
                               </span>
-                              {!collapsed && <span className="truncate">{label}</span>}
+                              {!effectiveCollapsed && <span className="truncate">{label}</span>}
                             </>
                           )}
                         </NavLink>
@@ -194,16 +246,16 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Footer */}
-        <div className={`border-t border-border/70 p-3 ${collapsed ? "px-2" : ""}`}>
+        <div className={`border-t border-border/70 p-3 ${effectiveCollapsed ? "px-2" : ""}`}>
           <div
-            className={`mb-2 flex items-center gap-2 rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-[11px] ${collapsed ? "justify-center px-2" : ""}`}
+            className={`mb-2 flex items-center gap-2 rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-[11px] ${effectiveCollapsed ? "justify-center px-2" : ""}`}
             title={online ? "Server online" : "Server offline"}
           >
             <span className="relative flex h-2 w-2 shrink-0">
               {online && <span className="absolute inline-flex h-full w-full rounded-full bg-success opacity-65 anim-pulse-soft" />}
               <span className={`relative inline-flex h-2 w-2 rounded-full ${online ? "bg-success" : "bg-danger"}`} />
             </span>
-            {!collapsed && (
+            {!effectiveCollapsed && (
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <span className={online ? "text-success" : "text-text-muted"}>
                   {online ? "online" : "offline"}
@@ -224,11 +276,11 @@ export function Layout({ children }: { children: ReactNode }) {
               qc.clear();
               navigate("/login");
             }}
-            className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-text-muted transition-colors hover:bg-bg-raised/70 hover:text-text-primary ${collapsed ? "justify-center" : ""}`}
+            className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-text-muted transition-colors hover:bg-bg-raised/70 hover:text-text-primary ${effectiveCollapsed ? "justify-center" : ""}`}
             title="Sign out"
           >
             <LogOut size={14} />
-            {!collapsed && "Sign out"}
+            {!effectiveCollapsed && "Sign out"}
           </button>
         </div>
       </aside>

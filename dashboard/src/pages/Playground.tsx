@@ -257,7 +257,7 @@ export default function Playground() {
   // The page fills the viewport: the controls stay pinned, only the transcript
     // (and the details panel) scrolls internally — the page itself never grows.
     return (
-    <div className="-mx-6 -mt-6 flex h-[calc(100vh-24px)] flex-col gap-2 px-6 pt-6">
+    <div className="-mx-6 -mt-6 flex h-[calc(100vh-24px)] flex-col gap-2 px-6 pt-14 md:pt-6">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-[10px] uppercase tracking-[0.24em] text-text-muted">Mirais dashboard</p>
