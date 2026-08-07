@@ -73,6 +73,8 @@ mirais stop
 mirais autostart on
 mirais autostart off
 mirais update
+mirais doctor       # diagnose and repair safe installation issues
+mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry
 mirais expose off  # switch back to localhost-only; restart required
 ```
 (Equivalents: `bun run mirais start`, `bun run svc:start|svc:stop|svc:restart|svc:status`.)
@@ -103,6 +105,8 @@ Alternative without extra tools: **Task Scheduler** → trigger "At log on", act
 mirais autostart on
 mirais autostart off
 mirais update
+mirais doctor
+mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry
 mirais expose off
 ```
 

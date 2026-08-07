@@ -1,5 +1,5 @@
 /**
- * mirais CLI — start / stop / restart / status
+ * mirais CLI — start / stop / restart / status / uninstall
  *
  * Manages the Mirais server as a background process using a PID file in DATA_DIR.
  * Cross-platform: works on Windows and Linux (no OS-specific APIs).
@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { Database } from "bun:sqlite";
 import { config } from "../src/config";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { readInstallRoot } from "./install-path";
@@ -192,6 +193,85 @@ async function expose(mode: "on" | "off"): Promise<void> {
   console.log(`mirais network binding set to ${mode === "on" ? "0.0.0.0" : "127.0.0.1"} — restart Mirais to apply`);
 }
 
+async function uninstall(): Promise<void> {
+  if (process.argv[3] !== "--yes") {
+    console.error("This permanently deletes Mirais, its database, logs, backups, and configuration.");
+    console.error("Run `mirais uninstall --yes` to continue.");
+    process.exitCode = 1;
+    return;
+  }
+
+  await stop();
+  try { await autostart("off"); } catch (err) {
+    console.warn(`could not remove autostart entry: ${err instanceof Error ? err.message : err}`);
+  }
+
+  const installInfo = process.platform === "win32" ? path.join(process.env.ProgramData ?? "", "Mirais", "install.json") : null;
+  const targets = [config.dataDir, installRoot];
+  if (installInfo) targets.push(path.dirname(installInfo));
+  for (const target of [...new Set(targets)]) {
+    if (!target || !fs.existsSync(target)) continue;
+    if (target === installRoot && path.resolve(target) === path.resolve(repoRoot)) continue;
+    fs.rmSync(target, { recursive: true, force: true });
+    console.log(`removed ${target}`);
+  }
+  console.log("Mirais uninstalled. The global launcher may need to be removed from PATH manually if it was installed separately.");
+}
+
+async function doctor(): Promise<void> {
+  console.log("Mirais doctor — checking installation, database, and service");
+  let failed = false;
+  const check = async (label: string, ok: boolean, repair?: () => Promise<void> | void) => {
+    console.log(`${ok ? "OK" : "ERROR"}  ${label}`);
+    if (!ok) failed = true;
+    if (!ok && repair) {
+      try {
+        await repair();
+        console.log(`FIXED ${label}`);
+      } catch (err) {
+        console.error(`FAIL  repair ${label}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  };
+
+  const envPath = path.join(repoRoot, ".env");
+  await check("installation root", fs.existsSync(installRoot));
+  await check(".env file", fs.existsSync(envPath), () => ensureEnvFile());
+  await check("dashboard build", fs.existsSync(path.join(installRoot, "dashboard", "dist", "index.html")), async () => {
+    await shell("bun", ["run", "build"]);
+  });
+
+  fs.mkdirSync(config.dataDir, { recursive: true });
+  fs.mkdirSync(path.join(config.dataDir, "backups"), { recursive: true });
+  const dbExists = fs.existsSync(config.dbPath);
+  await check("database file", dbExists);
+  if (dbExists) {
+    try {
+      const database = new Database(config.dbPath, { readonly: true });
+      const result = database.query("PRAGMA integrity_check").get() as { integrity_check?: string };
+      database.close();
+      await check("database integrity", result.integrity_check === "ok");
+    } catch (err) {
+      await check(`database integrity (${err instanceof Error ? err.message : String(err)})`, false);
+    }
+  }
+
+  const pid = readPid();
+  if (pid && !isRunning(pid)) {
+    try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+    await check("stale PID file repaired", false);
+  } else {
+    await check("service process", !!pid && isRunning(pid));
+  }
+
+  if (failed) {
+    console.log("Doctor found issues. Safe repairs were applied where possible; run `mirais restart` and inspect data/mirais.log.");
+    process.exitCode = 1;
+  } else {
+    console.log("Doctor found no issues.");
+  }
+}
+
 const cmd = process.argv[2];
 switch (cmd) {
   case "start": await start(); break;
@@ -219,7 +299,9 @@ switch (cmd) {
     await expose(mode);
     break;
   }
+  case "uninstall": await uninstall(); break;
+  case "doctor": await doctor(); break;
   default:
-    console.log("Usage: mirais <start|stop|restart|status|update|autostart on|off|expose on|off>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor|update|autostart on|off|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }

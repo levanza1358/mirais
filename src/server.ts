@@ -11,6 +11,7 @@ import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, logRoutes, healthRoutes } from "./admin/settings";
 import { proxyRoutes } from "./admin/proxies";
 import { backupRoutes } from "./admin/backups";
+import { integrationRoutes } from "./admin/integrations";
 import { v1Routes } from "./proxy/routes";
 import { GatewayError, AdminError } from "./shared/errors";
 import { LogsRepo } from "./store/repos/logs";
@@ -203,6 +204,7 @@ const app = new Elysia()
   .use(settingsRoutes(db))
   .use(proxyRoutes(db))
   .use(backupRoutes(db))
+  .use(integrationRoutes(db))
   .use(statsRoutes(db))
   .use(logRoutes(db))
   .use(v1Routes(db))

@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { Database as SqliteDatabase } from "bun:sqlite";
 import { config } from "../config";
 import { log } from "../utils/logger";
@@ -162,10 +163,24 @@ export function backupRoutes(_db: Database) {
         } catch { /* first run might fail; continue anyway */ }
         fs.copyFileSync(src, config.dbPath);
         log.warn("backup restored; restarting server", { id: params.id, fallback });
-        // Schedule the restart on the next tick so the response is
-        // actually delivered to the client first.
+        // The dashboard may be running without the CLI supervisor. Start a
+        // replacement process explicitly; merely exiting here leaves Mirais
+        // stopped after a restore.
         setTimeout(() => {
-          try { process.exit(0); } catch { /* ignore */ }
+          try {
+            const serverEntry = path.join(import.meta.dir, "..", "server.ts");
+            const child = spawn(process.execPath, ["run", serverEntry], {
+              detached: true,
+              stdio: "ignore",
+              cwd: path.join(import.meta.dir, "..", ".."),
+              env: process.env,
+            });
+            child.unref();
+            fs.mkdirSync(config.dataDir, { recursive: true });
+            fs.writeFileSync(path.join(config.dataDir, "mirais.pid"), String(child.pid));
+          } finally {
+            process.exit(0);
+          }
         }, 150);
         return { ok: true, restarting: true, fallback: path.basename(fallback) };
       } catch (err) {
