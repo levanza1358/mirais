@@ -1,9 +1,48 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw } from "lucide-react";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette } from "lucide-react";
 import { settings, backups, type BackupEntry, type TokenSaverSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
+
+const ACCENT_OPTIONS: Array<{ id: string; label: string; value: string }> = [
+  { id: "violet", label: "Violet", value: "#7c5cff" },
+  { id: "indigo", label: "Indigo", value: "#6366f1" },
+  { id: "sky", label: "Sky", value: "#38bdf8" },
+  { id: "teal", label: "Teal", value: "#2dd4bf" },
+  { id: "emerald", label: "Emerald", value: "#34d399" },
+  { id: "amber", label: "Amber", value: "#fbbf24" },
+  { id: "rose", label: "Rose", value: "#fb7185" },
+  { id: "pink", label: "Pink", value: "#ec4899" },
+];
+
+const ACCENT_STORAGE_KEY = "mirais.ui.accent";
+
+function applyAccentColor(value: string) {
+  if (typeof document === "undefined") return;
+  document.documentElement.style.setProperty("--color-accent", value);
+  document.documentElement.style.setProperty("--color-accent-rgb", hexToRgb(value));
+}
+
+function hexToRgb(hex: string): string {
+  const clean = hex.replace("#", "");
+  if (clean.length !== 6) return "124, 92, 255";
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `${r}, ${g}, ${b}`;
+}
+
+function readStoredAccent(): string {
+  if (typeof window === "undefined") return "#7c5cff";
+  try {
+    const v = window.localStorage.getItem(ACCENT_STORAGE_KEY);
+    if (v && /^#[0-9a-fA-F]{6}$/.test(v)) return v;
+  } catch {
+    /* ignore */
+  }
+  return "#7c5cff";
+}
 
 export default function Settings() {
   return (
@@ -12,6 +51,7 @@ export default function Settings() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <GatewaySection />
         <NetworkSection />
+        <AppearanceSection />
         <ModelSyncSection />
         <TokenSaverSection />
         <BackupSection />
@@ -20,6 +60,94 @@ export default function Settings() {
         </div>
       </div>
     </div>
+  );
+}
+
+function AppearanceSection() {
+  const qc = useQueryClient();
+  const settingsQ = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const backendAccent = settingsQ.data?.ui?.accent;
+  const [accent, setAccent] = useState<string>(() => backendAccent ?? readStoredAccent());
+  const [custom, setCustom] = useState<string>("");
+
+  // Re-hydrate from backend once it loads.
+  useEffect(() => {
+    if (backendAccent && /^#[0-9a-fA-F]{6}$/.test(backendAccent)) {
+      setAccent(backendAccent);
+    }
+  }, [backendAccent]);
+
+  useEffect(() => {
+    applyAccentColor(accent);
+  }, [accent]);
+
+  useEffect(() => {
+    if (!custom) return;
+    if (!/^#[0-9a-fA-F]{6}$/.test(custom)) return;
+    setAccent(custom);
+  }, [custom]);
+
+  const saveBackend = useMutation({
+    mutationFn: (value: string) => settings.update({ ui: { theme: "dark", accent: value } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const choose = (value: string) => {
+    setAccent(value);
+    setCustom("");
+    try {
+      window.localStorage.setItem(ACCENT_STORAGE_KEY, value);
+    } catch {
+      /* ignore */
+    }
+    saveBackend.mutate(value);
+  };
+
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Palette size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Appearance</h3>
+      </div>
+      <p className="mb-4 text-xs text-text-muted">Pick the dashboard accent color. Saved to server settings so it follows your account, with a local copy as fallback.</p>
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+        {ACCENT_OPTIONS.map((opt) => {
+          const isActive = opt.value.toLowerCase() === accent.toLowerCase();
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => choose(opt.value)}
+              className={`group flex flex-col items-center gap-1.5 rounded-xl border p-2 transition-colors ${isActive ? "border-text-primary bg-bg-raised" : "border-border/70 bg-bg-base/60 hover:border-accent/40"}`}
+              title={opt.label}
+            >
+              <span className="block h-6 w-6 rounded-full" style={{ background: opt.value }} />
+              <span className="text-[10px] text-text-muted group-hover:text-text-primary">{opt.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-text-muted">Custom</span>
+        <input
+          type="color"
+          value={accent}
+          onChange={(e) => choose(e.currentTarget.value)}
+          aria-label="Custom accent color"
+          className="h-8 w-10 cursor-pointer rounded-lg border border-border/70 bg-bg-base/60"
+        />
+        <input
+          type="text"
+          value={custom}
+          onChange={(e) => setCustom(e.currentTarget.value)}
+          placeholder="#7c5cff"
+          className="h-8 w-32 rounded-lg border border-border/70 bg-bg-base/60 px-2 font-mono text-xs"
+        />
+        <Button size="sm" variant="outline" onClick={() => choose("#7c5cff")}>Reset to default</Button>
+        <span className="ml-auto text-[10px] text-text-muted">synced to server{saveBackend.isPending ? " · saving" : ""}</span>
+      </div>
+    </Card>
   );
 }
 

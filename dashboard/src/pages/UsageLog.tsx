@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Area, AreaChart, Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Activity, BarChart3, ShieldAlert, TimerReset, Trash2 } from "lucide-react";
+import { Activity, BarChart3, Download, ShieldAlert, TimerReset, Trash2 } from "lucide-react";
 import { logs } from "../api";
 import { Button, Card, Select, Badge, EmptyState, Skeleton, fmtNum, fmtMs, fmtTime, ConfirmModal, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { labelForProvider } from "../utils/modelLabels";
+import { downloadCsv, toCsv } from "../utils/csv";
 
 export default function UsageLog() {
   const qc = useQueryClient();
@@ -45,9 +46,34 @@ export default function UsageLog() {
     [rows],
   );
 
+  const exportCsv = () => {
+    if (!rows.length) {
+      toast("No usage to export", "error");
+      return;
+    }
+    const csv = toCsv(
+      rows.map((r) => ({
+        provider: r.provider ?? "",
+        model: r.model ?? "",
+        requests: r.requests,
+        errors: r.errors,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        avg_latency_ms: Math.round(r.avg_latency_ms),
+        last_used: r.last_ts,
+      })),
+    );
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadCsv(`mirais-usage-${days}d-${stamp}.csv`, csv);
+    toast(`Exported ${rows.length} rows`);
+  };
+
   return (
     <div>
       <PageHeader title="Usage log">
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={rows.length === 0}>
+          <Download size={14} /> Export CSV
+        </Button>
         <Button variant="danger" onClick={() => setConfirmClear(true)} disabled={clearUsage.isPending}>
           <Trash2 size={16} /> Clear usage
         </Button>

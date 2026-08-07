@@ -14,7 +14,7 @@ export default function Providers() {
 
   const toggle = useMutation({
     mutationFn: (p: Provider) => providers.update(p.id, { enabled: !p.enabled }),
-    onSuccess: invalidate,
+    onSuccess: (p) => { invalidate(); toast(p.enabled ? "Provider disabled" : "Provider enabled"); },
     onError: (e) => toast(e.message, "error"),
   });
 
@@ -23,7 +23,8 @@ export default function Providers() {
       providers.create({ name: preset.name, type: preset.type, baseUrl: preset.baseUrl }),
     onSuccess: (p) => {
       invalidate();
-      navigate(`/providers/${p.id}`);
+      toast("Provider created");
+      navigate(`/dashboard/providers/${p.id}`);
     },
     onError: (e) => toast(e.message, "error"),
   });
@@ -45,7 +46,7 @@ export default function Providers() {
 
   const openPreset = (preset: ProviderPreset) => {
     const found = byType.get(preset.type)?.[0];
-    if (found) navigate(`/providers/${found.id}`);
+    if (found) navigate(`/dashboard/providers/${found.id}`);
     else createAndOpen.mutate(preset);
   };
 

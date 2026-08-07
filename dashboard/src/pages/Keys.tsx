@@ -1,10 +1,27 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Eye, EyeOff, KeyRound, Pencil, RefreshCw } from "lucide-react";
+import { AlertTriangle, Check, Copy, Eye, EyeOff, KeyRound, Pencil, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
 import { keys, type GatewayKey } from "../api";
 import { forgetKey, rememberKey, storedKeyFor } from "../keyStore";
 import { Button, Card, CopyButton, EmptyState, Input, Modal, Skeleton, Switch, fmtTime, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
+
+function fmtDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
+function Stat({ label, value, tone = "muted" }: { label: string; value: string; tone?: "muted" | "success" | "warning" | "danger" }) {
+  const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "danger" ? "text-danger" : "text-text-primary";
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 backdrop-blur">
+      <p className="text-[10px] uppercase tracking-[0.18em] text-text-muted">{label}</p>
+      <p className={`mt-1 text-xs font-medium ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
 
 export default function Keys() {
   const qc = useQueryClient();
@@ -74,49 +91,68 @@ export default function Keys() {
 
       {list.isLoading ? (
         <Card>
-          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-40 w-full" />
         </Card>
       ) : !primaryKey ? (
         <Card>
           <EmptyState
             icon={<KeyRound size={32} />}
             title="No API key available"
-            hint="Mirais now uses one global key only. Generate the first key once, then regenerate it whenever needed."
+            hint="Mirais uses one global key. Generate it once and rotate it any time you need to invalidate it."
             action={<Button onClick={() => createFirst.mutate()} loading={createFirst.isPending}><RefreshCw size={16} /> Generate new key</Button>}
           />
         </Card>
       ) : (
         <div className="space-y-4">
           <Card className="overflow-hidden border-accent/15 bg-[linear-gradient(135deg,rgba(124,92,255,0.14),rgba(18,22,31,0.92)_46%,rgba(18,22,31,0.96))]">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="space-y-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-accent/80">Global gateway key</p>
-                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-white">{primaryKey.label}</h2>
-                  <p className="mt-2 max-w-xl text-sm leading-6 text-text-muted">One global credential for every OpenAI-compatible client. Regenerate it any time without leaving this page.</p>
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex-1 space-y-4">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
+                    <KeyRound size={18} />
+                  </span>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-accent/80">Global gateway key</p>
+                    <h2 className="mt-1 text-xl font-semibold tracking-tight text-white">{primaryKey.label}</h2>
+                    <p className="mt-1 max-w-xl text-xs leading-5 text-text-muted">Use this single credential for every OpenAI-compatible client pointing at <code className="text-text-primary">/v1/*</code>.</p>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs text-text-muted">
-                  <span>Created {fmtTime(primaryKey.created_at)}</span>
-                  <span>•</span>
-                  <span>Last used {primaryKey.last_used_at ? fmtTime(primaryKey.last_used_at) : "Never"}</span>
+
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Status" value={primaryKey.enabled ? "Active" : "Disabled"} tone={primaryKey.enabled ? "success" : "muted"} />
+                  <Stat label="Created" value={fmtDateTime(primaryKey.created_at)} />
+                  <Stat label="Last used" value={primaryKey.last_used_at ? fmtDateTime(primaryKey.last_used_at) : "Never"} />
+                  <Stat label="Expires" value={primaryKey.expires_at ? fmtDateTime(primaryKey.expires_at) : "Never"} />
                 </div>
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-4 backdrop-blur">
-                  <span className="w-16 text-xs text-text-muted">Secret</span>
-                  <code className="min-w-0 flex-1 truncate font-mono text-xs text-accent">
-                    {showSecret ? (remembered ?? `${primaryKey.key_prefix}••••••••••••••••`) : "••••••••••••••••••••"}
-                  </code>
-                  <button type="button" onClick={() => setShowSecret((v) => !v)} className="text-text-muted hover:text-text-primary" aria-label={showSecret ? "Hide key" : "Show key"}>
-                    {showSecret ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
-                  {remembered ? <CopyButton text={remembered} /> : <span className="text-[10px] text-text-muted">generate new key to copy</span>}
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur">
+                  <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-text-muted">
+                    <span>Secret</span>
+                    <span className="text-text-muted/70">Visible to you only</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded-xl border border-white/10 bg-bg-base/80 px-3 py-2 font-mono text-xs text-accent">
+                      {showSecret ? (remembered ?? `${primaryKey.key_prefix}••••••••••••••••`) : `${primaryKey.key_prefix}${"•".repeat(18)}`}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => setShowSecret((v) => !v)}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-bg-base/80 text-text-muted hover:bg-white/10 hover:text-text-primary"
+                      aria-label={showSecret ? "Hide key" : "Show key"}
+                      title={showSecret ? "Hide key" : "Show key"}
+                    >
+                      {showSecret ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                    {remembered ? <CopyButton text={remembered} /> : <span className="text-[10px] text-text-muted">generate to copy</span>}
+                  </div>
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2 lg:min-w-56">
-                <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-4 backdrop-blur">
-                  <div>
-                    <p className="text-sm font-medium">Key active</p>
-                    <p className="text-xs text-text-muted">Allow requests through `/v1/*`</p>
+              <div className="flex w-full shrink-0 flex-col gap-3 lg:w-64">
+                <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
+                  <div className="flex items-center gap-2">
+                    {primaryKey.enabled ? <ShieldCheck size={15} className="text-success" /> : <ShieldOff size={15} className="text-text-muted" />}
+                    <span className="text-sm font-medium">Key active</span>
                   </div>
                   <Switch
                     checked={!!primaryKey.enabled}
@@ -125,16 +161,36 @@ export default function Keys() {
                     aria-label={`Enable key ${primaryKey.label}`}
                   />
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" className="flex-1" onClick={() => setEditing(primaryKey)}>
-                    <Pencil size={14} /> Edit
-                  </Button>
-                  <Button variant="outline" className="flex-1" onClick={() => rotate.mutate(primaryKey)} loading={rotate.isPending && rotate.variables?.id === primaryKey.id}>
-                    <RefreshCw size={14} /> Generate new
-                  </Button>
-                </div>
+                <Button variant="outline" className="justify-start" onClick={() => setEditing(primaryKey)}>
+                  <Pencil size={14} /> Edit details
+                </Button>
+                <Button className="justify-start" onClick={() => rotate.mutate(primaryKey)} loading={rotate.isPending && rotate.variables?.id === primaryKey.id}>
+                  <RefreshCw size={14} /> Generate new key
+                </Button>
               </div>
             </div>
+          </Card>
+
+          <Card>
+            <h3 className="mb-2 text-sm font-semibold text-text-primary">How to use this key</h3>
+            <ul className="grid gap-2 text-xs text-text-muted sm:grid-cols-2">
+              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
+                <span className="block text-text-primary">Base URL</span>
+                <code className="font-mono text-[11px] text-accent">http://{typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}:1463/v1</code>
+              </li>
+              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
+                <span className="block text-text-primary">Auth header</span>
+                <code className="font-mono text-[11px] text-accent">Authorization: Bearer &lt;this-key&gt;</code>
+              </li>
+              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
+                <span className="block text-text-primary">Compatible with</span>
+                <span>OpenAI / Anthropic SDKs via Mirais translation.</span>
+              </li>
+              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
+                <span className="block text-text-primary">Rotate</span>
+                <span>Generates a new secret and invalidates the old one.</span>
+              </li>
+            </ul>
           </Card>
         </div>
       )}

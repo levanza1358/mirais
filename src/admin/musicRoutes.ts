@@ -61,13 +61,15 @@ export function musicRoutes(db: Database) {
     .get("/search", ({ query }) => {
       const q = (query?.q ?? "").toString();
       const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, Number(query?.limit ?? DEFAULT_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT));
-      return searchMusic(q, limit);
+      const page = Math.min(10, Math.max(1, Number(query?.page ?? 1) || 1));
+      return searchMusic(q, limit, page);
     })
 
     // ── Trending ──
     .get("/trending", ({ query }) => {
       const limit = Math.min(50, Math.max(1, Number(query?.limit ?? 20) || 20));
-      return fetchTrending(limit);
+      const page = Math.min(10, Math.max(1, Number(query?.page ?? 1) || 1));
+      return fetchTrending(limit, page);
     })
 
     // ── Stream proxy ──
@@ -75,15 +77,37 @@ export function musicRoutes(db: Database) {
     // redirect to the upstream CDN. The browser then opens that URL with
     // Range headers (or our /api/music/stream-direct?id=... if you want a
     // full passthrough proxy — see /stream-direct).
-    .get("/stream", async ({ query, set }) => {
+    .get("/stream", async ({ query, request, set }) => {
       const id = videoIdFromInput((query?.id ?? "").toString());
       if (!id) { set.status = 400; return { error: "id or url is required" }; }
       const resolved = await resolveAudioStreamUrl(id);
       if (!resolved) { set.status = 502; return { error: "could not resolve audio source" }; }
-      set.status = 302;
-      set.headers["location"] = resolved.url;
-      if (resolved.contentType) set.headers["x-content-type"] = resolved.contentType;
-      set.headers["x-mirais-source"] = resolved.via;
-      return "";
+      if (request.method === "HEAD") {
+        set.status = 302;
+        set.headers["location"] = resolved.url;
+        set.headers["x-mirais-source"] = resolved.via;
+        return "";
+      }
+      try {
+        const rangeHeader = request.headers.get("range");
+        const upstream = await fetch(resolved.url, {
+          method: "GET",
+          headers: {
+            "user-agent": "Mozilla/5.0 Mirais",
+            "accept": "audio/webm,audio/mp4,audio/*;q=0.9,*/*;q=0.1",
+            ...(rangeHeader ? { range: rangeHeader } : {}),
+          },
+        });
+        const headers = new Headers(upstream.headers);
+        headers.set("cache-control", "no-store");
+        headers.set("x-mirais-source", resolved.via);
+        return new Response(upstream.body, {
+          status: upstream.status,
+          headers,
+        });
+      } catch {
+        set.status = 502;
+        return { error: "could not proxy audio source" };
+      }
     });
 }

@@ -14,9 +14,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ChevronDown,
-  FlaskConical,
   Music,
   Menu,
+  Search,
   X,
 } from "lucide-react";
 import { health } from "../api";
@@ -34,35 +34,34 @@ const GROUPS: NavGroup[] = [
     id: "dashboard",
     label: "Dashboard",
     items: [
-      { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-      { to: "/playground", label: "Playground", icon: FlaskConical },
+      { to: "/dashboard", label: "Overview", icon: LayoutDashboard, end: true },
     ],
   },
   {
     id: "infrastructure",
     label: "Infrastructure",
     items: [
-      { to: "/providers", label: "Providers", icon: Boxes },
-      { to: "/proxies", label: "Proxy Pool", icon: Globe2 },
-      { to: "/combos", label: "Combos", icon: GitBranch },
-      { to: "/keys", label: "API Keys", icon: KeyRound },
+      { to: "/dashboard/providers", label: "Providers", icon: Boxes },
+      { to: "/dashboard/proxies", label: "Proxy Pool", icon: Globe2 },
+      { to: "/dashboard/combos", label: "Combos", icon: GitBranch },
+      { to: "/dashboard/keys", label: "API Keys", icon: KeyRound },
     ],
   },
   {
     id: "operations",
     label: "Operations",
     items: [
-      { to: "/logs", label: "Logs", icon: ScrollText },
-      { to: "/usage", label: "Usage", icon: BarChart3 },
-      { to: "/music", label: "Music", icon: Music },
+      { to: "/dashboard/logs", label: "Logs", icon: ScrollText },
+      { to: "/dashboard/usage", label: "Usage", icon: BarChart3 },
+      { to: "/dashboard/music", label: "Music", icon: Music },
     ],
   },
   {
     id: "system",
     label: "System",
     items: [
-      { to: "/integrations", label: "Integrations", icon: Plug },
-      { to: "/settings", label: "Settings", icon: SettingsIcon },
+      { to: "/dashboard/integrations", label: "Integrations", icon: Plug },
+      { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
     ],
   },
 ];
@@ -79,6 +78,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(DEFAULT_OPEN_GROUPS);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
 
   // Auto-collapse the sidebar below the sm breakpoint, and turn it into an
   // overlay drawer on mobile so the content can use the full width.
@@ -86,8 +86,9 @@ export function Layout({ children }: { children: ReactNode }) {
     if (typeof window === "undefined") return;
     const mq = window.matchMedia("(max-width: 767px)");
     const apply = () => {
+      setIsMobile(mq.matches);
       if (mq.matches) {
-        setCollapsed(true);
+        setCollapsed(false);
         setMobileOpen(false);
       }
     };
@@ -107,11 +108,11 @@ export function Layout({ children }: { children: ReactNode }) {
     });
   };
 
-  const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
-  const effectiveCollapsed = isMobile ? !mobileOpen : collapsed;
+  const effectiveCollapsed = isMobile ? false : collapsed;
+  const sidebarHidden = isMobile && !mobileOpen;
 
   return (
-    <div className="flex h-screen bg-[radial-gradient(circle_at_top,#1a2030_0%,#0b0e14_45%,#090c12_100%)] text-text-primary">
+    <div className="block min-h-screen md:flex md:h-screen bg-[radial-gradient(circle_at_top,#1a2030_0%,#0b0e14_45%,#090c12_100%)] text-text-primary">
       {/* Mobile backdrop */}
       {isMobile && mobileOpen && (
         <button
@@ -131,13 +132,28 @@ export function Layout({ children }: { children: ReactNode }) {
         {mobileOpen ? <X size={16} /> : <Menu size={16} />}
       </button>
 
+      {/* Desktop search trigger — fires the same shortcut as Ctrl+K */}
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent("mirais:command-palette"))}
+        className="fixed right-3 top-3 z-30 hidden h-9 items-center gap-2 rounded-xl border border-border/80 bg-bg-surface/90 px-3 text-xs text-text-muted shadow-md backdrop-blur hover:text-text-primary md:flex"
+        aria-label="Search pages"
+        title="Search pages (Ctrl+K)"
+      >
+        <Search size={13} />
+        <span>Search pages…</span>
+        <kbd className="ml-2 rounded-md border border-border/70 bg-bg-base/60 px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+      </button>
+
+      {/* Spacer reserves space for the mobile menu button so it doesn't overlap content */}
+
       {/* sidebar */}
       <aside
-        className={`group/sidebar relative m-3 flex shrink-0 flex-col rounded-3xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width,transform] duration-300 ease-out md:translate-x-0 ${effectiveCollapsed ? "w-[76px]" : "w-[260px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50" : ""} ${isMobile && !mobileOpen ? "-translate-x-[120%]" : "translate-x-0"}`}
+        aria-hidden={sidebarHidden}
+        className={`group/sidebar relative m-2 flex shrink-0 flex-col rounded-2xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width,transform] duration-300 ease-out md:translate-x-0 md:relative ${effectiveCollapsed ? "md:w-[68px]" : "md:w-[260px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50 w-[240px]" : ""} ${isMobile && mobileOpen ? "translate-x-0" : isMobile ? "-translate-x-[120%]" : ""} md:translate-x-0 ${sidebarHidden ? "md:flex" : ""}`}
       >
-        {/* Header */}
-        <div className={`flex items-center gap-3 border-b border-border/70 px-4 py-4 ${effectiveCollapsed ? "justify-center" : ""}`}>
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent shadow-inner shadow-accent/15">
+        <div className={`flex items-center gap-2.5 border-b border-border/70 px-3 py-3 ${effectiveCollapsed ? "justify-center" : ""}`}>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent shadow-inner shadow-accent/15">
             <img src={miraisLogo} alt="Mirais" className="size-5" />
           </div>
           {!effectiveCollapsed && (
@@ -183,15 +199,15 @@ export function Layout({ children }: { children: ReactNode }) {
         )}
 
         {/* Nav */}
-        <nav className={`flex-1 overflow-y-auto py-3 ${effectiveCollapsed ? "px-2" : "px-3"}`}>
+        <nav className={`flex-1 overflow-y-auto py-2 ${effectiveCollapsed ? "px-1.5" : "px-2.5"}`}>
           {GROUPS.map((group) => {
             const isOpen = effectiveCollapsed ? true : openGroups.has(group.id);
             return (
-              <div key={group.id} className="mb-2">
+              <div key={group.id} className="mb-1.5">
                 {!effectiveCollapsed && (
                   <button
                     onClick={() => toggleGroup(group.id)}
-                    className="flex w-full items-center gap-2 px-2 pb-1.5 pt-1 text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted/80 transition-colors hover:text-text-muted"
+                    className="flex w-full items-center gap-2 px-2 pb-1 pt-0.5 text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted/80 transition-colors hover:text-text-muted"
                     aria-expanded={isOpen}
                   >
                     <span className="flex-1">{group.label}</span>
@@ -202,7 +218,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   </button>
                 )}
                 {isOpen && (
-                  <ul className="space-y-0.5">
+                  <ul className="space-y-px">
                     {group.items.map(({ to, label, icon: Icon, end }) => (
                       <li key={to}>
                         <NavLink
@@ -211,7 +227,7 @@ export function Layout({ children }: { children: ReactNode }) {
                           onClick={() => isMobile && setMobileOpen(false)}
                           title={effectiveCollapsed ? label : undefined}
                           className={({ isActive }) =>
-                            `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all ${
+                            `group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-all ${
                               isActive
                                 ? "bg-accent/15 text-text-primary shadow-[inset_0_0_0_1px_rgba(124,92,255,0.25)]"
                                 : "text-text-muted hover:bg-bg-raised/60 hover:text-text-primary"
@@ -221,13 +237,13 @@ export function Layout({ children }: { children: ReactNode }) {
                           {({ isActive }) => (
                             <>
                               <span
-                                className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                                className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
                                   isActive
                                     ? "bg-accent/25 text-accent"
                                     : "bg-bg-raised/60 text-text-muted group-hover:text-text-primary"
                                 }`}
                               >
-                                <Icon size={15} strokeWidth={1.75} />
+                                <Icon size={14} strokeWidth={1.75} />
                               </span>
                               {!effectiveCollapsed && <span className="truncate">{label}</span>}
                             </>
@@ -243,9 +259,9 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Footer */}
-        <div className={`border-t border-border/70 p-3 ${effectiveCollapsed ? "px-2" : ""}`}>
+        <div className={`border-t border-border/70 p-2 ${effectiveCollapsed ? "px-1.5" : ""}`}>
           <div
-            className={`mb-2 flex items-center gap-2 rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-[11px] ${effectiveCollapsed ? "justify-center px-2" : ""}`}
+            className={`mb-1.5 flex items-center gap-2 rounded-lg border border-border/70 bg-bg-base/60 px-2.5 py-1.5 text-[11px] ${effectiveCollapsed ? "justify-center px-1.5" : ""}`}
             title={online ? "Server online" : "Server offline"}
           >
             <span className="relative flex h-2 w-2 shrink-0">
@@ -269,15 +285,48 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* main — `min-h-0 overflow-hidden` lets individual pages (e.g. Playground)
           fill the viewport and own their own scroll region without the main
           scrollbar fighting them. Other pages still opt into overflow-y-auto
-          if they need to grow. `pt-14 md:pt-0` reserves space for the mobile
+          if they need to grow. `pt-12 md:pt-0` reserves space for the mobile
           menu button so it doesn't overlap page content on phones. */}
-      <main className="flex min-h-0 flex-1 overflow-hidden">
+      <main className="flex min-h-screen w-full flex-1 overflow-hidden pt-12 md:h-screen md:min-h-0 md:pt-0">
         {/* key=pathname forces the page-enter animation to re-run on every
             route change. CSS animations only fire on mount. */}
-        <div key={useLocation().pathname} className="page-enter min-h-0 w-full overflow-y-auto p-4 pt-14 md:p-6 md:pt-6">
+        <div key={useLocation().pathname} className="page-enter min-h-0 w-full overflow-y-auto p-3 md:p-6">
+          <SecurityBanner />
           {children}
         </div>
       </main>
+    </div>
+  );
+}
+
+const PASSWORDLESS_BANNER_KEY = "mirais.ui.passwordlessBanner.dismissed";
+
+function SecurityBanner() {
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(PASSWORDLESS_BANNER_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try {
+      window.localStorage.setItem(PASSWORDLESS_BANNER_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setDismissed(true);
+  };
+  return (
+    <div className="mb-4 flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-xs text-warning">
+      <span className="mt-0.5 text-base">⚠</span>
+      <div className="flex-1">
+        <p className="font-medium">Dashboard has no login screen.</p>
+        <p className="mt-0.5 text-text-muted">Anyone on the network can open it. Restrict access with a reverse proxy, firewall, VPN, or private network.</p>
+      </div>
+      <button type="button" onClick={dismiss} className="rounded-lg px-2 py-1 text-text-muted hover:bg-warning/15 hover:text-warning" aria-label="Dismiss security banner">Dismiss</button>
     </div>
   );
 }

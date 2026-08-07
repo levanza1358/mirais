@@ -33,7 +33,7 @@ export function ProviderDetailPage() {
     onSuccess: () => {
       invalidate();
       toast("Provider deleted");
-      navigate("/providers");
+      navigate("/dashboard/providers");
     },
     onError: (error: Error) => toast(error.message, "error"),
   });

@@ -67,6 +67,50 @@ export interface MusicSearchResult {
   source: "youtube";
 }
 
+const TRENDING_QUERY_POOL = [
+  "official music video indonesia terbaru",
+  "lagu indonesia viral official audio",
+  "jpop official music video",
+  "japanese pop official mv",
+  "western pop official music video",
+  "global pop hit official video",
+  "billboard hot 100 official music video",
+  "spotify viral songs official mv",
+];
+
+const TRENDING_BLOCKLIST = [
+  /\bmix\b/i,
+  /\bplaylist\b/i,
+  /\bfull album\b/i,
+  /\bnonstop\b/i,
+  /\brelax(?:ation)?\b/i,
+  /\bstudy\b/i,
+  /\bsleep\b/i,
+  /\bkaraoke\b/i,
+  /\bcover\b/i,
+  /\blive\b/i,
+  /\bcompilation\b/i,
+  /\b1 hour\b/i,
+  /\b2 hour\b/i,
+  /\b3 hour\b/i,
+  /\b2026\b.*\bplaylist\b/i,
+  /\btop hits?\b/i,
+  /\btrending songs?\b/i,
+  /\btiktok songs?\b/i,
+];
+
+const MIN_TRENDING_DURATION_SEC = 110;
+const MAX_TRENDING_DURATION_SEC = 510;
+const TRENDING_CACHE_TTL_MS = 10 * 60_000;
+
+let trendingCache:
+  | {
+      expiresAt: number;
+      source: "yt-dlp" | "invidious";
+      results: MusicSearchResult[];
+    }
+  | null = null;
+
 /** Default roster of public Invidious instances — overridable via env if needed. */
 const INVIDIOUS_INSTANCES: string[] = [
   "https://inv.nadeko.net",
@@ -145,18 +189,49 @@ function mapDlpJson(entry: { id?: string; title?: string; uploader?: string; cha
   };
 }
 
-export async function searchMusic(query: string, limit = 20): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
+function shuffleInPlace<T>(items: T[]): T[] {
+  for (let i = items.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j]!, items[i]!];
+  }
+  return items;
+}
+
+function isGoodTrendingCandidate(track: MusicSearchResult): boolean {
+  if (!track.title || track.duration_sec == null) return false;
+  if (track.duration_sec < MIN_TRENDING_DURATION_SEC || track.duration_sec > MAX_TRENDING_DURATION_SEC) return false;
+  const title = track.title.toLowerCase();
+  const channel = (track.channel ?? "").toLowerCase();
+  return !TRENDING_BLOCKLIST.some((re) => re.test(title) || re.test(channel));
+}
+
+function dedupeTracks(tracks: MusicSearchResult[]): MusicSearchResult[] {
+  const seen = new Set<string>();
+  const out: MusicSearchResult[] = [];
+  for (const track of tracks) {
+    if (seen.has(track.id)) continue;
+    seen.add(track.id);
+    out.push(track);
+  }
+  return out;
+}
+
+export async function searchMusic(query: string, limit = 20, page = 1): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
   const trimmed = query.trim();
   if (!trimmed) return { source: "yt-dlp", results: [] };
+  const safeLimit = Math.max(1, Math.min(limit, 25));
+  const safePage = Math.max(1, Math.min(page, 10));
+  const fetchCount = safeLimit * safePage;
+  const offset = (safePage - 1) * safeLimit;
 
   // Try yt-dlp first — it returns one JSON object per line when given --dump-json.
   const dlp = await runYtDlp([
     "--dump-json",
     "--default-search", "ytsearch",
-    "--playlist-end", String(Math.max(1, Math.min(limit, 25))),
+    "--playlist-end", String(fetchCount),
     "--no-warnings",
     "--flat-playlist",
-    `ytsearch${Math.max(1, Math.min(limit, 25))}:${trimmed}`,
+    `ytsearch${fetchCount}:${trimmed}`,
   ]);
   if (dlp.ok) {
     const out: MusicSearchResult[] = [];
@@ -167,12 +242,12 @@ export async function searchMusic(query: string, limit = 20): Promise<{ source: 
         const parsed = JSON.parse(trimmedLine) as Parameters<typeof mapDlpJson>[0];
         const mapped = mapDlpJson(parsed);
         if (mapped) out.push(mapped);
-        if (out.length >= limit) break;
+        if (out.length >= fetchCount) break;
       } catch {
         /* skip non-JSON line */
       }
     }
-    if (out.length) return { source: "yt-dlp", results: out };
+    if (out.length) return { source: "yt-dlp", results: out.slice(offset, offset + safeLimit) };
   } else {
     log.debug("yt-dlp unavailable, falling back to invidious", { stderr: dlp.stderr.slice(0, 200) });
   }
@@ -199,7 +274,7 @@ export async function searchMusic(query: string, limit = 20): Promise<{ source: 
           thumbnail_url: e.videoThumbnails?.[0]?.url ?? null,
           source: "youtube",
         }))
-        .slice(0, limit);
+        .slice(offset, offset + safeLimit);
       if (mapped.length) return { source: "invidious", results: mapped };
     } catch (err) {
       log.debug("invidious instance failed", { base, err: err instanceof Error ? err.message : String(err) });
@@ -269,46 +344,53 @@ export function videoIdFromInput(input: string): string | null {
  * playlist (it's a "tab", not a list), so we approximate trending by
  * searching for `ytsearch` and re-sorting by view_count.
  */
-export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
+export async function fetchTrending(limit = 20, page = 1): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
+  const safePage = Math.max(1, Math.min(page, 10));
+  const offset = (safePage - 1) * safeLimit;
 
-  // 1. yt-dlp — search + view-count sort.
-  const dlp = await runYtDlp([
-    "--dump-json",
-    "--flat-playlist",
-    "--no-warnings",
-    "--playlist-end", String(safeLimit * 3),  // overfetch so we can sort by views
-    "--default-search", "ytsearch",
-    `ytsearch${safeLimit * 3}:top music 2025 trending hits`,
-  ]);
-  if (dlp.ok) {
-    log.info("yt-dlp trending call ok", { lines: dlp.stdout.split("\n").length, ok: true, limit: safeLimit });
-    const all: MusicSearchResult[] = [];
-    let invalidCount = 0;
+  if (trendingCache && trendingCache.expiresAt > Date.now() && trendingCache.results.length >= offset + 1) {
+    return {
+      source: trendingCache.source,
+      results: trendingCache.results.slice(offset, offset + safeLimit),
+    };
+  }
+
+  const queries = shuffleInPlace([...TRENDING_QUERY_POOL]).slice(0, 4);
+  const collected: MusicSearchResult[] = [];
+  for (const query of queries) {
+    const dlp = await runYtDlp([
+      "--dump-json",
+      "--flat-playlist",
+      "--no-warnings",
+      "--playlist-end", String(Math.max(20, (offset + safeLimit) * 2)),
+      "--default-search", "ytsearch",
+      `ytsearch${Math.max(20, (offset + safeLimit) * 2)}:${query}`,
+    ]);
+    if (!dlp.ok) {
+      log.warn("yt-dlp trending query failed", { query, stderr: dlp.stderr.slice(0, 300) });
+      continue;
+    }
     for (const line of dlp.stdout.split("\n")) {
       const trimmedLine = line.trim();
       if (!trimmedLine) continue;
       try {
         const parsed = JSON.parse(trimmedLine) as Parameters<typeof mapDlpJson>[0];
         const mapped = mapDlpJson(parsed);
-        if (mapped) all.push(mapped);
-        else invalidCount++;
+        if (mapped && isGoodTrendingCandidate(mapped)) collected.push(mapped);
       } catch {
-        invalidCount++;
         /* skip non-JSON line */
       }
     }
-    log.info("yt-dlp trending parsed", { total: all.length, invalid: invalidCount });
-    if (all.length) {
-      // Re-sort by view count descending (most-viewed = most trending).
-      // yt-dlp's flat-playlist JSON includes `view_count` indirectly via
-      // uploader metadata, but not for the search extractor. Fall back to
-      // original order when view_count is missing on every entry.
-      const sorted = [...all].sort((a, b) => 0);
-      return { source: "yt-dlp", results: sorted.slice(0, safeLimit) };
-    }
-  } else {
-    log.warn("yt-dlp trending failed", { stderr: dlp.stderr.slice(0, 500) });
+  }
+  const randomized = shuffleInPlace(dedupeTracks(collected));
+  if (randomized.length) {
+    trendingCache = {
+      expiresAt: Date.now() + TRENDING_CACHE_TTL_MS,
+      source: "yt-dlp",
+      results: randomized,
+    };
+    return { source: "yt-dlp", results: randomized.slice(offset, offset + safeLimit) };
   }
 
   // 2. Invidious — public trending JSON endpoint, type=music.
@@ -338,13 +420,19 @@ export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "i
           duration_sec: e.lengthSeconds ?? null,
           thumbnail_url: e.videoThumbnails?.[0]?.url ?? null,
           source: "youtube",
-        }))
-        .slice(0, safeLimit);
-      if (mapped.length) return { source: "invidious", results: mapped };
+        }));
+      if (mapped.length) {
+        const unique = dedupeTracks(mapped);
+        trendingCache = {
+          expiresAt: Date.now() + TRENDING_CACHE_TTL_MS,
+          source: "invidious",
+          results: unique,
+        };
+        return { source: "invidious", results: unique.slice(offset, offset + safeLimit) };
+      }
     } catch (err) {
       log.debug("invidious instance failed for trending", { base, err: err instanceof Error ? err.message : String(err) });
     }
   }
-
   return { source: "yt-dlp", results: [] };
 }

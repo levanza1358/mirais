@@ -57,7 +57,7 @@ export function NewProviderModal({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ["providers"] });
       toast("Provider added");
       onClose();
-      navigate(`/providers/${p.id}`);
+      navigate(`/dashboard/providers/${p.id}`);
     },
     onError: (e) => setError(e.message),
   });

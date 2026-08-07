@@ -12,11 +12,11 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "ghost" | "danger" | "outline";
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "lg";
   loading?: boolean;
 }) {
   const base = "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none shadow-sm";
-  const sizes = { sm: "h-9 px-3.5 text-xs", md: "h-10 px-4.5 text-sm" };
+  const sizes = { sm: "h-9 px-3.5 text-xs", md: "h-10 px-4.5 text-sm", lg: "h-14 px-10 text-base" };
   const variants = {
     primary: "bg-accent text-white hover:bg-accent/85 hover:shadow-[0_10px_30px_rgba(124,92,255,0.28)]",
     ghost: "text-text-muted hover:text-text-primary hover:bg-bg-raised/80",

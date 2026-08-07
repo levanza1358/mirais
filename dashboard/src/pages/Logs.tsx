@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Clock3, ScrollText, Sparkles, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock3, Download, ScrollText, Sparkles, TriangleAlert } from "lucide-react";
 import { logs, providers, type RequestLog } from "../api";
-import { Card, Select, Badge, EmptyState, Skeleton, fmtNum, fmtMs, fmtTime } from "../components/ui";
+import { Card, Select, Badge, Button, EmptyState, Skeleton, fmtNum, fmtMs, fmtTime, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { labelForProvider } from "../utils/modelLabels";
+import { downloadCsv, toCsv } from "../utils/csv";
 
 const PAGE_SIZE = 50;
 
@@ -13,6 +14,8 @@ export default function Logs() {
   const [status, setStatus] = useState("");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const provs = useQuery({
@@ -22,7 +25,7 @@ export default function Logs() {
     gcTime: 5 * 60_000,
   });
   const list = useQuery({
-    queryKey: ["logs", page, status, provider, model],
+    queryKey: ["logs", page, status, provider, model, fromDate, toDate],
     queryFn: () => logs.list({
       page,
       limit: PAGE_SIZE,
@@ -30,10 +33,14 @@ export default function Logs() {
       provider: provider || undefined,
       model: model || undefined,
       kind: "request",
+      from: fromDate ? new Date(`${fromDate}T00:00:00`).toISOString() : undefined,
+      to: toDate ? new Date(`${toDate}T23:59:59`).toISOString() : undefined,
     }),
     placeholderData: keepPreviousData,
     staleTime: 10_000,
   });
+
+  const resetDates = () => { setFromDate(""); setToDate(""); setPage(1); };
 
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
@@ -51,9 +58,36 @@ export default function Logs() {
   const errorCount = items.filter((l) => l.status !== "success").length;
   const avgLatency = items.length ? Math.round(items.reduce((sum, l) => sum + (l.latency_ms ?? 0), 0) / items.length) : 0;
 
+  const exportCsv = () => {
+    if (!items.length) {
+      toast("No logs to export", "error");
+      return;
+    }
+    const rows = items.map((l) => ({
+      time: l.created_at,
+      status: l.status,
+      provider: l.provider ?? "",
+      model: l.model ?? "",
+      latency_ms: l.latency_ms ?? 0,
+      input_tokens: l.input_tokens ?? 0,
+      output_tokens: l.output_tokens ?? 0,
+      kind: l.kind ?? "",
+      key_label: l.key_label ?? "",
+      error: l.error ?? "",
+    }));
+    const csv = toCsv(rows);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadCsv(`mirais-logs-${stamp}.csv`, csv);
+    toast(`Exported ${rows.length} rows`);
+  };
+
   return (
     <div>
-      <PageHeader title="Request logs" />
+      <PageHeader title="Request logs">
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={items.length === 0} title="Export current page to CSV">
+          <Download size={14} /> Export CSV
+        </Button>
+      </PageHeader>
 
       <div className="mb-6 grid gap-4 xl:grid-cols-[1.35fr_0.95fr]">
         <Card className="overflow-hidden border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.12),rgba(18,22,31,0.92)_42%,rgba(18,22,31,0.96))]">
@@ -88,7 +122,7 @@ export default function Logs() {
       </div>
 
       <Card className="mb-4">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
           <div className="min-w-0">
             <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
               <option value="">All statuses</option>
@@ -109,6 +143,35 @@ export default function Logs() {
               <option value="">All models</option>
               {uniqueModels.map((m) => <option key={m.model_id} value={m.model_id}>{labelForProvider(modelMap.get(m.model_id) ?? "", m.model_id)}</option>)}
             </Select>
+          </div>
+          <label className="flex flex-col gap-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">
+            <span>From</span>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
+              className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-xs text-text-primary focus:border-accent focus:outline-none"
+            />
+          </label>
+          <div className="flex items-end gap-1">
+            <label className="flex flex-1 flex-col gap-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">
+              <span>To</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => { setToDate(e.target.value); setPage(1); }}
+                className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-xs text-text-primary focus:border-accent focus:outline-none"
+              />
+            </label>
+            {(fromDate || toDate) && (
+              <button
+                type="button"
+                onClick={resetDates}
+                className="h-9 shrink-0 rounded-lg border border-border bg-bg-surface px-2 text-xs text-text-muted hover:text-text-primary"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
       </Card>

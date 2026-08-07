@@ -1,4 +1,4 @@
-import { Play, Pause, SkipForward, X, Volume2, ChevronUp, ChevronDown } from "lucide-react";
+import { Play, Pause, SkipForward, SkipBack, X, Volume2, VolumeX, ChevronUp, ChevronDown, Disc3, ListMusic, Repeat, Repeat1, Shuffle, Trash2, Heart } from "lucide-react";
 import { useMusicPlayer } from "../hooks/useMusicPlayer";
 
 function fmtTime(sec: number | null | undefined): string {
@@ -18,6 +18,27 @@ export default function MusicMiniPlayer() {
   if (!player.current && !player.visible) return null;
 
   const track = player.current;
+  const duration = player.duration || track?.duration_sec || 0;
+
+  if (!player.visible && track) {
+    return (
+      <button
+        type="button"
+        onClick={player.show}
+        className="fixed bottom-16 right-3 z-[150] flex max-w-[220px] items-center gap-2 rounded-full border border-border/80 bg-bg-surface/95 px-3 py-2 text-left shadow-[0_18px_44px_rgba(0,0,0,0.42)] backdrop-blur-xl md:bottom-3"
+        aria-label="Show music player"
+      >
+        <span className={`flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-accent ${player.isPlaying ? "animate-[spin_4s_linear_infinite]" : ""}`}>
+          <Disc3 size={18} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium text-text-primary">{track.title}</span>
+          <span className="block truncate text-[10px] text-text-muted">{track.channel ?? "Now playing"}</span>
+        </span>
+        <span className="rounded-full bg-bg-raised/70 px-2 py-1 text-[10px] text-text-muted">{player.queue.length}</span>
+      </button>
+    );
+  }
 
   return (
     <div
@@ -42,8 +63,32 @@ export default function MusicMiniPlayer() {
           <p className="truncate text-[10px] text-text-muted md:text-[11px]">
             {track?.channel ?? "—"} · {fmtTime(track?.duration_sec)}
           </p>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="w-9 shrink-0 text-[10px] text-text-muted md:text-[11px]">{fmtTime(player.currentTime)}</span>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(duration, 1)}
+              step={1}
+              value={Math.min(player.currentTime, Math.max(duration, 1))}
+              onChange={(e) => player.seek(Number(e.currentTarget.value))}
+              disabled={!track || duration <= 0}
+              aria-label="Seek playback"
+              className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-bg-raised accent-accent disabled:cursor-not-allowed disabled:opacity-40"
+            />
+            <span className="w-9 shrink-0 text-right text-[10px] text-text-muted md:text-[11px]">{fmtTime(duration)}</span>
+          </div>
         </div>
         <div className="flex items-center gap-0.5 md:gap-1">
+          <button
+            type="button"
+            onClick={player.previous}
+            disabled={player.history.length === 0}
+            className="hidden h-8 w-8 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary disabled:opacity-40 md:flex md:h-9 md:w-9"
+            aria-label="Previous track"
+          >
+            <SkipBack size={14} />
+          </button>
           <button
             type="button"
             onClick={player.toggle}
@@ -65,6 +110,39 @@ export default function MusicMiniPlayer() {
           </button>
           <button
             type="button"
+            onClick={player.toggleQueue}
+            className="hidden h-8 w-8 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary md:flex md:h-9 md:w-9"
+            aria-label="Show queue"
+            title={player.queue.length ? `Queue (${player.queue.length})` : "Queue empty"}
+          >
+            <ListMusic size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={player.toggleShuffle}
+            className={`hidden h-8 w-8 items-center justify-center rounded-xl transition-colors md:flex md:h-9 md:w-9 ${player.shuffle ? "bg-accent/15 text-accent" : "text-text-muted hover:bg-bg-raised hover:text-text-primary"}`}
+            aria-label="Toggle shuffle"
+          >
+            <Shuffle size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={player.cycleRepeatMode}
+            className={`hidden h-8 w-8 items-center justify-center rounded-xl transition-colors md:flex md:h-9 md:w-9 ${player.repeatMode !== "off" ? "bg-accent/15 text-accent" : "text-text-muted hover:bg-bg-raised hover:text-text-primary"}`}
+            aria-label="Cycle repeat mode"
+          >
+            {player.repeatMode === "one" ? <Repeat1 size={14} /> : <Repeat size={14} />}
+          </button>
+          <button
+            type="button"
+            onClick={() => track && player.toggleFavorite(track)}
+            className={`hidden h-8 w-8 items-center justify-center rounded-xl transition-colors md:flex md:h-9 md:w-9 ${track && player.favorites.some((item) => item.source_id === track.source_id) ? "bg-danger/15 text-danger" : "text-text-muted hover:bg-bg-raised hover:text-text-primary"}`}
+            aria-label="Toggle favorite"
+          >
+            <Heart size={14} fill={track && player.favorites.some((item) => item.source_id === track.source_id) ? "currentColor" : "none"} />
+          </button>
+          <button
+            type="button"
             onClick={player.toggleVisible}
             className="hidden h-8 w-8 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary md:flex md:h-9 md:w-9"
             aria-label={player.visible ? "Hide player" : "Show player"}
@@ -83,9 +161,86 @@ export default function MusicMiniPlayer() {
         </div>
       </div>
       <div className="hidden items-center gap-2 px-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-text-muted md:flex">
-        <Volume2 size={11} />
-        <span>{player.queue.length ? `${player.queue.length} in queue` : "queue"}</span>
+        <button type="button" onClick={player.toggleMute} className="inline-flex items-center gap-1 text-text-muted hover:text-text-primary">
+          {player.muted || player.volume === 0 ? <VolumeX size={11} /> : <Volume2 size={11} />}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={player.muted ? 0 : player.volume}
+          onChange={(e) => player.setVolume(Number(e.currentTarget.value))}
+          className="h-1 w-24 cursor-pointer appearance-none rounded-full bg-bg-raised accent-accent"
+          aria-label="Volume"
+        />
+        <span>{player.isBuffering ? "buffering" : player.queue.length ? `${player.queue.length} in queue` : "queue"}</span>
       </div>
+      {player.showQueue ? (
+        <div className="border-t border-border/60 px-3 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold text-text-primary">Up next</p>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={player.clearQueue} className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text-primary"><Trash2 size={12} /> Clear</button>
+              <button type="button" onClick={player.closeQueue} className="text-[11px] text-text-muted hover:text-text-primary">Close</button>
+            </div>
+          </div>
+          {player.queue.length === 0 ? (
+            <p className="text-xs text-text-muted">Queue kosong.</p>
+          ) : (
+            <ul className="max-h-48 space-y-1 overflow-y-auto pr-1">
+              {player.queue.map((item, index) => (
+                <li key={`${item.source_id}-${index}`} className="flex items-center gap-2 rounded-xl bg-bg-base/50 px-2 py-2">
+                  {item.thumbnail_url ? (
+                    <img src={item.thumbnail_url} alt="" className="h-9 w-9 rounded-lg object-cover" loading="lazy" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="h-9 w-9 rounded-lg bg-bg-raised" />
+                  )}
+                  <button type="button" onClick={() => player.jumpToQueue(index)} className="min-w-0 flex-1 text-left">
+                    <p className="truncate text-xs text-text-primary">{item.title}</p>
+                    <p className="truncate text-[10px] text-text-muted">{item.channel ?? "—"} · {fmtTime(item.duration_sec)}</p>
+                  </button>
+                  <button type="button" onClick={() => player.removeFromQueue(index)} className="rounded-lg p-1 text-text-muted hover:bg-bg-raised hover:text-danger" aria-label="Remove from queue">
+                    <X size={12} />
+                  </button>
+                  <span className="text-[10px] text-text-muted">#{index + 1}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {player.recentlyPlayed.length ? (
+            <div className="mt-3 border-t border-border/60 pt-3">
+              <p className="mb-2 text-xs font-semibold text-text-primary">Recently played</p>
+              <ul className="max-h-32 space-y-1 overflow-y-auto pr-1">
+                {player.recentlyPlayed.map((item, index) => (
+                  <li key={`${item.source_id}-recent-${index}`} className="flex items-center gap-2 rounded-xl bg-bg-base/40 px-2 py-2">
+                    <button type="button" onClick={() => player.replayTrack(item)} className="min-w-0 flex-1 text-left">
+                      <p className="truncate text-xs text-text-primary">{item.title}</p>
+                      <p className="truncate text-[10px] text-text-muted">{item.channel ?? "—"}</p>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {player.favorites.length ? (
+            <div className="mt-3 border-t border-border/60 pt-3">
+              <p className="mb-2 text-xs font-semibold text-text-primary">Favorites</p>
+              <ul className="max-h-32 space-y-1 overflow-y-auto pr-1">
+                {player.favorites.map((item, index) => (
+                  <li key={`${item.source_id}-fav-${index}`} className="flex items-center gap-2 rounded-xl bg-bg-base/40 px-2 py-2">
+                    <button type="button" onClick={() => player.replayTrack(item)} className="min-w-0 flex-1 text-left">
+                      <p className="truncate text-xs text-text-primary">{item.title}</p>
+                      <p className="truncate text-[10px] text-text-muted">{item.channel ?? "—"}</p>
+                    </button>
+                    <Heart size={12} className="text-danger" fill="currentColor" />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
