@@ -1,6 +1,5 @@
 import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
-import { sessionGuardHandle } from "../session";
 import { MusicRepo } from "../store/repos/music";
 import { searchMusic, resolveAudioStreamUrl, videoIdFromInput, fetchTrending } from "./music";
 
@@ -27,8 +26,6 @@ export function musicRoutes(db: Database) {
   const music = new MusicRepo(db);
 
   return new Elysia({ prefix: "/api/music" })
-    .onBeforeHandle(sessionGuardHandle)
-
     // ── Playlists ──
     .get("/playlists", () => ({ playlists: music.listPlaylists() }))
     .post("/playlists", ({ body }) => music.createPlaylist(body.name), {

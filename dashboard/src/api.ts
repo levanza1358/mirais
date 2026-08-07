@@ -182,25 +182,6 @@ export interface Settings {
   env: { port: number; host: string; track_payloads: string; upstream_timeout_ms: number };
 }
 
-// ── auth ──
-export const auth = {
-  check: async () => {
-    const r = await req<{ authenticated: boolean; setup_required?: boolean; passwordless?: boolean }>("/api/auth/check");
-    return {
-      authenticated: r.authenticated,
-      needs_setup: !!r.setup_required,
-      passwordless: !!r.passwordless,
-    };
-  },
-  login: (password: string, remember = false) =>
-    req<{ ok: boolean; passwordless?: boolean }>("/api/auth/login", { method: "POST", body: JSON.stringify({ password, remember }) }),
-  logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
-  setup: (password: string) => req<{ ok: boolean }>("/api/auth/setup", { method: "POST", body: JSON.stringify({ password }) }),
-  changePassword: (current: string, next: string) =>
-    req<{ ok: boolean }>("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current, next }) }),
-  disablePassword: () => req<{ ok: boolean; restart_required?: boolean }>("/api/auth/disable", { method: "POST" }),
-};
-
 // ── providers ──
 export const providers = {
   list: () => req<Provider[]>("/api/providers"),

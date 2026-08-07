@@ -7,7 +7,7 @@ Violations of §1 (Hard Rules) block merge. §2 conventions block merge when cle
 ### Security
 - **R1.1** Never log secrets: upstream API keys, gateway keys, session cookies, `Authorization` headers. Redact in all log paths.
 - **R1.2** Gateway keys exist only as SHA-256 hash + display prefix. Plaintext may live only in memory during creation response.
-- **R1.3** Every `/api/*` route except `/api/auth/login` requires session middleware. Every `/v1/*` route requires gateway-key middleware. No exceptions.
+- **R1.3** Dashboard routes under `/api/*` are intentionally passwordless. Protect exposed instances with a reverse proxy, firewall, VPN, or private network. Every `/v1/*` route requires gateway-key middleware. No exceptions.
 - **R1.4** All external input (env, request bodies, admin forms) validated with zod before use.
 - **R1.5** No telemetry, external beacons, or third-party analytics — frontend and backend.
 - **R1.6** Request/response bodies persisted only when `TRACK_PAYLOADS=full`, and purged on the 7-day body retention schedule.

@@ -4,7 +4,7 @@ Base URL: `http://localhost:1463`
 
 Two API surfaces:
 - **Client API** (`/v1/*`) — used by AI tools; authenticated with gateway API keys (`Authorization: Bearer mirais-…`).
-- **Admin API** (`/api/*`) — used by the dashboard; authenticated with a session cookie from password login.
+- **Admin API** (`/api/*`) — used by the dashboard; intentionally passwordless, with external access controlled by a reverse proxy, firewall, VPN, or private network.
 
 ---
 
@@ -75,17 +75,15 @@ Unified catalog in OpenAI list format: every enabled model from every enabled pr
 
 ## B. Admin API (`/api`)
 
-All `/api/*` routes require the session cookie `mirais_session`, **except** `/api/auth/*` and `/api/health`. The guard is enforced globally (any `/api/*` request without a valid session → `401 { "error": "Unauthorized" }`).
+All `/api/*` routes are passwordless. Do not expose them directly to untrusted networks; use a reverse proxy, firewall, VPN, or private network as the access-control layer.
 
 ### Auth
 
 | Method | Path | Body → Response |
 |--------|------|-----------------|
-| POST | `/api/auth/login` | `{ "password": "…", "remember"?: bool }` → `200 { ok: true, setup_required: bool }` + Set-Cookie; `401` on wrong password (rate-limited: 5 tries / 5 min / IP). Session TTL: `SESSION_TTL_HOURS` (default 12h — set ≤ 6 for short logins); `remember: true` extends to 30 days |
-| POST | `/api/auth/logout` | → clears cookie |
-| GET | `/api/auth/check` | Always `200` → `{ authenticated: bool, setup_required: bool }` — lets the SPA distinguish "no password set" from "not logged in" |
-| POST | `/api/auth/setup` | `{ "password": "…" }` → first-run password set (only when none configured; `409` otherwise) + Set-Cookie |
-| POST | `/api/auth/change-password` | `{ "current": "…", "next": "…" }` → change dashboard password (requires session) |
+| GET | `/api/auth/check` | Compatibility endpoint → `{ authenticated: true, setup_required: false, passwordless: true }` |
+| POST | `/api/auth/login` | Compatibility no-op → `{ ok: true, passwordless: true }` |
+| POST | `/api/auth/logout` | Compatibility no-op → `{ ok: true }` |
 
 ### Overview / analytics
 
@@ -170,8 +168,7 @@ All `/api/*` routes require the session cookie `mirais_session`, **except** `/ap
 
 ### Dashboard exposure and auth behavior
 
-- Dashboard passwordless mode is supported only when Mirais is bound to loopback (`127.0.0.1`, `::1`, or `localhost`).
-- If Mirais is configured with a non-loopback host such as `0.0.0.0`, startup is rejected unless a dashboard password is configured through `DASHBOARD_PASSWORD` or the stored password hash.
+- The dashboard has no application-level login. Restrict exposed instances with a reverse proxy, firewall, VPN, or private network.
 - The dashboard Settings page can toggle network binding, but switching to exposed mode still requires a password before the server can successfully start.
 
 ---

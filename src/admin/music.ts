@@ -15,6 +15,49 @@
 import { spawn } from "node:child_process";
 import { log } from "../utils/logger";
 
+/** Resolve the absolute path of an executable. Cross-platform: tries
+ *  process.execPath siblings, then well-known install paths, then bare
+ *  command via shell. Returns null if not found. */
+function resolveExecutable(name: string): string | null {
+  const candidates: string[] = [];
+  const path = process.env.PATH ?? "";
+  const exts = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
+  for (const dir of path.split(process.platform === "win32" ? ";" : ":")) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      candidates.push(`${dir}${dir.endsWith(process.platform === "win32" ? "\\" : "/") ? "" : (process.platform === "win32" ? "\\" : "/")}${name}${ext}`);
+    }
+  }
+  // Common install locations that PATH sometimes misses (Windows pip --user,
+  // Linux pipx, macOS brew).
+  const extras = process.platform === "win32"
+    ? [
+        `${process.env.APPDATA ?? ""}\\Python\\Python311\\Scripts\\${name}.exe`,
+        `${process.env.APPDATA ?? ""}\\Python\\Python312\\Scripts\\${name}.exe`,
+        `${process.env.APPDATA ?? ""}\\Python\\Python313\\Scripts\\${name}.exe`,
+        `${process.env.LOCALAPPDATA ?? ""}\\Programs\\Python\\Python311\\Scripts\\${name}.exe`,
+        `${process.env.LOCALAPPDATA ?? ""}\\Programs\\Python\\Python312\\Scripts\\${name}.exe`,
+        `C:\\Python311\\Scripts\\${name}.exe`,
+        `C:\\Python312\\Scripts\\${name}.exe`,
+        `C:\\Python313\\Scripts\\${name}.exe`,
+      ]
+    : process.platform === "darwin"
+    ? [`/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`]
+    : [`/home/${process.env.USER ?? "root"}/.local/bin/${name}`, `/root/.local/bin/${name}`, `/usr/local/bin/${name}`];
+  candidates.push(...extras.filter(Boolean));
+  for (const c of candidates) {
+    try {
+      // sync fs check via spawnSync with --version (handles shebang)
+      const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+      const res = spawnSync(c, ["--version"], { stdio: "ignore" });
+      if (res.status === 0) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 export interface MusicSearchResult {
   id: string;
   title: string;
@@ -44,7 +87,17 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 
 function runYtDlp(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const bin = resolveExecutable("yt-dlp");
+    if (!bin) {
+      log.warn("yt-dlp not found on PATH; install via `mirais extras`");
+      resolve({
+        ok: false,
+        stdout: "",
+        stderr: "yt-dlp executable not found on PATH (Windows users may need pip --user install which puts scripts under %APPDATA%\\Python\\PythonXXX\\Scripts)",
+      });
+      return;
+    }
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -229,7 +282,9 @@ export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "i
     `ytsearch${safeLimit * 3}:top music 2025 trending hits`,
   ]);
   if (dlp.ok) {
+    log.info("yt-dlp trending call ok", { lines: dlp.stdout.split("\n").length, ok: true, limit: safeLimit });
     const all: MusicSearchResult[] = [];
+    let invalidCount = 0;
     for (const line of dlp.stdout.split("\n")) {
       const trimmedLine = line.trim();
       if (!trimmedLine) continue;
@@ -237,10 +292,13 @@ export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "i
         const parsed = JSON.parse(trimmedLine) as Parameters<typeof mapDlpJson>[0];
         const mapped = mapDlpJson(parsed);
         if (mapped) all.push(mapped);
+        else invalidCount++;
       } catch {
+        invalidCount++;
         /* skip non-JSON line */
       }
     }
+    log.info("yt-dlp trending parsed", { total: all.length, invalid: invalidCount });
     if (all.length) {
       // Re-sort by view count descending (most-viewed = most trending).
       // yt-dlp's flat-playlist JSON includes `view_count` indirectly via
@@ -250,7 +308,7 @@ export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "i
       return { source: "yt-dlp", results: sorted.slice(0, safeLimit) };
     }
   } else {
-    log.debug("yt-dlp unavailable for trending, falling back to invidious", { stderr: dlp.stderr.slice(0, 200) });
+    log.warn("yt-dlp trending failed", { stderr: dlp.stderr.slice(0, 500) });
   }
 
   // 2. Invidious — public trending JSON endpoint, type=music.

@@ -146,10 +146,11 @@ function shell(command: string, args: string[], cwd = repoRoot): Promise<void> {
 }
 
 async function updateApp(): Promise<void> {
-  await shell("git", ["pull", "--ff-only", "origin", "main"]);
-  await shell("bun", ["install"]);
-  await shell("bun", ["install"], path.join(repoRoot, "dashboard"));
-  await shell("bun", ["run", "build"]);
+  console.log(`Updating Mirais from ${installRoot}`);
+  await shell("git", ["pull", "--ff-only", "origin", "main"], installRoot);
+  await shell("bun", ["install"], installRoot);
+  await shell("bun", ["install"], path.join(installRoot, "dashboard"));
+  await shell("bun", ["run", "build"], installRoot);
   await restart();
   console.log("mirais updated");
   // Auto-install optional runtime helpers (yt-dlp, ffmpeg) so the Music

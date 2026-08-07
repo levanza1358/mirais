@@ -5,6 +5,7 @@ import fs from "node:fs";
 
 const root = path.join(import.meta.dir, "..");
 const dashDir = path.join(root, "dashboard");
+const distDir = path.join(dashDir, "dist");
 
 if (!fs.existsSync(path.join(dashDir, "package.json"))) {
   console.error("dashboard/ not found — nothing to build.");
@@ -19,6 +20,9 @@ if (!fs.existsSync(path.join(dashDir, "node_modules"))) {
   if (install.status !== 0) process.exit(install.status ?? 1);
 }
 
+// Clear previous output before Vite writes the new hashed bundle. This avoids
+// a stale dashboard when an update is interrupted or a proxy serves old files.
+fs.rmSync(distDir, { recursive: true, force: true });
 console.log("Building dashboard...");
 const build = spawnSync(bun, ["run", "build"], { cwd: dashDir, stdio: "inherit" });
 if (build.status !== 0) process.exit(build.status ?? 1);

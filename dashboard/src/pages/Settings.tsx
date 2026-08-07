@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, type FormEvent } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Download, Upload, History, RotateCcw } from "lucide-react";
-import { settings, auth, backups, ApiError, type BackupEntry, type TokenSaverSettings } from "../api";
+import { settings, backups, type BackupEntry, type TokenSaverSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
@@ -14,13 +14,9 @@ export default function Settings() {
         <NetworkSection />
         <ModelSyncSection />
         <TokenSaverSection />
-        <SecuritySection />
         <BackupSection />
         <div className="lg:col-span-2">
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <PasswordSection />
-            <AboutSection />
-          </div>
+          <AboutSection />
         </div>
       </div>
     </div>
@@ -209,40 +205,6 @@ function TokenSaverSection() {
   );
 }
 
-// ── security (session) ──
-
-function SecuritySection() {
-  const qc = useQueryClient();
-  const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
-  const [remember, setRemember] = useState(false);
-
-  useEffect(() => {
-    if (s.data) setRemember(!!s.data.session_remember_default);
-  }, [s.data]);
-
-  const save = useMutation({
-    mutationFn: (v: boolean) => settings.update({ session_remember_default: v }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Security setting saved"); },
-    onError: (e) => toast(e.message, "error"),
-  });
-
-  return (
-    <Card>
-      <h3 className="mb-1 text-sm font-medium">Security</h3>
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-xs text-text-primary">Never ask password by default</p>
-          <p className="mt-0.5 text-xs text-text-muted">
-            Pre-checks the "Never ask password" box on the login screen. Sessions last 6 hours by default;
-            with the box checked they stay valid for 30 days on this device.
-          </p>
-        </div>
-        <Switch checked={remember} onChange={(v) => { setRemember(v); save.mutate(v); }} />
-      </div>
-    </Card>
-  );
-}
-
 // ── backup & restore ──
 
 function BackupSection() {
@@ -301,75 +263,6 @@ function BackupSection() {
         </div>)}
       </div>}
       <ConfirmModal open={!!confirmId} onClose={() => setConfirmId(null)} onConfirm={() => confirmId && remove.mutate(confirmId)} title="Delete backup" message="This backup will be permanently deleted." danger loading={remove.isPending} />
-    </Card>
-  );
-}
-
-// ── password ──
-
-function PasswordSection() {
-  const status = useQuery({ queryKey: ["auth-check"], queryFn: auth.check });
-  const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
-  const [error, setError] = useState("");
-  const passwordless = status.data?.passwordless === true;
-
-  const changePw = useMutation({
-    mutationFn: () => auth.changePassword(pw.current, pw.next),
-    onSuccess: () => {
-      toast("Password changed");
-      setPw({ current: "", next: "", confirm: "" });
-      setError("");
-    },
-    onError: (e) => setError(e instanceof ApiError ? e.message : "Failed to change password"),
-  });
-
-  const disablePw = useMutation({
-    mutationFn: () => auth.disablePassword(),
-    onSuccess: () => {
-      toast("Stored password cleared — restart Mirais to fully drop the env password");
-      setPw({ current: "", next: "", confirm: "" });
-      setError("");
-    },
-    onError: (e) => setError(e instanceof ApiError ? e.message : "Failed to disable password"),
-  });
-
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    setError("");
-    if (pw.next.length < 8) return setError("New password must be at least 8 characters");
-    if (pw.next !== pw.confirm) return setError("Passwords do not match");
-    changePw.mutate();
-  }
-
-  return (
-    <Card>
-      <h3 className="mb-1 text-sm font-medium">Dashboard password</h3>
-      <p className="mb-4 text-xs text-text-muted">
-        {passwordless
-          ? "Passwordless mode is active. The dashboard only works while HOST is loopback. Set a password below to require it again."
-          : "The dashboard requires this password on every login (except this device when 'remember' is enabled)."}
-      </p>
-      <form onSubmit={submit} className="space-y-3">
-        <Input type="password" placeholder={passwordless ? "(no current password)" : "Current password"} value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} disabled={passwordless} />
-        <Input type="password" placeholder="New password (min 8 chars)" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} required />
-        <Input type="password" placeholder="Confirm new password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} required />
-        {error && <p className="text-xs text-danger">{error}</p>}
-        <div className="flex items-center justify-between gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => disablePw.mutate()}
-            loading={disablePw.isPending}
-            disabled={passwordless}
-            title={passwordless ? "No stored password to clear" : "Drop the stored password hash"}
-          >
-            Disable password
-          </Button>
-          <Button type="submit" loading={changePw.isPending} disabled={!pw.next || !pw.confirm || (!passwordless && !pw.current)}>
-            {passwordless ? "Set password" : "Change password"}
-          </Button>
-        </div>
-      </form>
     </Card>
   );
 }

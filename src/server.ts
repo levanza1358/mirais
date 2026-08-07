@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
 import { getDb } from "./store/db";
-import { sessionGuardHandle } from "./session";
 import { authRoutes } from "./admin/auth";
 import { oauthRoutes } from "./admin/oauth";
 import { providerRoutes } from "./admin/providers";
@@ -22,7 +21,6 @@ import { baseUrlFor } from "./proxy/router";
 import { ensureFreshToken, fetchCodexUsage, isOAuthAccount } from "./proxy/codex";
 import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/providers";
 import { log, setLogLevel } from "./utils/logger";
-import { assertNoPasswordSafeToExpose } from "./admin/auth";
 function classifyWarmupStatus(ok: boolean, status: number, detail?: string | null): "healthy" | "rate_limited" | "failing" {
   if (ok) return "healthy";
   const lower = (detail ?? "").toLowerCase();
@@ -194,7 +192,6 @@ const app = new Elysia()
     set.status = 500;
     return { error: { message: "Internal server error", type: "server_error", code: null } };
   })
-  .onBeforeHandle(sessionGuardHandle)
   .use(healthRoutes(db))
   .use(authRoutes(db))
   .use(oauthRoutes(db))
@@ -237,7 +234,13 @@ const app = new Elysia()
     }
     const ext = path.extname(file).toLowerCase();
     set.headers["content-type"] = MIME[ext] ?? "application/octet-stream";
-    if (ext !== ".html") set.headers["cache-control"] = "public, max-age=31536000, immutable";
+    if (ext === ".html") {
+      // HTML selects the current hashed Vite assets, so force browsers and
+      // reverse proxies to revalidate it after every Mirais update.
+      set.headers["cache-control"] = "no-cache";
+    } else {
+      set.headers["cache-control"] = "public, max-age=31536000, immutable";
+    }
     return fs.readFileSync(file);
   })
   .listen({ port: config.port, hostname: config.host });
@@ -246,17 +249,14 @@ log.info("mirais started", {
   url: `http://${config.host}:${config.port}`,
   dashboard: hasDashboard ? "serving built dashboard" : "not built",
   db: config.dbPath,
-  dashboard_password: !!config.dashboardPassword,
+  dashboard_auth: "disabled",
 });
 
-// Guardrail: refuse to expose passwordless mode to non-loopback addresses.
-// Done after the routes are registered so the SettingsRepo global is set.
-try {
-  assertNoPasswordSafeToExpose(config.host);
-} catch (err) {
-  log.error("startup guard failed", { err: err instanceof Error ? err.message : String(err) });
-  process.exit(2);
-}
+// Dashboard authentication has been removed entirely. All administrative
+// endpoints are exposed without a password or session. The operator is
+// expected to gate network access (reverse proxy, firewall, VPN) instead
+// of relying on app-level authentication. The /api/auth/* endpoints remain
+// in place as no-ops for backwards compatibility with the dashboard build.
 
 export type App = typeof app;
 export { app };

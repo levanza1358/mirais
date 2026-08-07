@@ -2,7 +2,7 @@
 
 Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. By default it binds to **`0.0.0.0`** so it is reachable from LAN / Tailscale / internet depending on your firewall.
 
-> Security rule: if `HOST=0.0.0.0`, `::`, or any non-loopback address, `DASHBOARD_PASSWORD` must be set. Passwordless dashboard mode is allowed only on loopback (`127.0.0.1`, `::1`, `localhost`).
+> The Mirais dashboard is intentionally passwordless. When exposed beyond a trusted network, bind it to `127.0.0.1` and protect access with an authenticated reverse proxy, VPN, firewall, or private network. Do not expose port `1463` directly to the internet.
 
 ---
 
@@ -50,10 +50,8 @@ Edit `.env`:
 
 ```bash
 PORT=1463
-HOST=0.0.0.0             # exposed binding; requires DASHBOARD_PASSWORD
+HOST=127.0.0.1           # recommended behind a reverse proxy
 DATA_DIR=./data
-DASHBOARD_PASSWORD=<strong-password>
-SESSION_SECRET=<64 random hex chars>   # generate: bun -e "console.log(crypto.getRandomValues(new Uint8Array(32)).reduce((s,b)=>s+b.toString(16).padStart(2,'0'),''))"
 ```
 
 ---
@@ -206,10 +204,8 @@ services:
       - "1463:1463"          # use "127.0.0.1:1463:1463" on public servers
     environment:
       PORT: 1463
-      HOST: 0.0.0.0
+      HOST: 127.0.0.1
       DATA_DIR: /app/data
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
-      SESSION_SECRET: ${SESSION_SECRET}
     volumes:
       - mirais-data:/app/data
     restart: unless-stopped
@@ -230,8 +226,7 @@ curl http://localhost:1463/health
 ```bash
 bun run smoke                              # or manually:
 curl http://localhost:1463/health          # → {"status":"ok",...}
-curl -X POST http://localhost:1463/api/auth/login \
-  -H "Content-Type: application/json" -d "{\"password\":\"$DASHBOARD_PASSWORD\"}" -c - 
+curl http://localhost:1463/api/health
 ```
 Then in the dashboard: add a provider → **Test** → create an API key → run a real completion:
 ```bash
@@ -249,7 +244,7 @@ curl http://localhost:1463/v1/chat/completions \
 | Repair stale install / bad root | `mirais fix` |
 | Backup | Dashboard → Settings → Data → **Backup now** (or `bun run scripts/backup.ts`, cron it) |
 | Logs | journalctl / `data/service.log` / in-app Logs page |
-| Reset password | stop → delete `dashboard_password_hash` from `settings` table (sqlite3 CLI) → start → setup screen appears |
+| Dashboard access | Protect the reverse proxy, firewall, VPN, or private network; Mirais has no application-level dashboard password |
 | Monitor | `/health` from Uptime Kuma etc.; disk space of `DATA_DIR` |
 
 ## 6. Troubleshooting
@@ -257,8 +252,7 @@ curl http://localhost:1463/v1/chat/completions \
 | Symptom | Fix |
 |---|---|
 | `EADDRINUSE :1463` | Another instance/app on the port → change `PORT` or stop it (`netstat -ano \| findstr 1463` / `ss -ltnp \| grep 1463`) |
-| `Refusing to start: no dashboard password is set and HOST=0.0.0.0 is not loopback` | Either set `DASHBOARD_PASSWORD` in `.env` and restart, or run `mirais expose off` for loopback-only passwordless mode |
-| Login loop | `SESSION_SECRET` changed or cookie blocked; check HTTPS vs http `Secure` cookie |
+| Dashboard reachable publicly | Bind `HOST=127.0.0.1`, remove direct port exposure, and configure authenticated reverse-proxy or VPN access |
 | All providers 401 | Re-enter upstream API keys; check clock skew (OAuth) |
 | DB locked | Two processes on same `DATA_DIR` — run only one |
 | Windows Defender slow scan | Exclude project & `DATA_DIR` folders |

@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { NavLink, useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Boxes,
@@ -9,7 +9,6 @@ import {
   ScrollText,
   BarChart3,
   Settings as SettingsIcon,
-  LogOut,
   Plug,
   Globe2,
   PanelLeftClose,
@@ -20,7 +19,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { auth, health } from "../api";
+import { health } from "../api";
 import { APP_BUILD } from "../main";
 import miraisLogo from "../assets/mirais-logo.svg";
 
@@ -71,8 +70,6 @@ const GROUPS: NavGroup[] = [
 const DEFAULT_OPEN_GROUPS = new Set<string>(["dashboard", "infrastructure", "operations", "system"]);
 
 export function Layout({ children }: { children: ReactNode }) {
-  const navigate = useNavigate();
-  const qc = useQueryClient();
   const { data: h } = useQuery({
     queryKey: ["health"],
     queryFn: health,
@@ -266,22 +263,6 @@ export function Layout({ children }: { children: ReactNode }) {
               </div>
             )}
           </div>
-          <button
-            onClick={async () => {
-              try {
-                await auth.logout();
-              } catch {
-                /* server unreachable — still sign out locally */
-              }
-              qc.clear();
-              navigate("/login");
-            }}
-            className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-text-muted transition-colors hover:bg-bg-raised/70 hover:text-text-primary ${effectiveCollapsed ? "justify-center" : ""}`}
-            title="Sign out"
-          >
-            <LogOut size={14} />
-            {!effectiveCollapsed && "Sign out"}
-          </button>
         </div>
       </aside>
 

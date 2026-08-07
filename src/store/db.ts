@@ -44,6 +44,17 @@ function migrate(d: Database) {
     d.query("INSERT INTO _migrations (name) VALUES (?)").run(file);
     log.info("migration applied", { name: file });
   }
+
+  // Earlier versions could mark a migration as applied without executing its
+  // SQL. Recover existing installations that have that bad 0013 record: the
+  // migration is idempotent, so rerunning it only creates missing Music tables.
+  const musicTable = d.query(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'music_playlists'",
+  ).get();
+  if (!musicTable && applied.has("0013_music.sql")) {
+    d.exec(fs.readFileSync(path.join(dir, "0013_music.sql"), "utf8"));
+    log.warn("recovered missing Music tables from applied migration");
+  }
 }
 
 export function closeDb() {

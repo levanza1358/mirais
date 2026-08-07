@@ -1,12 +1,9 @@
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { auth, music as musicApiClient } from "./api";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { music as musicApiClient } from "./api";
 import { Layout } from "./components/Layout";
 import { ToastHost } from "./components/ui";
 import { MusicPlayerProvider } from "./hooks/useMusicPlayer";
 import MusicMiniPlayer from "./components/MusicMiniPlayer";
-import Login from "./pages/Login";
-import Setup from "./pages/Setup";
 import Overview from "./pages/Overview";
 import Providers from "./pages/Providers";
 import ProviderDetail from "./pages/ProviderDetail";
@@ -20,55 +17,8 @@ import Integrations from "./pages/Integrations";
 import Proxy from "./pages/Proxy";
 import Playground from "./pages/Playground";
 import Music from "./pages/Music";
-import { Skeleton } from "./components/ui";
 
 export default function App() {
-  const location = useLocation();
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["auth-check"],
-    queryFn: auth.check,
-    retry: false,
-  });
-
-  if (location.pathname === "/login") {
-    return (
-      <>
-        <Login />
-        <ToastHost />
-      </>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <Skeleton className="h-10 w-40" />
-      </div>
-    );
-  }
-
-  if (isError) {
-    return (
-      <div className="flex h-screen flex-col items-center justify-center gap-2">
-        <p className="text-danger">Cannot reach the Mirais server.</p>
-        <p className="text-sm text-text-muted">Is it running on port 1463?</p>
-      </div>
-    );
-  }
-
-  if (data?.needs_setup && !data?.passwordless) {
-    return (
-      <>
-        <Setup />
-        <ToastHost />
-      </>
-    );
-  }
-
-  if (!data?.authenticated) {
-    return <Navigate to="/login" replace />;
-  }
-
   return (
     <>
       <MusicPlayerProvider streamUrlFor={musicApiClient.streamUrl}>
