@@ -185,15 +185,20 @@ export interface Settings {
 // ── auth ──
 export const auth = {
   check: async () => {
-    const r = await req<{ authenticated: boolean; setup_required?: boolean }>("/api/auth/check");
-    return { authenticated: r.authenticated, needs_setup: !!r.setup_required };
+    const r = await req<{ authenticated: boolean; setup_required?: boolean; passwordless?: boolean }>("/api/auth/check");
+    return {
+      authenticated: r.authenticated,
+      needs_setup: !!r.setup_required,
+      passwordless: !!r.passwordless,
+    };
   },
   login: (password: string, remember = false) =>
-    req<{ ok: boolean }>("/api/auth/login", { method: "POST", body: JSON.stringify({ password, remember }) }),
+    req<{ ok: boolean; passwordless?: boolean }>("/api/auth/login", { method: "POST", body: JSON.stringify({ password, remember }) }),
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   setup: (password: string) => req<{ ok: boolean }>("/api/auth/setup", { method: "POST", body: JSON.stringify({ password }) }),
   changePassword: (current: string, next: string) =>
     req<{ ok: boolean }>("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current, next }) }),
+  disablePassword: () => req<{ ok: boolean; restart_required?: boolean }>("/api/auth/disable", { method: "POST" }),
 };
 
 // ── providers ──
@@ -282,6 +287,36 @@ export const keys = {
     req<GatewayKey>(`/api/keys/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 };
 
+// ── backups ──
+export interface BackupEntry {
+  id: string;
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export const backups = {
+  list: () => req<{ backups: BackupEntry[] }>("/api/backups"),
+  create: () => req<BackupEntry>("/api/backups", { method: "POST" }),
+  remove: (id: string) => req<{ ok: boolean }>(`/api/backups/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  downloadUrl: (id: string) => `/api/backups/${encodeURIComponent(id)}/download`,
+  upload: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/backups/upload", { method: "POST", body: form, credentials: "same-origin" });
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (typeof body.error === "string") message = body.error;
+      } catch { /* keep default */ }
+      throw new ApiError(res.status, message);
+    }
+    return (await res.json()) as BackupEntry;
+  },
+  restore: (id: string) => req<{ ok: boolean; restarting?: boolean; fallback?: string }>(`/api/backups/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+};
+
 // ── stats / logs / settings ──
 export const stats = {
   summary: (days: number) => req<StatsSummary>(`/api/stats/summary?days=${days}`),
@@ -307,3 +342,119 @@ export const settings = {
 };
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");
+
+// ── integrations ──
+export interface IntegrationModel {
+  id: string;
+  provider: string;
+  providerType: string;
+}
+
+export interface IntegrationCli {
+  id: "opencode" | "codex" | "claude-code" | "aider";
+  name: string;
+  configPath: string;
+  detected: boolean;
+  command: string | null;
+  configExists: boolean;
+  supportsApply: boolean;
+  note: string;
+}
+
+export interface IntegrationCatalog {
+  baseUrl: string;
+  clis: IntegrationCli[];
+  models: IntegrationModel[];
+}
+
+export const integrations = {
+  catalog: () => req<IntegrationCatalog>("/api/integrations/catalog"),
+  apply: (input: { cli: IntegrationCli["id"]; model: string; apiKey: string }) =>
+    req<{ ok: boolean; cli: string; path: string; backup: string | null }>("/api/integrations/apply", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+};
+
+// ── proxies ──
+export type ProxyStatus = "pending" | "healthy" | "slow" | "failing" | "disabled";
+
+export interface ProxyRecord {
+  id: string;
+  scheme: "http";
+  host: string;
+  port: number;
+  country: string | null;
+  source: string;
+  status: ProxyStatus;
+  latency_ms: number | null;
+  last_checked: string | null;
+  last_error: string | null;
+  failure_streak: number;
+  success_count: number;
+  failure_count: number;
+  username: string | null;
+  password: string | null;
+  tags: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProxyScrapeRun {
+  id: string;
+  source: string;
+  started_at: string;
+  finished_at: string | null;
+  fetched: number;
+  added: number;
+  skipped: number;
+  error: string | null;
+  triggered_by: "manual" | "interval" | "auto-warmup";
+}
+
+export interface ProxyAssignment {
+  provider_id: string;
+  mode: "direct" | "pool" | "scored";
+  enabled: boolean;
+}
+
+export interface ProxySource {
+  name: string;
+  url: string;
+}
+
+export interface ProxyBundle {
+  sources: ProxySource[];
+  proxies: ProxyRecord[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  assignments: ProxyAssignment[];
+  scrape_runs: ProxyScrapeRun[];
+  config: { enabled: boolean; interval_minutes: number };
+}
+
+export const proxies = {
+  list: (params: { page?: number; pageSize?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.page) q.set("page", String(params.page));
+    if (params.pageSize) q.set("page_size", String(params.pageSize));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return req<ProxyBundle>(`/api/proxies${suffix}`);
+  },
+  scrape: () => req<{ results: Array<{ source: string; fetched: number; added: number; skipped: number; error?: string; durationMs: number }>; probed: string[] }>("/api/proxies/scrape", { method: "POST" }),
+  probe: (id?: string) => req<{ ok: boolean; probed: string[] }>("/api/proxies/probe", { method: "POST", body: JSON.stringify({ id }) }),
+  create: (input: { host: string; port: number; country?: string; username?: string; password?: string; source?: string }) =>
+    req<ProxyRecord>("/api/proxies", { method: "POST", body: JSON.stringify(input) }),
+  bulkAdd: (input: { lines: string[]; source?: string }) =>
+    req<{ received: number; added: number; skipped: number; invalid: number }>("/api/proxies/bulk", { method: "POST", body: JSON.stringify(input) }),
+  remove: (id: string) => req<{ ok: boolean }>(`/api/proxies/${id}`, { method: "DELETE" }),
+  clear: () => req<{ removed: number }>("/api/proxies/clear", { method: "POST" }),
+  toggle: (id: string) => req<ProxyRecord>(`/api/proxies/${id}/toggle`, { method: "POST" }),
+  setAssignment: (provider_id: string, mode: "direct" | "pool" | "scored") =>
+    req<{ mode: "direct" | "pool" | "scored"; enabled: boolean }>("/api/proxies/assignments", { method: "POST", body: JSON.stringify({ provider_id, mode }) }),
+  getConfig: () => req<{ enabled: boolean; interval_minutes: number }>("/api/proxies/config"),
+  saveConfig: (input: { enabled: boolean; interval_minutes: number }) =>
+    req<{ enabled: boolean; interval_minutes: number }>("/api/proxies/config", { method: "POST", body: JSON.stringify(input) }),
+};

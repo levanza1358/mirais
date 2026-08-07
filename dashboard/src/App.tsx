@@ -14,6 +14,8 @@ import Logs from "./pages/Logs";
 import WarmupLogs from "./pages/WarmupLogs";
 import UsageLog from "./pages/UsageLog";
 import Settings from "./pages/Settings";
+import Integrations from "./pages/Integrations";
+import Proxy from "./pages/Proxy";
 import { Skeleton } from "./components/ui";
 
 export default function App() {
@@ -50,7 +52,7 @@ export default function App() {
     );
   }
 
-  if (data?.needs_setup) {
+  if (data?.needs_setup && !data?.passwordless) {
     return (
       <>
         <Setup />
@@ -76,6 +78,8 @@ export default function App() {
           <Route path="/warmup-logs" element={<WarmupLogs />} />
           <Route path="/usage" element={<UsageLog />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/integrations" element={<Integrations />} />
+          <Route path="/proxies" element={<Proxy />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

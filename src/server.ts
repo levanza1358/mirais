@@ -9,6 +9,8 @@ import { oauthRoutes } from "./admin/oauth";
 import { providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, logRoutes, healthRoutes } from "./admin/settings";
+import { proxyRoutes } from "./admin/proxies";
+import { backupRoutes } from "./admin/backups";
 import { v1Routes } from "./proxy/routes";
 import { GatewayError, AdminError } from "./shared/errors";
 import { LogsRepo } from "./store/repos/logs";
@@ -18,6 +20,7 @@ import { baseUrlFor } from "./proxy/router";
 import { ensureFreshToken, fetchCodexUsage, isOAuthAccount } from "./proxy/codex";
 import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/providers";
 import { log, setLogLevel } from "./utils/logger";
+import { assertNoPasswordSafeToExpose } from "./admin/auth";
 function classifyWarmupStatus(ok: boolean, status: number, detail?: string | null): "healthy" | "rate_limited" | "failing" {
   if (ok) return "healthy";
   const lower = (detail ?? "").toLowerCase();
@@ -171,7 +174,7 @@ const MIME: Record<string, string> = {
 };
 
 const app = new Elysia()
-  .onError(({ error, set }) => {
+  .onError(({ error, set, request }) => {
     if (error instanceof GatewayError) {
       set.status = error.status;
       return error.toJSON();
@@ -180,7 +183,12 @@ const app = new Elysia()
       set.status = error.status;
       return error.toJSON();
     }
-    log.error("unhandled error", { err: error instanceof Error ? error.message : String(error) });
+    log.error("unhandled error", {
+      err: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      path: new URL(request.url).pathname,
+      method: request.method,
+    });
     set.status = 500;
     return { error: { message: "Internal server error", type: "server_error", code: null } };
   })
@@ -193,6 +201,8 @@ const app = new Elysia()
   .use(comboRoutes(db))
   .use(keyRoutes(db))
   .use(settingsRoutes(db))
+  .use(proxyRoutes(db))
+  .use(backupRoutes(db))
   .use(statsRoutes(db))
   .use(logRoutes(db))
   .use(v1Routes(db))
@@ -223,7 +233,17 @@ log.info("mirais started", {
   url: `http://${config.host}:${config.port}`,
   dashboard: hasDashboard ? "serving built dashboard" : "not built",
   db: config.dbPath,
+  dashboard_password: !!config.dashboardPassword,
 });
+
+// Guardrail: refuse to expose passwordless mode to non-loopback addresses.
+// Done after the routes are registered so the SettingsRepo global is set.
+try {
+  assertNoPasswordSafeToExpose(config.host);
+} catch (err) {
+  log.error("startup guard failed", { err: err instanceof Error ? err.message : String(err) });
+  process.exit(2);
+}
 
 export type App = typeof app;
 export { app };

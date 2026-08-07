@@ -1,24 +1,48 @@
-import { useState, useEffect, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sparkles, Eye, EyeOff } from "lucide-react";
 import { auth, settings, ApiError } from "../api";
 import { Button, Input } from "../components/ui";
 
 export default function Login() {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [shake, setShake] = useState(false);
-  const navigate = useNavigate();
-  const qc = useQueryClient();
+
+  // Probe whether the server is in passwordless mode. If yes, the form is
+  // hidden and a fresh session cookie is issued automatically. If no, we
+  // show the password form and let the user sign in normally.
+  const status = useQuery({ queryKey: ["auth-check"], queryFn: auth.check, retry: false });
+  const passwordless = status.data?.passwordless === true;
 
   useEffect(() => {
-    // Pre-check the box when the admin enabled it as default in Settings.
+    if (!passwordless) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        await auth.login("");
+        await qc.invalidateQueries({ queryKey: ["auth-check"] });
+        if (!cancelled) navigate("/");
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Login failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [passwordless, navigate, qc]);
+
+  useEffect(() => {
+    if (passwordless) return;
     settings.get().then((s) => setRemember(!!s.session_remember_default)).catch(() => {});
-  }, []);
+  }, [passwordless]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -35,6 +59,23 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (passwordless) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(ellipse_at_top,_#1a2030_0%,_#0b0e14_60%)]">
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-bg-surface/80 p-8 text-center backdrop-blur">
+          <div className="mb-4 flex flex-col items-center gap-2">
+            <Sparkles size={28} className="text-accent" />
+            <h1 className="text-lg font-semibold">Mirais</h1>
+            <p className="text-xs text-text-muted">
+              {error ? "Cannot reach the dashboard" : "Opening passwordless dashboard…"}
+            </p>
+          </div>
+          {error && <p className="text-xs text-danger">{error}</p>}
+        </div>
+      </div>
+    );
   }
 
   return (

@@ -1,8 +1,8 @@
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, useEffect, useRef, type FormEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
-import { settings, auth, ApiError, type TokenSaverSettings } from "../api";
-import { Button, Card, Input, Switch, toast } from "../components/ui";
+import { Plus, Trash2, Download, Upload, History, RotateCcw } from "lucide-react";
+import { settings, auth, backups, ApiError, type BackupEntry, type TokenSaverSettings } from "../api";
+import { Button, Card, ConfirmModal, Input, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
 export default function Settings() {
@@ -15,6 +15,7 @@ export default function Settings() {
         <ModelSyncSection />
         <TokenSaverSection />
         <SecuritySection />
+        <BackupSection />
         <div className="lg:col-span-2">
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <PasswordSection />
@@ -242,11 +243,75 @@ function SecuritySection() {
   );
 }
 
+// ── backup & restore ──
+
+function BackupSection() {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const list = useQuery({ queryKey: ["backups"], queryFn: backups.list });
+
+  const create = useMutation({
+    mutationFn: backups.create,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["backups"] }); toast("Backup created"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+  const upload = useMutation({
+    mutationFn: backups.upload,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["backups"] }); toast("Backup uploaded"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+  const remove = useMutation({
+    mutationFn: backups.remove,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["backups"] }); toast("Backup deleted"); setConfirmId(null); },
+    onError: (e) => toast(e.message, "error"),
+  });
+  const restore = useMutation({
+    mutationFn: backups.restore,
+    onSuccess: () => toast("Backup restored. Mirais is restarting — reload in a few seconds."),
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const formatSize = (size: number) => size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
+  const formatDate = (value: string) => new Date(value).toLocaleString();
+
+  return (
+    <Card className="lg:col-span-2">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium">Backup & restore</h3>
+          <p className="mt-1 text-xs text-text-muted">Create a consistent SQLite snapshot, download it, or restore a previous backup. A pre-restore fallback is created automatically.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => create.mutate()} loading={create.isPending}><Download size={14} /> Backup now</Button>
+          <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} loading={upload.isPending}><Upload size={14} /> Upload</Button>
+          <input ref={fileRef} type="file" accept=".db,application/octet-stream" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) upload.mutate(file); e.currentTarget.value = ""; }} />
+        </div>
+      </div>
+      {list.isLoading && <p className="text-xs text-text-muted">Loading backups…</p>}
+      {!list.isLoading && !list.data?.backups.length && <p className="rounded-lg bg-bg-base/50 p-4 text-xs text-text-muted">No backups yet.</p>}
+      {!!list.data?.backups.length && <div className="divide-y divide-border rounded-lg border border-border">
+        {list.data.backups.map((backup: BackupEntry) => <div key={backup.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+          <div className="min-w-0"><p className="truncate font-mono text-xs text-text-primary">{backup.filename}</p><p className="mt-1 text-xs text-text-muted">{formatSize(backup.size_bytes)} · {formatDate(backup.created_at)}</p></div>
+          <div className="flex gap-1">
+            <a className="inline-flex h-9 items-center gap-1 rounded-xl px-3 text-xs text-text-muted hover:bg-bg-raised hover:text-text-primary" href={backups.downloadUrl(backup.id)}><Download size={14} /> Download</a>
+            <Button size="sm" variant="outline" onClick={() => restore.mutate(backup.id)} loading={restore.isPending}><RotateCcw size={14} /> Restore</Button>
+            <Button size="sm" variant="danger" onClick={() => setConfirmId(backup.id)}><Trash2 size={14} /></Button>
+          </div>
+        </div>)}
+      </div>}
+      <ConfirmModal open={!!confirmId} onClose={() => setConfirmId(null)} onConfirm={() => confirmId && remove.mutate(confirmId)} title="Delete backup" message="This backup will be permanently deleted." danger loading={remove.isPending} />
+    </Card>
+  );
+}
+
 // ── password ──
 
 function PasswordSection() {
+  const status = useQuery({ queryKey: ["auth-check"], queryFn: auth.check });
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
   const [error, setError] = useState("");
+  const passwordless = status.data?.passwordless === true;
 
   const changePw = useMutation({
     mutationFn: () => auth.changePassword(pw.current, pw.next),
@@ -256,6 +321,16 @@ function PasswordSection() {
       setError("");
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : "Failed to change password"),
+  });
+
+  const disablePw = useMutation({
+    mutationFn: () => auth.disablePassword(),
+    onSuccess: () => {
+      toast("Stored password cleared — restart Mirais to fully drop the env password");
+      setPw({ current: "", next: "", confirm: "" });
+      setError("");
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "Failed to disable password"),
   });
 
   function submit(e: FormEvent) {
@@ -268,14 +343,31 @@ function PasswordSection() {
 
   return (
     <Card>
-      <h3 className="mb-4 text-sm font-medium">Change dashboard password</h3>
+      <h3 className="mb-1 text-sm font-medium">Dashboard password</h3>
+      <p className="mb-4 text-xs text-text-muted">
+        {passwordless
+          ? "Passwordless mode is active. The dashboard only works while HOST is loopback. Set a password below to require it again."
+          : "The dashboard requires this password on every login (except this device when 'remember' is enabled)."}
+      </p>
       <form onSubmit={submit} className="space-y-3">
-        <Input type="password" placeholder="Current password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} required />
+        <Input type="password" placeholder={passwordless ? "(no current password)" : "Current password"} value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} disabled={passwordless} />
         <Input type="password" placeholder="New password (min 8 chars)" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} required />
         <Input type="password" placeholder="Confirm new password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} required />
         {error && <p className="text-xs text-danger">{error}</p>}
-        <div className="flex justify-end">
-          <Button type="submit" loading={changePw.isPending} disabled={!pw.current || !pw.next || !pw.confirm}>Change password</Button>
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => disablePw.mutate()}
+            loading={disablePw.isPending}
+            disabled={passwordless}
+            title={passwordless ? "No stored password to clear" : "Drop the stored password hash"}
+          >
+            Disable password
+          </Button>
+          <Button type="submit" loading={changePw.isPending} disabled={!pw.next || !pw.confirm || (!passwordless && !pw.current)}>
+            {passwordless ? "Set password" : "Change password"}
+          </Button>
         </div>
       </form>
     </Card>
