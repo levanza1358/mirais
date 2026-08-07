@@ -492,6 +492,7 @@ export interface MusicSearchResult {
 
 export const music = {
   search: (q: string, limit = 12) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  trending: (limit = 20) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/trending?limit=${limit}`),
   listPlaylists: () => req<{ playlists: MusicPlaylist[] }>("/api/music/playlists"),
   createPlaylist: (name: string) => req<MusicPlaylist>("/api/music/playlists", { method: "POST", body: JSON.stringify({ name }) }),
   getPlaylist: (id: string) => req<MusicPlaylist>(`/api/music/playlists/${id}`),

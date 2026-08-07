@@ -52,6 +52,15 @@ export default function Music() {
     enabled: debounced.length > 0,
   });
 
+  // Trending feed: refreshed once on mount and again when the user clicks
+  // Refresh. Disabled while the user has a search query in flight so we
+  // don't fight them for screen real-estate.
+  const trendingQ = useQuery({
+    queryKey: ["music-trending"],
+    queryFn: () => musicApi.trending(20),
+    staleTime: 5 * 60_000,
+  });
+
   const createPlaylist = useMutation({
     mutationFn: (name: string) => musicApi.createPlaylist(name),
     onSuccess: (p) => {
@@ -174,26 +183,69 @@ export default function Music() {
                 placeholder="Search YouTube… (try a song title or artist)"
                 className="flex-1"
               />
-              {searchQ.isFetching && <Loader2 size={14} className="animate-spin text-text-muted" />}
+              {(searchQ.isFetching || trendingQ.isFetching) && <Loader2 size={14} className="animate-spin text-text-muted" />}
             </div>
-            <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-text-muted">
-              {searchQ.data ? `via ${searchQ.data.source}` : "YouTube (yt-dlp → Invidious fallback)"}
-            </p>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-text-muted">
+                {debounced
+                  ? (searchQ.data ? `${searchQ.data.results.length} results via ${searchQ.data.source}` : "Searching…")
+                  : (trendingQ.data ? `Trending now · ${trendingQ.data.results.length} tracks via ${trendingQ.data.source}` : "Loading trending…")}
+              </p>
+              <button
+                type="button"
+                onClick={() => trendingQ.refetch()}
+                disabled={trendingQ.isFetching}
+                className="text-[10px] uppercase tracking-[0.18em] text-text-muted hover:text-text-primary disabled:opacity-40"
+              >
+                Refresh
+              </button>
+            </div>
             <div className="flex-1 overflow-y-auto rounded-xl border border-border bg-bg-base/40">
-              {!debounced ? (
-                <p className="px-3 py-6 text-center text-xs text-text-muted">Type to search for music.</p>
-              ) : searchQ.isLoading ? (
+              {debounced ? (
+                searchQ.isLoading ? (
+                  <div className="space-y-1 p-2">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                ) : (searchQ.data?.results ?? []).length === 0 ? (
+                  <p className="px-3 py-6 text-center text-xs text-text-muted">No results. Try a different query.</p>
+                ) : (
+                  <ul className="divide-y divide-border/60">
+                    {(searchQ.data?.results ?? []).map((r) => (
+                      <li key={r.id} className="flex items-center gap-2 px-2 py-2 hover:bg-bg-raised/40">
+                        <img src={r.thumbnail_url ?? ""} alt="" className="h-10 w-16 shrink-0 rounded object-cover bg-bg-raised" loading="lazy" referrerPolicy="no-referrer" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm">{r.title}</p>
+                          <p className="truncate text-[11px] text-text-muted">{r.channel ?? "—"} · {fmtTime(r.duration_sec)}</p>
+                        </div>
+                        <Button size="sm" onClick={() => playTrack(r)} title="Play"><Play size={12} /></Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!selectedPlaylistId || addTrack.isPending}
+                          onClick={() => selectedPlaylistId && addTrack.mutate({ playlistId: selectedPlaylistId, result: r })}
+                          title={selectedPlaylistId ? "Add to current playlist" : "Select a playlist first"}
+                        >
+                          <Plus size={12} />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              ) : trendingQ.isLoading ? (
                 <div className="space-y-1 p-2">
-                  {Array.from({ length: 6 }).map((_, i) => (
+                  {Array.from({ length: 8 }).map((_, i) => (
                     <Skeleton key={i} className="h-12 w-full" />
                   ))}
                 </div>
-              ) : (searchQ.data?.results ?? []).length === 0 ? (
-                <p className="px-3 py-6 text-center text-xs text-text-muted">No results. Try a different query.</p>
+              ) : (trendingQ.data?.results ?? []).length === 0 ? (
+                <p className="px-3 py-6 text-center text-xs text-text-muted">Trending feed is empty. Try searching above, or add tracks manually.</p>
               ) : (
                 <ul className="divide-y divide-border/60">
-                  {(searchQ.data?.results ?? []).map((r) => (
+                  {(trendingQ.data?.results ?? []).map((r, i) => (
                     <li key={r.id} className="flex items-center gap-2 px-2 py-2 hover:bg-bg-raised/40">
+                      <span className="w-5 shrink-0 text-center text-[11px] font-mono text-text-muted">{i + 1}</span>
                       <img src={r.thumbnail_url ?? ""} alt="" className="h-10 w-16 shrink-0 rounded object-cover bg-bg-raised" loading="lazy" referrerPolicy="no-referrer" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm">{r.title}</p>

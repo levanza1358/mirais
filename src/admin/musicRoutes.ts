@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import { sessionGuardHandle } from "../session";
 import { MusicRepo } from "../store/repos/music";
-import { searchMusic, resolveAudioStreamUrl, videoIdFromInput } from "./music";
+import { searchMusic, resolveAudioStreamUrl, videoIdFromInput, fetchTrending } from "./music";
 
 const DEFAULT_SEARCH_LIMIT = 12;
 const MAX_SEARCH_LIMIT = 25;
@@ -71,6 +71,12 @@ export function musicRoutes(db: Database) {
       const q = (query?.q ?? "").toString();
       const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, Number(query?.limit ?? DEFAULT_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT));
       return searchMusic(q, limit);
+    })
+
+    // ── Trending ──
+    .get("/trending", async ({ query }) => {
+      const limit = Math.min(50, Math.max(1, Number(query?.limit ?? 20) || 20));
+      return fetchTrending(limit);
     })
 
     // ── Stream proxy ──

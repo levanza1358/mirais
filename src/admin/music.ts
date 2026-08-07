@@ -204,3 +204,78 @@ export function videoIdFromInput(input: string): string | null {
   if (/^[A-Za-z0-9_-]{6,15}$/.test(trimmed)) return trimmed;
   return extractIdFromUrl(trimmed);
 }
+
+/**
+ * Fetch trending music videos. Mirais tries yt-dlp first
+ * (`https://www.youtube.com/feed/trending?bp=4gINGgt5dG1hX2NoYXJ0cw%3D%3D`
+ * which filters to the Music category). Invidious has a stable
+ * `/api/v1/trending?type=music` endpoint that we use as a fallback. Both
+ * sources are public and don't need API keys.
+ */
+export async function fetchTrending(limit = 20): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
+  const safeLimit = Math.max(1, Math.min(limit, 50));
+
+  // 1. yt-dlp — flat-playlist dump of the trending Music feed.
+  const dlp = await runYtDlp([
+    "--dump-json",
+    "--flat-playlist",
+    "--no-warnings",
+    "--playlist-end", String(safeLimit),
+    "https://www.youtube.com/feed/trending?bp=4gINGgt5dG1hX2NoYXJ0cw%3D%3D",
+  ]);
+  if (dlp.ok) {
+    const out: MusicSearchResult[] = [];
+    for (const line of dlp.stdout.split("\n")) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+      try {
+        const parsed = JSON.parse(trimmedLine) as Parameters<typeof mapDlpJson>[0];
+        const mapped = mapDlpJson(parsed);
+        if (mapped) out.push(mapped);
+        if (out.length >= safeLimit) break;
+      } catch {
+        /* skip non-JSON line */
+      }
+    }
+    if (out.length) return { source: "yt-dlp", results: out };
+  } else {
+    log.debug("yt-dlp unavailable for trending, falling back to invidious", { stderr: dlp.stderr.slice(0, 200) });
+  }
+
+  // 2. Invidious — public trending JSON endpoint, type=music.
+  for (const base of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await withTimeout(
+        fetch(`${base}/api/v1/trending?type=music&region=US`, {
+          headers: { "user-agent": "Mozilla/5.0 Mirais" },
+        }),
+        FETCH_TIMEOUT_MS,
+        `invidious trending (${base})`,
+      );
+      if (!res.ok) continue;
+      const data = (await res.json()) as Array<{
+        videoId?: string;
+        title?: string;
+        author?: string;
+        lengthSeconds?: number;
+        videoThumbnails?: Array<{ url?: string }>;
+      }>;
+      const mapped: MusicSearchResult[] = data
+        .filter((e) => e.videoId && e.title)
+        .map((e): MusicSearchResult => ({
+          id: e.videoId!,
+          title: e.title!,
+          channel: e.author ?? null,
+          duration_sec: e.lengthSeconds ?? null,
+          thumbnail_url: e.videoThumbnails?.[0]?.url ?? null,
+          source: "youtube",
+        }))
+        .slice(0, safeLimit);
+      if (mapped.length) return { source: "invidious", results: mapped };
+    } catch (err) {
+      log.debug("invidious instance failed for trending", { base, err: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return { source: "yt-dlp", results: [] };
+}
