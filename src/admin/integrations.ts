@@ -153,7 +153,12 @@ export function integrationRoutes(db: Database) {
           .filter((model) => model.enabled)
           .map((model) => {
             const prefix = shortProviderName(provider.type);
-            return { id: `${prefix}/${model.model_id}`, provider: provider.name, providerType: provider.type };
+            // Upstream ids often carry vendor segments (e.g. `openai/gpt-5.4`,
+            // `moonshotai/kimi-k3`); keep only the tail so the dashboard
+            // shows compact labels like `bb/gpt-5.4` instead of
+            // `bb/openai/gpt-5.4`.
+            const tail = model.model_id.split("/").filter(Boolean).pop() ?? model.model_id;
+            return { id: `${prefix}/${tail}`, provider: provider.name, providerType: provider.type };
           }));
       return {
         baseUrl: "http://127.0.0.1:1463",

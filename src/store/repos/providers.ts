@@ -144,29 +144,12 @@ export class ProvidersRepo {
     return rows.map((row) => this.hydrateModel(row));
   }
 
-  /** Resolve a short model ID (e.g. `bb/gpt-5.4`) to the full model_id. */
+  /** Resolve a short model ID (e.g. `bb/gpt-5.4`, `cbc/minimax-m3`) to the
+   *  full model_id stored on the provider (e.g. `openai/gpt-5.4`,
+   *  `codebuddy-cn-minimax-m3`). Matches by the model_id tail so a single
+   *  provider can register many upstream-prefixed models without us needing
+   *  to know each prefix up front. */
   findModelByShortId(shortProvider: string, shortModel: string): Array<ProviderModel & { provider: Provider }> {
-    // Try suffix match first (for models with provider prefix like "blackboxai/openai/gpt-5.4")
-    let rows = this.db
-      .query(
-        `SELECT pm.*, p.id as p_id, p.name as p_name, p.type as p_type, p.base_url as p_base_url, p.enabled as p_enabled, p.priority as p_priority
-         FROM provider_models pm JOIN providers p ON p.id = pm.provider_id
-         WHERE pm.model_id LIKE '%/' || ? AND pm.enabled = 1 AND p.enabled = 1
-         ORDER BY p.priority ASC`,
-      )
-      .all(shortModel) as Array<Record<string, unknown>>;
-    // Also try exact match (for models without provider prefix like "gpt-5.2-codex")
-    if (!rows.length) {
-      rows = this.db
-        .query(
-          `SELECT pm.*, p.id as p_id, p.name as p_name, p.type as p_type, p.base_url as p_base_url, p.enabled as p_enabled, p.priority as p_priority
-           FROM provider_models pm JOIN providers p ON p.id = pm.provider_id
-           WHERE pm.model_id = ? AND pm.enabled = 1 AND p.enabled = 1
-           ORDER BY p.priority ASC`,
-        )
-        .all(shortModel) as Array<Record<string, unknown>>;
-    }
-    // Filter to only those whose provider matches the short prefix
     const SHORT_TO_PROVIDER: Record<string, string> = {
       bb: "blackbox", oa: "openai", an: "anthropic", ms: "moonshotai", x: "xai",
       ds: "deepseek", gl: "glm", ll: "local-llama",
@@ -174,6 +157,25 @@ export class ProvidersRepo {
     };
     const expectedProvider = SHORT_TO_PROVIDER[shortProvider];
     if (!expectedProvider) return [];
+
+    // 1. Exact match on the full stored model_id.
+    // 2. Suffix match on the segment after the last "/" (covers `openai/gpt-5.4`).
+    // 3. Suffix match on the segment after the last "-" (covers
+    //    `codebuddy-cn-minimax-m3`).
+    const rows = this.db
+      .query(
+        `SELECT pm.*, p.id as p_id, p.name as p_name, p.type as p_type, p.base_url as p_base_url, p.enabled as p_enabled, p.priority as p_priority
+         FROM provider_models pm JOIN providers p ON p.id = pm.provider_id
+         WHERE pm.enabled = 1 AND p.enabled = 1
+           AND (
+             pm.model_id = ?1
+             OR pm.model_id LIKE '%/' || ?1
+             OR pm.model_id LIKE '%-' || ?1
+           )
+         ORDER BY p.priority ASC`,
+      )
+      .all(shortModel) as Array<Record<string, unknown>>;
+
     return rows
       .filter((row) => (row.p_name as string) === expectedProvider)
       .map((row) => this.hydrateModel(row));
