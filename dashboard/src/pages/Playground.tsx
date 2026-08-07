@@ -15,7 +15,6 @@ import {
 import { integrations, keys, type IntegrationModel } from "../api";
 import { storedKeyFor } from "../keyStore";
 import { Button, Card, Skeleton, Badge, Select, Input, toast } from "../components/ui";
-import { PageHeader } from "../components/Layout";
 
 type Role = "system" | "user" | "assistant";
 
@@ -34,6 +33,11 @@ const DEFAULT_TURNS: ChatTurn[] = [
 
 function uid(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** Catalog model → single compact label (e.g. "cbc/minimax-m3"). */
+function shortModelLabel(m: IntegrationModel): string {
+  return m.id;
 }
 
 export default function Playground() {
@@ -246,41 +250,40 @@ export default function Playground() {
   }
   if (!activeKey) {
     return (
-      <div>
-        <PageHeader title="Playground" />
-        <Card>
-          <p className="text-sm text-text-muted">
-            No gateway key available. Open the <strong>API Keys</strong> page once and rotate the key so its plaintext is stored in this browser.
-          </p>
-        </Card>
-      </div>
+      <p className="text-danger">No gateway key available. Open the API Keys page once and rotate the key so its plaintext is stored in this browser.</p>
     );
   }
 
-  return (
-    <div className="flex h-full flex-col">
-      <PageHeader title="Playground">
+  // The page fills the viewport: the controls stay pinned, only the transcript
+    // (and the details panel) scrolls internally — the page itself never grows.
+    return (
+    <div className="-mx-6 -mt-6 flex h-[calc(100vh-24px)] flex-col gap-2 px-6 pt-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.24em] text-text-muted">Mirais dashboard</p>
+          <h1 className="text-xl font-semibold tracking-tight">Playground</h1>
+        </div>
         <Badge tone="accent">{models.length} models</Badge>
-      </PageHeader>
+      </div>
 
-      <div className="grid flex-1 gap-4 xl:grid-cols-[1.1fr_.9fr]">
-        <Card className="flex flex-col">
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <div className="flex-1 min-w-[180px]">
-              <label className="mb-1 block text-[11px] uppercase tracking-[0.18em] text-text-muted">Model</label>
+      <div className="grid min-h-0 flex-1 gap-2 xl:grid-cols-[1fr_280px]">
+        {/* ── LEFT: chat card ────────────────────────────────────────── */}
+        <Card className="flex min-h-0 flex-col gap-2 p-3">
+          {/* Compact controls strip */}
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[180px] flex-1">
+              <label className="mb-0.5 block text-[10px] uppercase tracking-[0.18em] text-text-muted">Model</label>
               <Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
                 {models.map((m) => (
-                  <option key={`${m.providerType}:${m.id}`} value={m.id}>{m.provider}/{m.id}</option>
+                  <option key={`${m.providerType}:${m.id}`} value={m.id}>{shortModelLabel(m)}</option>
                 ))}
               </Select>
-              {selectedModel && (
-                <p className="mt-1 text-[11px] text-text-muted">Provider type: {selectedModel.providerType}</p>
-              )}
             </div>
-          </div>
 
-          <div className="mb-3 grid gap-3 sm:grid-cols-3">
-            <Field icon={<Thermometer size={13} />} label="Temperature">
+            <div className="w-[88px]">
+              <label className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">
+                <Thermometer size={11} /> Temp
+              </label>
               <Input
                 type="number"
                 step="0.1"
@@ -289,8 +292,12 @@ export default function Playground() {
                 value={temperature}
                 onChange={(e) => setTemperature(Number(e.target.value))}
               />
-            </Field>
-            <Field icon={<Hash size={13} />} label="Max tokens">
+            </div>
+
+            <div className="w-[96px]">
+              <label className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">
+                <Hash size={11} /> Max tok
+              </label>
               <Input
                 type="number"
                 min={1}
@@ -298,8 +305,12 @@ export default function Playground() {
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(Number(e.target.value))}
               />
-            </Field>
-            <Field icon={<Brain size={13} />} label="Reasoning">
+            </div>
+
+            <div className="min-w-[150px] flex-1">
+              <label className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">
+                <Brain size={11} /> Reasoning
+              </label>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -322,40 +333,34 @@ export default function Playground() {
                   <option value="high">high</option>
                 </Select>
               </div>
-            </Field>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setStreaming((v) => !v)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-all duration-200 ${streaming ? "border-accent bg-accent/90" : "border-border bg-bg-raised"}`}
+                aria-label="Toggle streaming"
+                aria-pressed={streaming}
+              >
+                <span className={`absolute left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${streaming ? "translate-x-5" : "translate-x-0"}`} />
+              </button>
+              <span className="text-[11px] text-text-muted">SSE</span>
+            </div>
           </div>
 
-          <div className="mb-2 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setStreaming((v) => !v)}
-              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-all duration-200 ${streaming ? "border-accent bg-accent/90" : "border-border bg-bg-raised"}`}
-              aria-label="Toggle streaming"
-              aria-pressed={streaming}
-            >
-              <span className={`absolute left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${streaming ? "translate-x-5" : "translate-x-0"}`} />
-            </button>
-            <span className="text-xs text-text-muted">Stream responses (SSE)</span>
-          </div>
-
-          <label className="mt-3 mb-1 block text-[11px] uppercase tracking-[0.18em] text-text-muted">System prompt</label>
-          <textarea
-            value={system}
-            onChange={(e) => setSystem(e.target.value)}
-            rows={2}
-            className="mb-3 w-full rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-          />
-
-          <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-border bg-bg-base/60 p-3 min-h-[260px]">
+          {/* Only scrollable region on the page. */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto rounded-2xl border border-border bg-bg-base/60 p-3">
             {turns.map((turn) => (
               <TurnBubble key={turn.id} turn={turn} />
             ))}
             {pending && turns[turns.length - 1]?.content === "" && (
-              <p className="mt-2 text-xs text-text-muted">Thinking…</p>
+              <p className="mt-1 text-xs text-text-muted">Thinking…</p>
             )}
           </div>
 
-          <div className="mt-3 flex items-end gap-2">
+          {/* Composer pinned to the bottom */}
+          <div className="flex shrink-0 items-end gap-2">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -369,71 +374,66 @@ export default function Playground() {
               placeholder="Type a prompt… (Ctrl/⌘+Enter to send)"
               className="flex-1 rounded-xl border border-border bg-bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
             />
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-1.5">
               {pending ? (
-                <Button variant="danger" onClick={stop}><Square size={14} /> Stop</Button>
+                <Button variant="danger" size="sm" onClick={stop}><Square size={13} /> Stop</Button>
               ) : (
-                <Button onClick={() => void send()} disabled={!modelId || !input.trim()}><Play size={14} /> Send</Button>
+                <Button size="sm" onClick={() => void send()} disabled={!modelId || !input.trim()}><Play size={13} /> Send</Button>
               )}
-              <Button variant="ghost" onClick={clear}><Trash2 size={14} /> Clear</Button>
+              <Button variant="ghost" size="sm" onClick={clear}><Trash2 size={13} /> Clear</Button>
             </div>
           </div>
 
-          {error && <p className="mt-3 rounded-xl border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</p>}
+          {error && <p className="shrink-0 rounded-xl border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</p>}
         </Card>
 
-        <Card>
-          <div className="mb-3 flex items-center gap-2"><Sparkles size={15} className="text-accent" /><h2 className="font-semibold">Run details</h2></div>
-          <dl className="grid grid-cols-2 gap-3 text-sm">
-            <Stat label="Model" value={selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : "—"} />
+        {/* ── RIGHT: details panel ──────────────────────────────────── */}
+        <Card className="flex min-h-0 flex-col gap-2 overflow-y-auto p-3">
+          <div className="flex items-center gap-2"><Sparkles size={13} className="text-accent" /><h2 className="text-sm font-semibold">Run details</h2></div>
+          <dl className="grid grid-cols-2 gap-1.5 text-xs">
+            <Stat label="Model" value={selectedModel ? shortModelLabel(selectedModel) : "—"} />
             <Stat label="Latency" value={latencyMs !== null ? `${latencyMs} ms` : "—"} />
-            <Stat label="Prompt tokens" value={usage?.prompt_tokens ?? "—"} />
-            <Stat label="Completion tokens" value={usage?.completion_tokens ?? "—"} />
-            <Stat label="Total tokens" value={usage?.total_tokens ?? "—"} />
-            <Stat label="Reasoning" value={reasoningEnabled ? `enabled (${reasoningEffort})` : "off"} />
+            <Stat label="Prompt tok" value={usage?.prompt_tokens ?? "—"} />
+            <Stat label="Completion tok" value={usage?.completion_tokens ?? "—"} />
+            <Stat label="Total tok" value={usage?.total_tokens ?? "—"} />
+            <Stat label="Reasoning" value={reasoningEnabled ? `on (${reasoningEffort})` : "off"} />
           </dl>
-          <div className="mt-4">
-            <button
-              type="button"
-              onClick={() => setShowRaw((v) => !v)}
-              className="flex w-full items-center justify-between rounded-xl border border-border bg-bg-base/60 px-3 py-2 text-xs text-text-muted hover:text-text-primary"
-              aria-expanded={showRaw}
-            >
-              <span>Raw response / SSE chunks</span>
-              {showRaw ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-            {showRaw && (
-              <pre className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-border bg-bg-base/80 p-3 font-mono text-[11px] leading-5 text-text-muted">
-                {rawTrace || "Waiting for the first response…"}
-              </pre>
-            )}
-          </div>
-          <p className="mt-4 text-[11px] leading-5 text-text-muted">
-            The Playground calls <code>/v1/chat/completions</code> with the locally stored gateway key. Reasoning effort is sent as a universal
-            <code> reasoning.effort</code> block and is translated per-provider (OpenAI/Codex effort, Anthropic thinking budget).
-          </p>
+
+          <button
+            type="button"
+            onClick={() => setShowRaw((v) => !v)}
+            className="mt-1 flex w-full items-center justify-between rounded-xl border border-border bg-bg-base/60 px-2 py-1.5 text-[11px] text-text-muted hover:text-text-primary"
+            aria-expanded={showRaw}
+          >
+            <span>Raw response / SSE</span>
+            {showRaw ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+          </button>
+          {showRaw && (
+            <pre className="max-h-40 overflow-y-auto rounded-xl border border-border bg-bg-base/80 p-2 font-mono text-[10px] leading-5 text-text-muted">
+              {rawTrace || "Waiting for the first response…"}
+            </pre>
+          )}
+
+          <details className="mt-1 rounded-xl border border-border bg-bg-base/40 px-2 py-1.5 text-[11px] text-text-muted">
+            <summary className="cursor-pointer select-none">System prompt</summary>
+            <textarea
+              value={system}
+              onChange={(e) => setSystem(e.target.value)}
+              rows={3}
+              className="mt-2 w-full rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-text-primary outline-none focus:border-accent"
+            />
+          </details>
         </Card>
       </div>
     </div>
   );
 }
 
-function Field({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
-  return (
-    <div>
-      <label className="mb-1 flex items-center gap-1 text-[11px] uppercase tracking-[0.18em] text-text-muted">
-        {icon} {label}
-      </label>
-      {children}
-    </div>
-  );
-}
-
 function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="rounded-xl border border-border bg-bg-base/60 px-3 py-2">
-      <dt className="text-[10px] uppercase tracking-[0.18em] text-text-muted">{label}</dt>
-      <dd className="mt-1 text-sm font-medium">{value}</dd>
+    <div className="rounded-lg border border-border bg-bg-base/60 px-2 py-1.5">
+      <dt className="text-[9px] uppercase tracking-[0.18em] text-text-muted">{label}</dt>
+      <dd className="mt-0.5 truncate font-mono text-[11px]">{value}</dd>
     </div>
   );
 }
@@ -443,9 +443,9 @@ function TurnBubble({ turn }: { turn: ChatTurn }) {
   const isUser = turn.role === "user";
   const isSystem = turn.role === "system";
   return (
-    <div className={`mb-2 flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`mb-1.5 flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm leading-6 shadow-sm ${
+        className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-1.5 text-sm leading-6 shadow-sm ${
           isUser
             ? "bg-accent/15 text-text-primary"
             : isSystem
@@ -453,26 +453,23 @@ function TurnBubble({ turn }: { turn: ChatTurn }) {
               : "bg-bg-surface text-text-primary border border-border/80"
         }`}
       >
-        <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">{turn.role}</div>
+        <div className="mb-0.5 text-[9px] uppercase tracking-[0.18em] text-text-muted">{turn.role}</div>
         <div>{turn.content || (turn.role === "assistant" ? "" : "(empty)")}</div>
         {turn.reasoning && (
-          <div className="mt-2 rounded-xl border border-border bg-bg-base/40 p-2 text-[11px] text-text-muted">
+          <div className="mt-1.5 rounded-lg border border-border bg-bg-base/40 p-1.5 text-[11px] text-text-muted">
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
               className="flex w-full items-center justify-between text-left"
               aria-expanded={open}
             >
-              <span className="flex items-center gap-1"><Brain size={11} /> reasoning</span>
-              {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              <span className="flex items-center gap-1"><Brain size={10} /> reasoning</span>
+              {open ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
             </button>
-            {open && <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] leading-5">{turn.reasoning}</pre>}
+            {open && <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] leading-5">{turn.reasoning}</pre>}
           </div>
         )}
       </div>
     </div>
   );
 }
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-// (ReactNode is intentionally imported above for the Field helper.)

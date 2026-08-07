@@ -229,11 +229,14 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* main */}
-      <main className="flex-1 overflow-y-auto">
+      {/* main — `min-h-0 overflow-hidden` lets individual pages (e.g. Playground)
+          fill the viewport and own their own scroll region without the main
+          scrollbar fighting them. Other pages still opt into overflow-y-auto
+          if they need to grow. */}
+      <main className="flex min-h-0 flex-1 overflow-hidden">
         {/* key=pathname forces the page-enter animation to re-run on every
             route change. CSS animations only fire on mount. */}
-        <div key={useLocation().pathname} className="page-enter mx-auto max-w-7xl p-6">
+        <div key={useLocation().pathname} className="page-enter min-h-0 w-full overflow-y-auto p-6">
           {children}
         </div>
       </main>
