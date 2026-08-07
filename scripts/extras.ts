@@ -143,3 +143,12 @@ export async function ensureExtras(): Promise<InstallReport[]> {
   }
   return reports;
 }
+
+/** Quiet variant for install/update flows that want a clean terminal. */
+export async function ensureExtrasQuiet(): Promise<InstallReport[]> {
+  const reports: InstallReport[] = [];
+  for (const installer of [ensureYtDlp, ensureFfmpeg]) {
+    reports.push(await installer());
+  }
+  return reports;
+}

@@ -3,6 +3,7 @@ import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import { ProvidersRepo } from "../store/repos/providers";
 import { AdminError } from "../shared/errors";
+import { oauthCallbackUrlSchema } from "../shared/schemas";
 import { log } from "../utils/logger";
 
 // The OpenAI OAuth client (same public client as the official Codex CLI)
@@ -32,6 +33,28 @@ const CODEBUDDY_OAUTH: Record<string, { stateUrl: string; tokenUrl: string; refr
     refreshUrl: "https://copilot.tencent.com/v2/plugin/auth/token/refresh",
   },
 };
+
+/** Parse and constrain the callback URL required by the OpenAI Codex client. */
+export function parseOpenAiCallbackUrl(value: string): URL {
+  let callbackUrl: URL;
+  try {
+    callbackUrl = new URL(value);
+  } catch {
+    throw new AdminError(400, "Invalid callback URL");
+  }
+  if (
+    callbackUrl.protocol !== "http:"
+    || callbackUrl.hostname !== "localhost"
+    || callbackUrl.port !== String(CALLBACK_PORT)
+    || callbackUrl.pathname !== "/auth/callback"
+  ) {
+    throw new AdminError(400, `Callback URL must use http://localhost:${CALLBACK_PORT}/auth/callback`);
+  }
+  if (!callbackUrl.searchParams.get("code") && !callbackUrl.searchParams.get("error")) {
+    throw new AdminError(400, "Callback URL is missing an authorization result");
+  }
+  return callbackUrl;
+}
 
 function b64url(buf: Buffer): string {
   return buf.toString("base64url");
@@ -379,6 +402,20 @@ export function oauthRoutes(db: Database) {
       }
       set.redirect = parsed.toString();
       return;
+    })
+    .post("/api/oauth/openai/callback", async ({ body }) => {
+      const parsedBody = oauthCallbackUrlSchema.safeParse(body);
+      if (!parsedBody.success) throw new AdminError(400, "A callback URL is required");
+
+      const callbackUrl = parseOpenAiCallbackUrl(parsedBody.data.url);
+      const state = callbackUrl.searchParams.get("state");
+      if (!state || !pending.has(state)) throw new AdminError(404, "OAuth login was not found or has expired");
+
+      // The OpenAI public Codex client only allows localhost:1455. On a VPS,
+      // localhost belongs to the user's browser, so process the pasted URL in
+      // the server-side pending PKCE flow instead of exposing port 1455.
+      await handleCallback(callbackUrl.searchParams);
+      return { ok: true };
     })
     .get("/api/oauth/openai/status", ({ query }) => {
       const state = (query as Record<string, string | undefined>).state;

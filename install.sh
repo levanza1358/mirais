@@ -13,43 +13,38 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
-echo "[mirais] installing prerequisites"
+echo "Installation in progress... please wait."
 if ! need_cmd git; then
-  sudo apt-get update
-  sudo apt-get install -y git curl unzip
+  sudo apt-get update >/dev/null
+  sudo apt-get install -y git curl unzip >/dev/null
 fi
 
 if ! need_cmd bun; then
-  curl -fsSL https://bun.sh/install | bash
+  curl -fsSL https://bun.sh/install | bash >/dev/null
   export BUN_INSTALL="${HOME}/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
 fi
 
-echo "[mirais] cloning/updating repo"
 if [ -d "$INSTALL_DIR/.git" ]; then
-  git -C "$INSTALL_DIR" pull --ff-only origin main
+  git -C "$INSTALL_DIR" pull --ff-only origin main >/dev/null
 else
   mkdir -p "$(dirname "$INSTALL_DIR")"
   rm -rf "$INSTALL_DIR"
-  git clone "$REPO_URL" "$INSTALL_DIR"
+  git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null
 fi
 
 cd "$INSTALL_DIR"
 
-echo "[mirais] installing dependencies"
-bun install
-(cd dashboard && bun install)
+bun install >/dev/null
+(cd dashboard && bun install >/dev/null)
 
-echo "[mirais] preparing environment"
 if [ ! -f .env ]; then
   cp .env.example .env
 fi
 mkdir -p data/backups
 
-echo "[mirais] building dashboard"
-bun run build
+bun run build >/dev/null
 
-echo "[mirais] installing CLI shortcut"
 mkdir -p "$HOME/.config/mirais"
 cat > "$HOME/.config/mirais/install.json" <<JSON
 {"root":"$INSTALL_DIR"}
@@ -57,13 +52,6 @@ JSON
 sudo ln -sf "$INSTALL_DIR/mirais" /usr/local/bin/mirais
 sudo chmod +x "$INSTALL_DIR/mirais"
 
-echo "[mirais] installing optional runtime helpers (yt-dlp, ffmpeg) for the Music player"
-if bun run scripts/extras.ts 2>&1 | sed 's/^/  /'; then :; else
-  echo "  (optional helpers could not be installed — Music will fall back to public Invidious instances)"
-fi
+if bun run scripts/extras.ts >/dev/null 2>&1; then :; else :; fi
 
-echo
-echo "Mirais installed. Next commands:"
-echo "  mirais start"
-echo "  mirais autostart on"
-echo "  mirais status"
+echo "Installation successful. Check dashboard at http://localhost:1463"

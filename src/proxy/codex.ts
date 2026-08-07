@@ -126,6 +126,25 @@ export interface CodexResetResult {
   message: string;
 }
 
+/**
+ * The usage endpoint does not consistently set `limit_reached` when a rate
+ * limit window is exactly full. Treat either a primary or secondary window at
+ * 100% as exhausted so warmups never advertise an unusable account as healthy.
+ */
+export function isCodexQuotaExhausted(usage: CodexUsageSnapshot): boolean {
+  return usage.limit_reached || [usage.primary, usage.secondary].some((window) =>
+    window !== null && window.used_percent >= 100,
+  );
+}
+
+/** Human-readable quota state for warmup logs and the account status tooltip. */
+export function codexQuotaDetail(usage: CodexUsageSnapshot): string {
+  if (usage.limit_reached) return "Codex quota exhausted";
+  if ((usage.secondary?.used_percent ?? 0) >= 100) return "Codex quota exhausted (short window at 100%)";
+  if ((usage.primary?.used_percent ?? 0) >= 100) return "Codex quota exhausted (primary window at 100%)";
+  return "ChatGPT login active";
+}
+
 function parseUsageWindow(v: unknown): CodexUsageWindow | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;

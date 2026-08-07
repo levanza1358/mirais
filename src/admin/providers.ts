@@ -6,7 +6,7 @@ import { SettingsRepo } from "../store/repos/settings";
 import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
-import { codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isOAuthAccount, resetCodexBankedUsage } from "../proxy/codex";
+import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage } from "../proxy/codex";
 import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
@@ -255,8 +255,16 @@ export function providerRoutes(db: Database) {
           detail: res.ok ? "CodeBuddy chat warmup ok" : `HTTP ${res.status}`,
         };
       } else if (isOAuthAccount(acc)) {
-        await ensureFreshToken(repo, acc);
-        result = { ok: true, status: 200, latency_ms: Date.now() - started, account: acc.label, detail: "ChatGPT login active" };
+        const accessToken = await ensureFreshToken(repo, acc);
+        const usage = await fetchCodexUsage(acc, accessToken);
+        const quotaExhausted = isCodexQuotaExhausted(usage);
+        result = {
+          ok: !quotaExhausted,
+          status: quotaExhausted ? 429 : 200,
+          latency_ms: Date.now() - started,
+          account: acc.label,
+          detail: codexQuotaDetail(usage),
+        };
       } else {
         const base = baseUrlFor(provider);
         const headers: Record<string, string> = provider.type === "anthropic"
@@ -283,7 +291,7 @@ export function providerRoutes(db: Database) {
 
     repo.updateAccount(acc.id, {
       lastWarmupAt: new Date().toISOString(),
-      lastWarmupStatus: result.ok ? "healthy" : "failing",
+      lastWarmupStatus: result.ok ? "healthy" : (result.status === 429 || isRateLimitDetail(result.detail) ? "rate_limited" : "failing"),
       lastWarmupLatencyMs: result.latency_ms,
       lastWarmupDetail: result.detail ?? null,
     });

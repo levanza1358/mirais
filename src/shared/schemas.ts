@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+/** Browser URL returned by OpenAI's fixed Codex localhost OAuth callback. */
+export const oauthCallbackUrlSchema = z.object({
+  url: z.string().min(1).max(16_384),
+});
+
 // ── OpenAI Chat Completions ──
 
 const contentPartSchema = z.object({

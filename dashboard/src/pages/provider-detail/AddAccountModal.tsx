@@ -15,6 +15,7 @@ export function AddAccountModal({ provider: p, accountCount, onClose }: { provid
   const invalidate = () => qc.invalidateQueries({ queryKey: ["providers"] });
   const [oauthState, setOauthState] = useState<string | null>(null);
   const [oauthUrl, setOauthUrl] = useState<string | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
 
   const startOauth = useMutation({
     mutationFn: () => providers.oauthStart(p.id),
@@ -60,6 +61,15 @@ export function AddAccountModal({ provider: p, accountCount, onClose }: { provid
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oauthState]);
+
+  const submitCallback = useMutation({
+    mutationFn: () => providers.oauthSubmitCallback(callbackUrl.trim()),
+    onSuccess: () => {
+      setCallbackUrl("");
+      toast("Callback received — finishing the connection…");
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
 
   const addSingle = useMutation({
     mutationFn: () => providers.addAccount(p.id, { label, apiKey }),
@@ -116,6 +126,22 @@ export function AddAccountModal({ provider: p, accountCount, onClose }: { provid
           <p className="text-sm font-medium">{oauthState ? "Waiting for browser login…" : "Opening login page…"}</p>
           <p className="max-w-xs text-xs text-text-muted">Complete the sign-in in the browser tab that just opened. This dialog closes automatically when the account is connected.</p>
           {oauthUrl && <a href={oauthUrl} target="_blank" rel="noreferrer" className="text-xs text-accent underline underline-offset-2">Open login page</a>}
+          {p.type === "openai" && (
+            <div className="w-full space-y-2 text-left">
+              <label className="block text-xs font-medium text-text-primary">Paste callback URL (VPS / remote dashboard)</label>
+              <p className="text-[11px] leading-relaxed text-text-muted">After login, your browser opens or fails at <code>localhost:1455</code>. Copy the complete URL from its address bar and paste it here.</p>
+              <Input
+                value={callbackUrl}
+                onChange={(e) => setCallbackUrl(e.target.value)}
+                placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+                aria-label="OpenAI OAuth callback URL"
+                disabled={submitCallback.isPending}
+              />
+              <Button className="w-full" size="sm" onClick={() => submitCallback.mutate()} loading={submitCallback.isPending} disabled={!callbackUrl.trim()}>
+                Connect callback
+              </Button>
+            </div>
+          )}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => { setOauthState(null); oauthStarted.current = false; setMode("pick"); }}>Back</Button>
             <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>

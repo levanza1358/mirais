@@ -84,6 +84,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | GET | `/api/auth/check` | Compatibility endpoint → `{ authenticated: true, setup_required: false, passwordless: true }` |
 | POST | `/api/auth/login` | Compatibility no-op → `{ ok: true, passwordless: true }` |
 | POST | `/api/auth/logout` | Compatibility no-op → `{ ok: true }` |
+| POST | `/api/oauth/openai/callback` | `{ "url": "http://localhost:1455/auth/callback?code=…&state=…" }` → accepts the OpenAI Codex callback URL pasted from a remote/VPS browser and completes the pending PKCE login |
 
 ### Overview / analytics
 

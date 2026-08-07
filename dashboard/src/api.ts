@@ -204,6 +204,8 @@ export const providers = {
   oauthRedirectUrl: (url: string) => `/api/oauth/openai/redirect?url=${encodeURIComponent(url)}`,
   oauthStatus: (state: string) =>
     req<{ done: boolean; ok?: boolean; message?: string }>(`/api/oauth/openai/status?state=${encodeURIComponent(state)}`),
+  oauthSubmitCallback: (url: string) =>
+    req<{ ok: boolean }>("/api/oauth/openai/callback", { method: "POST", body: JSON.stringify({ url }) }),
   updateAccount: (accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null }>) =>
     req<ProviderAccount>(`/api/providers/accounts/${accId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeAccount: (accId: string) => req<{ ok: boolean }>(`/api/providers/accounts/${accId}`, { method: "DELETE" }),

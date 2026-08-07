@@ -15,7 +15,7 @@ import { config } from "../src/config";
 import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { readInstallRoot } from "./install-path";
-import { ensureExtras, ensureYtDlp } from "./extras";
+import { ensureExtras, ensureExtrasQuiet, ensureYtDlp } from "./extras";
 
 const installRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
 
@@ -145,17 +145,37 @@ function shell(command: string, args: string[], cwd = repoRoot): Promise<void> {
   });
 }
 
+/** Run a maintenance command without streaming its implementation details. */
+function quietShell(command: string, args: string[], cwd = repoRoot): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, stdio: "pipe", shell: process.platform === "win32" });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${command} failed: ${output.trim().slice(-1_000) || `exit code ${code ?? 1}`}`));
+    });
+  });
+}
+
 async function updateApp(): Promise<void> {
-  console.log(`Updating Mirais from ${installRoot}`);
-  await shell("git", ["pull", "--ff-only", "origin", "main"], installRoot);
-  await shell("bun", ["install"], installRoot);
-  await shell("bun", ["install"], path.join(installRoot, "dashboard"));
-  await shell("bun", ["run", "build"], installRoot);
-  await restart();
-  console.log("mirais updated");
-  // Auto-install optional runtime helpers (yt-dlp, ffmpeg) so the Music
-  // player works out-of-the-box. Failures are logged, never fatal.
-  await ensureExtras();
+  console.log("Update in progress... please wait.");
+  try {
+    await quietShell("git", ["pull", "--ff-only", "origin", "main"], installRoot);
+    await quietShell("bun", ["install"], installRoot);
+    await quietShell("bun", ["install"], path.join(installRoot, "dashboard"));
+    await quietShell("bun", ["run", "build"], installRoot);
+    await restart();
+    // Optional helpers are best-effort and must not make an application update
+    // look failed. Their detailed output is intentionally suppressed here.
+    try { await ensureExtrasQuiet(); } catch { /* optional */ }
+    console.log(`Update successful. Check dashboard at ${displayUrl}`);
+  } catch (err) {
+    console.error(`Update failed. ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
 }
 
 async function fix(): Promise<void> {

@@ -18,7 +18,7 @@ import { LogsRepo } from "./store/repos/logs";
 import { SettingsRepo } from "./store/repos/settings";
 import { ProvidersRepo } from "./store/repos/providers";
 import { baseUrlFor } from "./proxy/router";
-import { ensureFreshToken, fetchCodexUsage, isOAuthAccount } from "./proxy/codex";
+import { codexQuotaDetail, ensureFreshToken, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount } from "./proxy/codex";
 import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/providers";
 import { log, setLogLevel } from "./utils/logger";
 function classifyWarmupStatus(ok: boolean, status: number, detail?: string | null): "healthy" | "rate_limited" | "failing" {
@@ -90,10 +90,10 @@ async function runAutoWarmups() {
           } else if (isOAuthAccount(acc)) {
             const accessToken = await ensureFreshToken(providersRepo, acc as never);
             const usage = await fetchCodexUsage(acc as never, accessToken);
-            if (usage.limit_reached) {
+            if (isCodexQuotaExhausted(usage)) {
               ok = false;
               status = 429;
-              detail = "Codex quota exhausted";
+              detail = codexQuotaDetail(usage);
             } else {
               ok = true;
               status = 200;

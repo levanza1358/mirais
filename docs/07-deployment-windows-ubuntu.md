@@ -72,7 +72,7 @@ mirais restart
 mirais stop
 mirais autostart on
 mirais autostart off
-mirais update
+mirais update     # compact output: "Update in progress... please wait." then success/failure summary
 mirais fix          # force update/install/build/start from remembered install root
 mirais doctor       # diagnose and repair safe installation issues
 mirais doctor --fix # run the full repair flow
