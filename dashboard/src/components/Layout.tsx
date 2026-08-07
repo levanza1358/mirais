@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   ChevronDown,
   FlaskConical,
+  Music,
 } from "lucide-react";
 import { auth, health } from "../api";
 import { APP_BUILD } from "../main";
@@ -52,6 +53,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/logs", label: "Logs", icon: ScrollText },
       { to: "/usage", label: "Usage", icon: BarChart3 },
+      { to: "/music", label: "Music", icon: Music },
     ],
   },
   {

@@ -458,3 +458,47 @@ export const proxies = {
   saveConfig: (input: { enabled: boolean; interval_minutes: number }) =>
     req<{ enabled: boolean; interval_minutes: number }>("/api/proxies/config", { method: "POST", body: JSON.stringify(input) }),
 };
+
+// -- music --
+export interface MusicTrack {
+  id: string;
+  playlist_id: string;
+  source: string;
+  source_id: string;
+  title: string;
+  channel: string | null;
+  duration_sec: number | null;
+  thumbnail_url: string | null;
+  position: number;
+  created_at: string;
+}
+
+export interface MusicPlaylist {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  tracks?: MusicTrack[];
+}
+
+export interface MusicSearchResult {
+  id: string;
+  title: string;
+  channel: string | null;
+  duration_sec: number | null;
+  thumbnail_url: string | null;
+  source: "youtube";
+}
+
+export const music = {
+  search: (q: string, limit = 12) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  listPlaylists: () => req<{ playlists: MusicPlaylist[] }>("/api/music/playlists"),
+  createPlaylist: (name: string) => req<MusicPlaylist>("/api/music/playlists", { method: "POST", body: JSON.stringify({ name }) }),
+  getPlaylist: (id: string) => req<MusicPlaylist>(`/api/music/playlists/${id}`),
+  renamePlaylist: (id: string, name: string) => req<MusicPlaylist>(`/api/music/playlists/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deletePlaylist: (id: string) => req<{ ok: boolean }>(`/api/music/playlists/${id}`, { method: "DELETE" }),
+  addTrack: (playlistId: string, input: { url?: string; videoId?: string; title: string; channel?: string; durationSec?: number; thumbnailUrl?: string; source?: string }) =>
+    req<MusicTrack>(`/api/music/playlists/${playlistId}/tracks`, { method: "POST", body: JSON.stringify(input) }),
+  removeTrack: (trackId: string) => req<{ ok: boolean }>(`/api/music/tracks/${trackId}`, { method: "DELETE" }),
+  streamUrl: (videoId: string) => `/api/music/stream?id=${encodeURIComponent(videoId)}`,
+};
