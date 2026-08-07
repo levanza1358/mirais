@@ -103,7 +103,9 @@ export function Layout({ children }: { children: ReactNode }) {
           {!collapsed && (
             <div className="min-w-0 flex-1 anim-fade-in">
               <p className="truncate text-sm font-semibold tracking-tight">Mirais</p>
-              <p className="text-[11px] text-text-muted">v{APP_BUILD.version}</p>
+              <p className="text-[11px] text-text-muted" title={`Build ${APP_BUILD.time}`}>
+                v{APP_BUILD.version} · {APP_BUILD.stamp}
+              </p>
             </div>
           )}
           {!collapsed && (
