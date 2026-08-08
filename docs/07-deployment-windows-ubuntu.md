@@ -51,8 +51,20 @@ Edit `.env`:
 ```bash
 PORT=1463
 HOST=127.0.0.1           # recommended behind a reverse proxy
-DATA_DIR=./data
+DATA_DIR=/opt/mirais/data   # ⚠️ use an absolute path on VPS, not "./data"
 ```
+
+> **`DATA_DIR` matters.** If you leave it as `./data`, the SQLite file lands
+> wherever the process was started from. On `mirais start` (the bundled
+> CLI) this is the install root, so it Just Works. But if you run via
+> `systemd`, `pm2`, `docker`, or any launcher that doesn't `cd` into the
+> install root first, `./data` may resolve to `/data`, `/`, or another
+> unexpected path — and the dashboard will show an empty database while
+> the real one lives somewhere else. Always set an absolute path on VPS
+> deployments and confirm with `curl http://127.0.0.1:1463/api/health`
+> (the response now reports the resolved `data_dir` and `db_path`).
+> Mirais also logs a `WARNING` at startup if `DATA_DIR` resolves to
+> `/data` so the symptom doesn't get blamed on the dashboard.
 
 ---
 

@@ -66,6 +66,14 @@ const GROUPS: NavGroup[] = [
   },
 ];
 
+const MOBILE_NAV: Array<{ to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }> = [
+  { to: "/dashboard", label: "Overview", icon: LayoutDashboard, end: true },
+  { to: "/dashboard/music", label: "Music", icon: Music },
+  { to: "/dashboard/providers", label: "Providers", icon: Boxes },
+  { to: "/dashboard/logs", label: "Logs", icon: ScrollText },
+  { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
+];
+
 const DEFAULT_OPEN_GROUPS = new Set<string>(["dashboard", "infrastructure", "operations", "system"]);
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -122,14 +130,16 @@ export function Layout({ children }: { children: ReactNode }) {
           className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] md:hidden"
         />
       )}
-      {/* Mobile menu toggle — floating button at top-left of the content area */}
+      {/* Mobile menu trigger — compact pill on top-left that opens the full sidebar drawer */}
       <button
         type="button"
-        onClick={() => setMobileOpen((v) => !v)}
-        className="fixed left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-xl border border-border/80 bg-bg-surface/90 text-text-primary shadow-md backdrop-blur md:hidden"
-        aria-label={mobileOpen ? "Close menu" : "Open menu"}
+        onClick={() => setMobileOpen(true)}
+        className="fixed left-3 top-3 z-30 flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-bg-surface/90 px-2.5 text-xs text-text-muted shadow-md backdrop-blur hover:text-text-primary md:hidden"
+        aria-label="Open full menu"
+        title="Open full menu"
       >
-        {mobileOpen ? <X size={16} /> : <Menu size={16} />}
+        <Menu size={15} />
+        <span className="hidden xs:inline">Menu</span>
       </button>
 
       {/* Desktop search trigger — fires the same shortcut as Ctrl+K */}
@@ -145,12 +155,10 @@ export function Layout({ children }: { children: ReactNode }) {
         <kbd className="ml-2 rounded-md border border-border/70 bg-bg-base/60 px-1.5 py-0.5 text-[10px]">⌘K</kbd>
       </button>
 
-      {/* Spacer reserves space for the mobile menu button so it doesn't overlap content */}
-
       {/* sidebar */}
       <aside
         aria-hidden={sidebarHidden}
-        className={`group/sidebar relative m-2 flex shrink-0 flex-col rounded-2xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width,transform] duration-300 ease-out md:translate-x-0 md:relative ${effectiveCollapsed ? "md:w-[68px]" : "md:w-[260px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50 w-[240px]" : ""} ${isMobile && mobileOpen ? "translate-x-0" : isMobile ? "-translate-x-[120%]" : ""} md:translate-x-0 ${sidebarHidden ? "md:flex" : ""}`}
+        className={`group/sidebar m-2 flex shrink-0 flex-col rounded-2xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width,transform] duration-300 ease-out md:relative md:translate-x-0 ${effectiveCollapsed ? "md:w-[68px]" : "md:w-[260px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50 w-[240px]" : ""} ${isMobile && mobileOpen ? "translate-x-0" : isMobile ? "-translate-x-[120%]" : ""} md:translate-x-0 ${sidebarHidden ? "md:flex" : ""}`}
       >
         <div className={`flex items-center gap-2.5 border-b border-border/70 px-3 py-3 ${effectiveCollapsed ? "justify-center" : ""}`}>
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent shadow-inner shadow-accent/15">
@@ -282,51 +290,47 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* main — `min-h-0 overflow-hidden` lets individual pages (e.g. Playground)
+        {/* main — `min-h-0 overflow-hidden` lets individual pages (e.g. Playground)
           fill the viewport and own their own scroll region without the main
-          scrollbar fighting them. Other pages still opt into overflow-y-auto
-          if they need to grow. `pt-12 md:pt-0` reserves space for the mobile
-          menu button so it doesn't overlap page content on phones. */}
-      <main className="flex min-h-screen w-full flex-1 overflow-hidden pt-12 md:h-screen md:min-h-0 md:pt-0">
+          scrollbar fighting them. On mobile, the top padding keeps content
+          clear of the fixed menu trigger and the bottom padding clears bottom
+          navigation. */}
+      <main className="flex min-h-screen min-w-0 w-full flex-1 overflow-hidden pt-14 pb-20 md:h-screen md:min-h-0 md:pt-0 md:pb-0">
         {/* key=pathname forces the page-enter animation to re-run on every
             route change. CSS animations only fire on mount. */}
-        <div key={useLocation().pathname} className="page-enter min-h-0 w-full overflow-y-auto p-3 md:p-6">
-          <SecurityBanner />
+        <div key={useLocation().pathname} className="page-enter min-h-0 w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden p-3 md:p-6">
           {children}
         </div>
       </main>
-    </div>
-  );
-}
 
-const PASSWORDLESS_BANNER_KEY = "mirais.ui.passwordlessBanner.dismissed";
-
-function SecurityBanner() {
-  const [dismissed, setDismissed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return window.localStorage.getItem(PASSWORDLESS_BANNER_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-  if (dismissed) return null;
-  const dismiss = () => {
-    try {
-      window.localStorage.setItem(PASSWORDLESS_BANNER_KEY, "1");
-    } catch {
-      /* ignore */
-    }
-    setDismissed(true);
-  };
-  return (
-    <div className="mb-4 flex items-start gap-3 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-xs text-warning">
-      <span className="mt-0.5 text-base">⚠</span>
-      <div className="flex-1">
-        <p className="font-medium">Dashboard has no login screen.</p>
-        <p className="mt-0.5 text-text-muted">Anyone on the network can open it. Restrict access with a reverse proxy, firewall, VPN, or private network.</p>
-      </div>
-      <button type="button" onClick={dismiss} className="rounded-lg px-2 py-1 text-text-muted hover:bg-warning/15 hover:text-warning" aria-label="Dismiss security banner">Dismiss</button>
+      {/* Mobile bottom navigation */}
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-2 bottom-2 z-40 flex h-14 items-stretch justify-around rounded-2xl border border-border/80 bg-bg-surface/95 px-2 shadow-[0_18px_44px_rgba(0,0,0,0.42)] backdrop-blur-xl md:hidden"
+      >
+        {MOBILE_NAV.map(({ to, label, icon: Icon, end }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) =>
+              `flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl px-1.5 py-1.5 text-[10px] transition-colors ${
+                isActive ? "text-accent" : "text-text-muted hover:text-text-primary"
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <Icon
+                  size={18}
+                  strokeWidth={isActive ? 2 : 1.75}
+                />
+                <span className="truncate">{label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
 }

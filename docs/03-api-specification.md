@@ -95,6 +95,13 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | GET | `/api/stats/by-model?range=…` | `[{ model, requests, tokens, cost, errors }]` |
 | GET | `/api/stats/by-provider?range=…` | `[{ provider, requests, tokens, cost, errors, avgLatencyMs }]` |
 
+### Music
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/music/search?q=&limit=&page=` | YouTube search results. Defaults to 30 results per page; `limit` is capped at 30 and pages are available through page 20. |
+| GET | `/api/music/trending?limit=&page=` | Paged music discovery feed. `limit` is capped at 50 and pages are available through page 20. |
+
 ### Providers & accounts
 
 `Provider` = an upstream service. Built-in types: `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`, `groq`, `xai`, `glm`, `blackbox`, `antigravity`, `custom` (custom = any OpenAI-compatible base URL).

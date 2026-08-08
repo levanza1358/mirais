@@ -47,9 +47,11 @@ function resolveExecutable(name: string): string | null {
   candidates.push(...extras.filter(Boolean));
   for (const c of candidates) {
     try {
-      // sync fs check via spawnSync with --version (handles shebang)
+      // sync fs check via spawnSync with --version (handles shebang).
+      // `windowsHide` keeps the helper from flashing a console window when
+      // the candidate turns out to be a .cmd / .bat wrapper.
       const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-      const res = spawnSync(c, ["--version"], { stdio: "ignore" });
+      const res = spawnSync(c, ["--version"], { stdio: "ignore", windowsHide: true });
       if (res.status === 0) return c;
     } catch {
       /* ignore */
@@ -101,15 +103,21 @@ const TRENDING_BLOCKLIST = [
 
 const MIN_TRENDING_DURATION_SEC = 110;
 const MAX_TRENDING_DURATION_SEC = 510;
+// Trending cache: stored per (limit × page) so different page sizes don't
+// share stale state. The dashboard's Refresh button sends `force=1` to
+// invalidate the cached fetch and re-run yt-dlp / Invidious discovery.
 const TRENDING_CACHE_TTL_MS = 10 * 60_000;
-
-let trendingCache:
-  | {
-      expiresAt: number;
-      source: "yt-dlp" | "invidious";
-      results: MusicSearchResult[];
-    }
-  | null = null;
+const trendingCache = new Map<string, {
+  expiresAt: number;
+  source: "yt-dlp" | "invidious";
+  results: MusicSearchResult[];
+}>();
+function trendingCacheKey(limit: number, page: number): string {
+  return `${Math.max(1, Math.min(limit, 50))}:${Math.max(1, Math.min(page, 20))}`;
+}
+function invalidateTrendingCache(): void {
+  trendingCache.clear();
+}
 
 /** Default roster of public Invidious instances — overridable via env if needed. */
 const INVIDIOUS_INSTANCES: string[] = [
@@ -141,7 +149,11 @@ function runYtDlp(args: string[]): Promise<{ ok: boolean; stdout: string; stderr
       });
       return;
     }
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    // windowsHide stops Windows from spawning a console window each time
+    // yt-dlp is invoked (this was the source of the black console popping
+    // up over the dashboard every time the user opened Music). On Linux
+    // and macOS the option is ignored.
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -219,8 +231,8 @@ function dedupeTracks(tracks: MusicSearchResult[]): MusicSearchResult[] {
 export async function searchMusic(query: string, limit = 20, page = 1): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
   const trimmed = query.trim();
   if (!trimmed) return { source: "yt-dlp", results: [] };
-  const safeLimit = Math.max(1, Math.min(limit, 25));
-  const safePage = Math.max(1, Math.min(page, 10));
+  const safeLimit = Math.max(1, Math.min(limit, 30));
+  const safePage = Math.max(1, Math.min(page, 20));
   const fetchCount = safeLimit * safePage;
   const offset = (safePage - 1) * safeLimit;
 
@@ -284,9 +296,24 @@ export async function searchMusic(query: string, limit = 20, page = 1): Promise<
   return { source: "yt-dlp", results: [] };
 }
 
+// Short-lived cache of resolved stream URLs. yt-dlp's "--get-url" call is
+// the slowest step of every stream request (~1-3s per video) — without
+// this, refreshing the dashboard (which re-fetches /api/music/stream for
+// the restored snapshot) hits yt-dlp again on every reload. Cached for
+// the lifetime that the upstream CDN URL is realistically valid. If the
+// stream later returns 403 (expired signature), the dashboard falls back
+// to a fresh resolve via the audio error handler.
+const STREAM_URL_CACHE_TTL_MS = 5 * 60_000;
+const streamUrlCache = new Map<string, { url: string; contentType?: string; via: "yt-dlp" | "invidious"; expiresAt: number }>();
+
 /** Resolve an audio stream URL for a YouTube video id. Returns a redirect URL. */
 export async function resolveAudioStreamUrl(videoId: string): Promise<{ url: string; contentType?: string; via: "yt-dlp" | "invidious" } | null> {
   if (!/^[A-Za-z0-9_-]{6,15}$/.test(videoId)) return null;
+
+  const cached = streamUrlCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { url: cached.url, contentType: cached.contentType, via: cached.via };
+  }
 
   // Try yt-dlp first.
   const dlp = await runYtDlp([
@@ -297,7 +324,10 @@ export async function resolveAudioStreamUrl(videoId: string): Promise<{ url: str
   ]);
   if (dlp.ok) {
     const url = dlp.stdout.trim().split("\n")[0] ?? "";
-    if (url.startsWith("http")) return { url, via: "yt-dlp" };
+    if (url.startsWith("http")) {
+      streamUrlCache.set(videoId, { url, via: "yt-dlp", expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS });
+      return { url, via: "yt-dlp" };
+    }
   } else {
     log.debug("yt-dlp unavailable for stream resolution", { stderr: dlp.stderr.slice(0, 200) });
   }
@@ -317,7 +347,10 @@ export async function resolveAudioStreamUrl(videoId: string): Promise<{ url: str
       const audio = (data.adaptiveFormats ?? [])
         .filter((f) => f.type?.startsWith("audio/") && f.url)
         .sort((a, b) => (Number(b.type?.includes("audio/mp4")) - Number(a.type?.includes("audio/mp4"))))[0];
-      if (audio?.url) return { url: audio.url, contentType: audio.type, via: "invidious" };
+      if (audio?.url) {
+        streamUrlCache.set(videoId, { url: audio.url, contentType: audio.type, via: "invidious", expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS });
+        return { url: audio.url, contentType: audio.type, via: "invidious" };
+      }
     } catch {
       /* try next instance */
     }
@@ -344,16 +377,24 @@ export function videoIdFromInput(input: string): string | null {
  * playlist (it's a "tab", not a list), so we approximate trending by
  * searching for `ytsearch` and re-sorting by view_count.
  */
-export async function fetchTrending(limit = 20, page = 1): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
+export async function fetchTrending(limit = 20, page = 1, force = false): Promise<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
-  const safePage = Math.max(1, Math.min(page, 10));
+  const safePage = Math.max(1, Math.min(page, 20));
   const offset = (safePage - 1) * safeLimit;
+  const cacheKey = trendingCacheKey(safeLimit, safePage);
 
-  if (trendingCache && trendingCache.expiresAt > Date.now() && trendingCache.results.length >= offset + 1) {
-    return {
-      source: trendingCache.source,
-      results: trendingCache.results.slice(offset, offset + safeLimit),
-    };
+  if (!force) {
+    const cached = trendingCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now() && cached.results.length >= offset + 1) {
+      return {
+        source: cached.source,
+        results: cached.results.slice(offset, offset + safeLimit),
+      };
+    }
+  } else {
+    // Force-refresh: drop every cached page so all dashboards see the
+    // freshly fetched results on the next request.
+    invalidateTrendingCache();
   }
 
   const queries = shuffleInPlace([...TRENDING_QUERY_POOL]).slice(0, 4);
@@ -385,11 +426,11 @@ export async function fetchTrending(limit = 20, page = 1): Promise<{ source: "yt
   }
   const randomized = shuffleInPlace(dedupeTracks(collected));
   if (randomized.length) {
-    trendingCache = {
+    trendingCache.set(trendingCacheKey(safeLimit, safePage), {
       expiresAt: Date.now() + TRENDING_CACHE_TTL_MS,
       source: "yt-dlp",
       results: randomized,
-    };
+    });
     return { source: "yt-dlp", results: randomized.slice(offset, offset + safeLimit) };
   }
 
@@ -423,11 +464,11 @@ export async function fetchTrending(limit = 20, page = 1): Promise<{ source: "yt
         }));
       if (mapped.length) {
         const unique = dedupeTracks(mapped);
-        trendingCache = {
+        trendingCache.set(trendingCacheKey(safeLimit, safePage), {
           expiresAt: Date.now() + TRENDING_CACHE_TTL_MS,
           source: "invidious",
           results: unique,
-        };
+        });
         return { source: "invidious", results: unique.slice(offset, offset + safeLimit) };
       }
     } catch (err) {

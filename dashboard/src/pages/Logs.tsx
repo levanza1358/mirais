@@ -1,15 +1,61 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Clock3, Download, ScrollText, Sparkles, TriangleAlert } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  Download,
+  Flame,
+  ScrollText,
+  TestTube2,
+  TriangleAlert,
+} from "lucide-react";
 import { logs, providers, type RequestLog } from "../api";
-import { Card, Select, Badge, Button, EmptyState, Skeleton, fmtNum, fmtMs, fmtTime, toast } from "../components/ui";
+import { Badge, Button, Card, EmptyState, Select, Skeleton, fmtMs, fmtNum, fmtTime, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { labelForProvider } from "../utils/modelLabels";
 import { downloadCsv, toCsv } from "../utils/csv";
 
+type LogTab = "request" | "warmup" | "test";
+
 const PAGE_SIZE = 50;
 
+const TAB_META: Record<LogTab, { label: string; icon: typeof ScrollText; subtitle: string; emptyHint: string; exportName: string }> = {
+  request: {
+    label: "Requests",
+    icon: ScrollText,
+    subtitle: "All user requests, failover, tokens, and status in one view.",
+    emptyHint: "Requests through the gateway will appear here.",
+    exportName: "mirais-logs",
+  },
+  warmup: {
+    label: "Warmups",
+    icon: Flame,
+    subtitle: "View warmup health without mixing in user requests.",
+    emptyHint: "Warmup activity will appear here.",
+    exportName: "mirais-warmups",
+  },
+  test: {
+    label: "Model tests",
+    icon: TestTube2,
+    subtitle: "Every \"Test\" click from a provider model is logged here.",
+    emptyHint: "Open a provider, click the ⚡ button on any model — the probe result appears here.",
+    exportName: "mirais-tests",
+  },
+};
+
+const TABS: LogTab[] = ["request", "warmup", "test"];
+
+function isLogTab(value: string | null): value is LogTab {
+  return value === "request" || value === "warmup" || value === "test";
+}
+
 export default function Logs() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tab: LogTab = isLogTab(tabParam) ? tabParam : "request";
+
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
   const [provider, setProvider] = useState("");
@@ -18,6 +64,23 @@ export default function Logs() {
   const [toDate, setToDate] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // Reset pagination + filters when switching tabs so each tab opens fresh.
+  useEffect(() => {
+    setPage(1);
+    setStatus("");
+    setProvider("");
+    setModel("");
+    setFromDate("");
+    setToDate("");
+    setExpanded(null);
+  }, [tab]);
+
+  const setTab = (next: LogTab) => {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", next);
+    setSearchParams(params, { replace: true });
+  };
+
   const provs = useQuery({
     queryKey: ["providers"],
     queryFn: providers.list,
@@ -25,14 +88,14 @@ export default function Logs() {
     gcTime: 5 * 60_000,
   });
   const list = useQuery({
-    queryKey: ["logs", page, status, provider, model, fromDate, toDate],
+    queryKey: ["logs", tab, page, status, provider, model, fromDate, toDate],
     queryFn: () => logs.list({
       page,
       limit: PAGE_SIZE,
       status: status || undefined,
       provider: provider || undefined,
       model: model || undefined,
-      kind: "request",
+      kind: tab,
       from: fromDate ? new Date(`${fromDate}T00:00:00`).toISOString() : undefined,
       to: toDate ? new Date(`${toDate}T23:59:59`).toISOString() : undefined,
     }),
@@ -58,6 +121,9 @@ export default function Logs() {
   const errorCount = items.filter((l) => l.status !== "success").length;
   const avgLatency = items.length ? Math.round(items.reduce((sum, l) => sum + (l.latency_ms ?? 0), 0) / items.length) : 0;
 
+  const meta = TAB_META[tab];
+  const Icon = meta.icon;
+
   const exportCsv = () => {
     if (!items.length) {
       toast("No logs to export", "error");
@@ -77,32 +143,66 @@ export default function Logs() {
     }));
     const csv = toCsv(rows);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    downloadCsv(`mirais-logs-${stamp}.csv`, csv);
+    downloadCsv(`${meta.exportName}-${stamp}.csv`, csv);
     toast(`Exported ${rows.length} rows`);
   };
 
   return (
     <div>
-      <PageHeader title="Request logs">
-        <Button variant="outline" size="sm" onClick={exportCsv} disabled={items.length === 0} title="Export current page to CSV">
+      <PageHeader title="Logs">
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={items.length === 0} title="Export current view to CSV">
           <Download size={14} /> Export CSV
         </Button>
       </PageHeader>
 
+      {/* Tabs */}
+      <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-border/70 bg-bg-surface/60 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.18)] backdrop-blur w-fit">
+        {TABS.map((t) => {
+          const m = TAB_META[t];
+          const TIcon = m.icon;
+          const active = t === tab;
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              aria-pressed={active}
+              className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium transition-colors ${
+                active
+                  ? "bg-accent text-white shadow-[0_10px_20px_rgba(124,92,255,0.28)]"
+                  : "text-text-muted hover:bg-bg-raised/60 hover:text-text-primary"
+              }`}
+            >
+              <TIcon size={13} />
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Hero summary per tab */}
       <div className="mb-6 grid gap-4 xl:grid-cols-[1.35fr_0.95fr]">
-        <Card className="overflow-hidden border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.12),rgba(18,22,31,0.92)_42%,rgba(18,22,31,0.96))]">
+        <Card className={`overflow-hidden ${
+          tab === "request" ? "border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.12),rgba(18,22,31,0.92)_42%,rgba(18,22,31,0.96))]" :
+          tab === "warmup" ? "border-warning/20 bg-[linear-gradient(135deg,rgba(251,191,36,0.10),rgba(18,22,31,0.92)_40%,rgba(18,22,31,0.96))]" :
+          "border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.10),rgba(18,22,31,0.92)_40%,rgba(18,22,31,0.96))]"
+        }`}>
           <div className="flex h-full flex-col justify-between gap-6">
             <div>
-              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-accent">
-                <Sparkles size={12} /> Traffic feed
+              <div className={`mb-3 inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.24em] ${
+                tab === "warmup" ? "border border-warning/30 bg-warning/10 text-warning" : "border border-accent/30 bg-accent/10 text-accent"
+              }`}>
+                <Icon size={12} /> {meta.label}
               </div>
-              <h2 className="text-2xl font-semibold tracking-tight">All user requests, failover, tokens, and status in one view.</h2>
+              <h2 className="text-2xl font-semibold tracking-tight">{meta.subtitle}</h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-text-muted">
-                This page focuses on real client requests — useful for checking routing issues, token saver, upstream errors, and model performance.
+                {tab === "request" && "This view focuses on real client requests — useful for checking routing issues, token saver, upstream errors, and model performance."}
+                {tab === "warmup" && "This view is dedicated to warmups — check active accounts, frequently failing models, and latest warmup latency."}
+                {tab === "test" && "Use this view to compare model latency, surface broken upstreams, and see the preview text the probe produced."}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Metric icon={<ScrollText size={16} />} label="Requests" value={fmtNum(total)} />
+              <Metric icon={tab === "warmup" ? <Flame size={16} /> : tab === "test" ? <TestTube2 size={16} /> : <ScrollText size={16} />} label={tab === "warmup" ? "Warmups" : tab === "test" ? "Tests" : "Requests"} value={fmtNum(total)} />
               <Metric icon={<TriangleAlert size={16} />} label="Errors" value={fmtNum(errorCount)} />
               <Metric icon={<Clock3 size={16} />} label="Avg latency" value={fmtMs(avgLatency)} />
             </div>
@@ -116,7 +216,11 @@ export default function Logs() {
               <MiniStat label="Success" value={fmtNum(successCount)} tone="success" />
               <MiniStat label="Error" value={fmtNum(errorCount)} tone="danger" />
             </div>
-            <p className="mt-4 text-xs text-text-muted">Use filters to isolate a specific provider, model, or status when tracing problems.</p>
+            <p className="mt-4 text-xs text-text-muted">
+              {tab === "request" && "Use filters to isolate a specific provider, model, or status when tracing problems."}
+              {tab === "warmup" && "Filter warmup failures by provider or status to find problematic accounts faster."}
+              {tab === "test" && "Filter model probes by provider or status to compare which models are healthy."}
+            </p>
           </Card>
         </div>
       </div>
@@ -139,7 +243,7 @@ export default function Logs() {
             </Select>
           </div>
           <div className="min-w-0">
-            <Select value={model} onChange={(e) => { setModel(e.target.value); setPage(1); }}>
+            <Select value={model} onChange={(e) => { setModel(e.target.value); setPage(1); }} disabled={tab !== "request"} className={tab !== "request" ? "opacity-60" : ""}>
               <option value="">All models</option>
               {uniqueModels.map((m) => <option key={m.model_id} value={m.model_id}>{labelForProvider(modelMap.get(m.model_id) ?? "", m.model_id)}</option>)}
             </Select>
@@ -180,33 +284,61 @@ export default function Logs() {
         <Card><Skeleton className="h-64 w-full" /></Card>
       ) : list.isError ? (
         <Card>
-          <EmptyState icon={<ScrollText size={32} />} title="Failed to load logs" hint={(list.error as Error)?.message ?? "Something went wrong. Try again."} />
+          <EmptyState
+            icon={Icon}
+            title="Failed to load logs"
+            hint={(list.error as Error)?.message ?? "Something went wrong. Try again."}
+          />
         </Card>
       ) : items.length === 0 ? (
         <Card>
-          <EmptyState icon={<ScrollText size={32} />} title="No logs" hint="Requests through the gateway will appear here." />
+          <EmptyState icon={<Icon size={32} />} title={`No ${meta.label.toLowerCase()}`} hint={meta.emptyHint} />
         </Card>
+      ) : tab === "warmup" ? (
+        <WarmupList items={items} />
+      ) : tab === "test" ? (
+        <TestList items={items} />
       ) : (
-        <Card className="overflow-hidden p-0">
-          <div className="divide-y divide-border">
-            {items.map((l) => (
-              <LogRow key={l.id} log={l} expanded={expanded === l.id} onToggle={() => setExpanded(expanded === l.id ? null : l.id)} />
-            ))}
-          </div>
-          <div className="flex flex-col gap-2 border-t border-border px-4 py-3 text-xs text-text-muted sm:flex-row sm:items-center sm:justify-between">
-            <span>{fmtNum(total)} requests</span>
-            <div className="flex items-center gap-2">
-              <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="rounded p-1 hover:bg-bg-raised disabled:opacity-30" aria-label="Previous page">
-                <ChevronLeft size={16} />
-              </button>
-              <span>{page} / {pages}</span>
-              <button disabled={page >= pages} onClick={() => setPage(page + 1)} className="rounded p-1 hover:bg-bg-raised disabled:opacity-30" aria-label="Next page">
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
-        </Card>
+        <RequestList
+          items={items}
+          modelMap={modelMap}
+          expanded={expanded}
+          onToggle={(id) => setExpanded(expanded === id ? null : id)}
+        />
       )}
+
+      {items.length > 0 ? (
+        <div className="mt-4 flex flex-col gap-2 text-xs text-text-muted sm:flex-row sm:items-center sm:justify-between">
+          <span>{fmtNum(total)} {tab === "request" ? "requests" : tab === "warmup" ? "warmup events" : "probes"}</span>
+          <div className="flex items-center gap-2">
+            <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="rounded p-1 hover:bg-bg-raised disabled:opacity-30" aria-label="Previous page">
+              <ChevronLeft size={16} />
+            </button>
+            <span>{page} / {pages}</span>
+            <button disabled={page >= pages} onClick={() => setPage(page + 1)} className="rounded p-1 hover:bg-bg-raised disabled:opacity-30" aria-label="Next page">
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-bg-base/30 p-4">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-text-muted">{icon}{label}</div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, tone }: { label: string; value: string; tone: "success" | "danger" }) {
+  return (
+    <div className={`rounded-xl border p-3 ${tone === "success" ? "border-success/30 bg-success/10 text-success" : "border-danger/30 bg-danger/10 text-danger"}`}>
+      <p className="text-[10px] uppercase tracking-[0.18em]">{label}</p>
+      <p className="mt-1 text-xl font-semibold">{value}</p>
     </div>
   );
 }
@@ -217,7 +349,29 @@ function statusTone(s: RequestLog["status"]): "success" | "danger" | "warning" {
   return "danger";
 }
 
-function LogRow({ log: l, expanded, onToggle }: { log: RequestLog; expanded: boolean; onToggle: () => void }) {
+function RequestList({
+  items,
+  modelMap,
+  expanded,
+  onToggle,
+}: {
+  items: RequestLog[];
+  modelMap: Map<string, string>;
+  expanded: string | null;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="divide-y divide-border">
+        {items.map((l) => (
+          <LogRow key={l.id} log={l} expanded={expanded === l.id} onToggle={() => onToggle(l.id)} modelMap={modelMap} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; expanded: boolean; onToggle: () => void; modelMap: Map<string, string> }) {
   return (
     <>
       <div className="cursor-pointer px-5 py-4 hover:bg-bg-raised/30" onClick={onToggle}>
@@ -230,21 +384,18 @@ function LogRow({ log: l, expanded, onToggle }: { log: RequestLog; expanded: boo
             <p className="mt-2 font-mono text-sm text-text-primary" title={l.requested_model}>{labelForProvider(l.provider ?? "", l.requested_model)}</p>
             <p className="mt-1 text-xs text-text-muted">{l.provider ?? "—"} · upstream {l.model ?? "—"}{l.account_label ? ` · account ${l.account_label}` : ""}</p>
           </div>
-
           <div className="grid gap-1 text-xs text-text-muted">
             <span>Tokens: <span className="text-text-primary">{fmtNum(l.input_tokens)} → {fmtNum(l.output_tokens)}</span></span>
             {l.credit_usage != null && <span>Credit: <span className="text-text-primary">{fmtNum(l.credit_usage)}</span></span>}
             <span>Saved: <span className={(l.tokens_saved ?? 0) > 0 ? "text-success" : "text-text-primary"}>{(l.tokens_saved ?? 0) > 0 ? `-${fmtNum(l.tokens_saved ?? 0)}` : "—"}</span></span>
           </div>
-
           <div className="grid gap-1 text-xs text-text-muted">
             <span>Latency: <span className="text-text-primary">{fmtMs(l.latency_ms)}</span></span>
           </div>
-
           <div className="text-xs text-text-muted">{expanded ? "Hide detail" : "Open detail"}</div>
         </div>
       </div>
-      {expanded && (
+      {expanded ? (
         <div className="border-t border-border bg-bg-base/50 px-4 py-3">
           <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs md:grid-cols-3">
             <Detail k="ID" v={l.id} mono />
@@ -262,79 +413,106 @@ function LogRow({ log: l, expanded, onToggle }: { log: RequestLog; expanded: boo
             <Detail k="Latency" v={fmtMs(l.latency_ms)} />
             {l.error && <Detail k="Error" v={l.error} />}
           </div>
-          {(l as { attempts_detail?: Array<{ provider?: string; model?: string; accountLabel?: string; outcome?: string; httpStatus?: number; error?: string; latencyMs?: number; reason?: string }> }).attempts_detail && (
-            <div className="mt-3 rounded-lg bg-bg-base p-3">
-              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-text-muted">Failover / attempts</p>
-              <div className="space-y-2">
-                {((l as { attempts_detail?: Array<{ provider?: string; model?: string; accountLabel?: string; outcome?: string; httpStatus?: number; error?: string; latencyMs?: number; reason?: string }> }).attempts_detail ?? []).map((a, i) => (
-                  <div key={i} className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-[11px]">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={a.outcome === "success" ? "success" : "danger"}>{a.outcome ?? "unknown"}</Badge>
-                      <span className="font-mono">{a.provider ?? "—"}</span>
-                      <span className="text-text-muted">{a.model ?? "—"}</span>
-                      {a.accountLabel && <span className="text-text-muted">acct: {a.accountLabel}</span>}
-                      {a.httpStatus != null && <span className="text-text-muted">HTTP {a.httpStatus}</span>}
-                      {a.latencyMs != null && <span className="text-text-muted">{a.latencyMs}ms</span>}
-                    </div>
-                    {(a.reason || a.error) && (
-                      <div className="mt-1 text-text-muted">
-                        {a.reason && <div>Reason: {a.reason}</div>}
-                        {a.error && <div>Error: {a.error}</div>}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {(l.request_body || l.response_body) && (
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {l.request_body && (
-                <div>
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">Prompt</p>
-                  <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-bg-base p-3 font-mono text-[11px] leading-relaxed text-text-base">{l.request_body}</pre>
-                </div>
-              )}
-              {l.response_body && (
-                <div>
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">{l.response_body.startsWith("ERROR:") ? "Error" : "Response"}</p>
-                  <pre className={`max-h-56 overflow-auto whitespace-pre-wrap rounded-lg p-3 font-mono text-[11px] leading-relaxed ${l.response_body.startsWith("ERROR:") ? "bg-danger/10 text-danger" : "bg-bg-base text-text-base"}`}>{l.response_body}</pre>
-                </div>
-              )}
-            </div>
-          )}
         </div>
-      )}
+      ) : null}
     </>
-  );
-}
-
-function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-border/70 bg-bg-base/60 px-4 py-3">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-text-muted">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function MiniStat({ label, value, tone }: { label: string; value: string; tone: "success" | "danger" }) {
-  return (
-    <div className="rounded-2xl border border-border/70 bg-bg-base/60 px-4 py-3">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-text-muted">{label}</p>
-      <p className={`mt-2 text-xl font-semibold ${tone === "success" ? "text-success" : "text-danger"}`}>{value}</p>
-    </div>
   );
 }
 
 function Detail({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
-    <div className="flex gap-2">
-      <span className="shrink-0 text-text-muted">{k}:</span>
-      <span className={`truncate ${mono ? "font-mono" : ""}`}>{v}</span>
+    <div>
+      <p className="text-[10px] uppercase tracking-[0.16em] text-text-muted">{k}</p>
+      <p className={`break-all ${mono ? "font-mono" : ""}`}>{v}</p>
+    </div>
+  );
+}
+
+function WarmupList({ items }: { items: RequestLog[] }) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="divide-y divide-border">
+        {items.map((item) => (
+          <WarmupRow key={item.id} log={item} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function WarmupRow({ log }: { log: RequestLog }) {
+  const success = log.status === "success";
+  return (
+    <div className="grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr_0.9fr_0.8fr_0.8fr] lg:items-center">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={success ? "success" : "danger"}>{log.status}</Badge>
+          <span className="text-xs text-text-muted">{fmtTime(log.ts)}</span>
+        </div>
+        <p className="mt-2 font-mono text-sm text-text-primary" title={log.requested_model}>{labelForProvider(log.provider ?? "", log.requested_model)}</p>
+        <p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"} · {log.model ?? "no upstream model"}</p>
+      </div>
+      <div className="grid gap-1 text-xs text-text-muted">
+        <span>Latency: <span className="text-text-primary">{fmtMs(log.latency_ms)}</span></span>
+        <span>HTTP: <span className="text-text-primary">{log.http_status ?? "—"}</span></span>
+        <span>Attempts: <span className="text-text-primary">{fmtNum(log.attempts)}</span></span>
+      </div>
+      <div className="text-xs text-text-muted">
+        <div>Input: <span className="text-text-primary">{fmtNum(log.input_tokens)}</span></div>
+        <div>Output: <span className="text-text-primary">{fmtNum(log.output_tokens)}</span></div>
+      </div>
+      <div className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-xs text-text-muted">
+        {log.error ? log.error : success ? "Warmup completed successfully." : "Warmup finished with an unknown failure."}
+      </div>
+    </div>
+  );
+}
+
+function TestList({ items }: { items: RequestLog[] }) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="divide-y divide-border">
+        {items.map((l) => (
+          <TestRow key={l.id} log={l} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function TestRow({ log }: { log: RequestLog }) {
+  return (
+    <div className="px-5 py-4 hover:bg-bg-raised/30">
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr_auto] lg:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={log.status === "success" ? "success" : "danger"}>{log.status}</Badge>
+            <span className="text-xs text-text-muted">{fmtTime(log.ts)}</span>
+          </div>
+          <p className="mt-2 font-mono text-sm text-text-primary">{labelForProvider(log.provider ?? "", log.requested_model)}</p>
+          <p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"} · account {log.account_label ?? "—"}</p>
+          {log.error && <p className="mt-1 truncate text-xs text-danger" title={log.error}>{log.error}</p>}
+        </div>
+        <div className="grid gap-1 text-xs text-text-muted">
+          <span>Latency: <span className="text-text-primary">{fmtMs(log.latency_ms)}</span></span>
+          {log.response_body && (
+            <span className="truncate" title={log.response_body}>
+              Result:{" "}
+              <span className="text-text-primary">
+                {log.response_body.slice(0, 80)}
+                {log.response_body.length > 80 ? "…" : ""}
+              </span>
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-text-muted">
+          {log.http_status != null ? (
+            <Badge tone={log.http_status >= 200 && log.http_status < 300 ? "success" : "danger"}>HTTP {log.http_status}</Badge>
+          ) : (
+            "—"
+          )}
+        </div>
+      </div>
     </div>
   );
 }

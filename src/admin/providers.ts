@@ -523,6 +523,28 @@ export function providerRoutes(db: Database) {
       const modelId = decodeURIComponent(params.modelId);
       const started = Date.now();
       const testPrompt = "Reply in one short sentence: say hi, state your model name, and mention your knowledge cutoff date if known.";
+      const writeTestLog = (result: { ok: boolean; status: number; latency_ms: number; detail?: string; preview_text?: string }) => {
+        logs.insert({
+          keyId: null,
+          endpoint: `/providers/${params.id}/models/${encodeURIComponent(modelId)}/test`,
+          requestedModel: modelId,
+          provider: p.name,
+          model: modelId,
+          attempts: 1,
+          status: result.ok ? "success" : "error",
+          httpStatus: result.status,
+          error: result.ok ? null : (result.detail ?? null),
+          inputTokens: null,
+          outputTokens: null,
+          latencyMs: result.latency_ms,
+          tokensSaved: 0,
+          requestBody: testPrompt,
+          responseBody: result.ok
+            ? `OK (${result.latency_ms}ms)${result.preview_text ? ` — ${result.preview_text}` : ""}`
+            : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`,
+          kind: "test",
+        });
+      };
       try {
         let res: Response | null = null;
         let usedAccount = accounts[0]!;
@@ -652,9 +674,11 @@ export function providerRoutes(db: Database) {
             preview_text = undefined;
           }
         }
-        return { ok: res.ok, status: res.status, latency_ms: latency, model: modelId, account: usedAccount.label, detail, preview_text, context_length, max_output_tokens, capabilities };
+        const successResult = { ok: res.ok, status: res.status, latency_ms: latency, model: modelId, account: usedAccount.label, detail, preview_text, context_length, max_output_tokens, capabilities };
+        writeTestLog({ ok: successResult.ok, status: successResult.status, latency_ms: successResult.latency_ms, detail: successResult.detail, preview_text: successResult.preview_text });
+        return successResult;
       } catch (err) {
-        return {
+        const errorResult = {
           ok: false,
           status: 0,
           latency_ms: Date.now() - started,
@@ -665,6 +689,8 @@ export function providerRoutes(db: Database) {
           max_output_tokens: null,
           capabilities: [],
         };
+        writeTestLog({ ok: false, status: 0, latency_ms: errorResult.latency_ms, detail: errorResult.detail });
+        return errorResult;
       }
     })
     // ── model sync ──

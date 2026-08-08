@@ -3,8 +3,9 @@ import type { Database } from "bun:sqlite";
 import { MusicRepo } from "../store/repos/music";
 import { searchMusic, resolveAudioStreamUrl, videoIdFromInput, fetchTrending } from "./music";
 
-const DEFAULT_SEARCH_LIMIT = 12;
-const MAX_SEARCH_LIMIT = 25;
+const DEFAULT_SEARCH_LIMIT = 30;
+const MAX_SEARCH_LIMIT = 30;
+const MAX_SEARCH_PAGE = 20;
 
 // Body schemas. Elysia enforces strict validation by default; without these
 // schemas, JSON bodies throw a "Bad Request" before our handlers run.
@@ -61,15 +62,18 @@ export function musicRoutes(db: Database) {
     .get("/search", ({ query }) => {
       const q = (query?.q ?? "").toString();
       const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, Number(query?.limit ?? DEFAULT_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT));
-      const page = Math.min(10, Math.max(1, Number(query?.page ?? 1) || 1));
+      const page = Math.min(MAX_SEARCH_PAGE, Math.max(1, Number(query?.page ?? 1) || 1));
       return searchMusic(q, limit, page);
     })
 
     // ── Trending ──
     .get("/trending", ({ query }) => {
       const limit = Math.min(50, Math.max(1, Number(query?.limit ?? 20) || 20));
-      const page = Math.min(10, Math.max(1, Number(query?.page ?? 1) || 1));
-      return fetchTrending(limit, page);
+      const page = Math.min(MAX_SEARCH_PAGE, Math.max(1, Number(query?.page ?? 1) || 1));
+      // `force=1` (sent by the Refresh button on the dashboard) bypasses
+      // the server-side trending cache so the user actually sees new data.
+      const force = query?.force === "1" || query?.force === "true";
+      return fetchTrending(limit, page, force);
     })
 
     // ── Stream proxy ──

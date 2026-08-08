@@ -1,15 +1,24 @@
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Boxes, ChevronRight, Plus } from "lucide-react";
-import { providers, type Provider } from "../api";
-import { Card, Switch, Badge, EmptyState, toast } from "../components/ui";
+import { Boxes, ChevronRight, Plus, AlertTriangle, RefreshCw } from "lucide-react";
+import { providers, healthInfo, type Provider } from "../api";
+import { Button, Card, Switch, Badge, EmptyState, Skeleton, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { PROVIDER_PRESETS, presetForType, type ProviderPreset } from "../providerCatalog";
 
 export default function Providers() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const list = useQuery({ queryKey: ["providers"], queryFn: providers.list });
+  const list = useQuery({
+    queryKey: ["providers"],
+    queryFn: providers.list,
+    retry: 1,
+  });
+  const detailedHealth = useQuery({
+    queryKey: ["health-detailed"],
+    queryFn: healthInfo.detailed,
+    retry: 1,
+  });
   const invalidate = () => qc.invalidateQueries({ queryKey: ["providers"] });
 
   const toggle = useMutation({
@@ -54,7 +63,61 @@ export default function Providers() {
     <div>
       <PageHeader title="Providers" />
 
-      {list.isLoading ? null : (
+      {list.isLoading ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-32 w-full" />
+          ))}
+        </div>
+      ) : list.isError ? (
+        <Card className="mt-2 border-danger/30 bg-danger/5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={20} className="mt-0.5 shrink-0 text-danger" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-danger">Couldn't read the provider database.</p>
+              <p className="mt-1 text-xs text-text-muted">
+                {list.error instanceof Error ? list.error.message : "The /api/providers request failed."}
+              </p>
+              <p className="mt-2 text-xs text-text-muted">
+                Database path: <span className="font-mono">{detailedHealth.data?.storage.db_path ?? "loading…"}</span>
+                {detailedHealth.data ? (
+                  <>
+                    {" · "}
+                    {detailedHealth.data.storage.db_exists ? `${(detailedHealth.data.storage.size_bytes / 1024).toFixed(0)} KB` : "missing on disk"}
+                  </>
+                ) : null}
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => { invalidate(); detailedHealth.refetch(); }}>
+              <RefreshCw size={13} /> Retry
+            </Button>
+          </div>
+        </Card>
+      ) : list.isError ? (
+        <Card className="mt-2 border-danger/30 bg-danger/5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={20} className="mt-0.5 shrink-0 text-danger" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-danger">Couldn't read the provider database.</p>
+              <p className="mt-1 text-xs text-text-muted">
+                {list.error instanceof Error ? list.error.message : "The /api/providers request failed."}
+              </p>
+              <p className="mt-2 text-xs text-text-muted">
+                Database path: <span className="font-mono">{detailedHealth.data?.storage.db_path ?? "loading…"}</span>
+                {detailedHealth.data ? (
+                  <>
+                    {" · "}
+                    {detailedHealth.data.storage.db_exists ? `${(detailedHealth.data.storage.size_bytes / 1024).toFixed(0)} KB` : "missing on disk"}
+                  </>
+                ) : null}
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => { invalidate(); detailedHealth.refetch(); }}>
+              <RefreshCw size={13} /> Retry
+            </Button>
+          </div>
+        </Card>
+      ) : (
         <div className="space-y-6">
           <section className="space-y-3">
             <div className="flex items-center justify-between">
@@ -135,7 +198,11 @@ export default function Providers() {
           <EmptyState
             icon={<Boxes size={32} />}
             title="No accounts connected yet"
-            hint="Pick a provider card above to open its page and add your first API key."
+            hint={
+              detailedHealth.data?.storage
+                ? `Pick a provider card above to open its page and add your first API key. The server's database is at ${detailedHealth.data.storage.db_path}${detailedHealth.data.storage.db_exists ? "" : " (no file yet — it will be created on first write)"}.`
+                : "Pick a provider card above to open its page and add your first API key."
+            }
           />
         </Card>
       )}

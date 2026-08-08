@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette } from "lucide-react";
-import { settings, backups, type BackupEntry, type TokenSaverSettings } from "../api";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database } from "lucide-react";
+import { settings, backups, healthInfo, type BackupEntry, type TokenSaverSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
@@ -56,10 +56,52 @@ export default function Settings() {
         <TokenSaverSection />
         <BackupSection />
         <div className="lg:col-span-2">
+          <DatabaseSection />
           <AboutSection />
         </div>
       </div>
     </div>
+  );
+}
+
+function DatabaseSection() {
+  const health = useQuery({ queryKey: ["health-detailed"], queryFn: healthInfo.detailed, refetchInterval: 30_000 });
+  const storage = health.data?.storage;
+  return (
+    <Card className="mb-6">
+      <h3 className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <Database size={14} /> Database
+      </h3>
+      {health.isLoading ? (
+        <p className="text-xs text-text-muted">Reading server info…</p>
+      ) : health.isError ? (
+        <p className="text-xs text-danger">Could not reach /api/health ({health.error instanceof Error ? health.error.message : "unknown error"})</p>
+      ) : storage ? (
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+          <div>
+            <dt className="text-text-muted">Data directory</dt>
+            <dd className="break-all font-mono text-text-primary">{storage.data_dir}</dd>
+          </div>
+          <div>
+            <dt className="text-text-muted">Database file</dt>
+            <dd className="break-all font-mono text-text-primary">
+              {storage.db_path}
+              {storage.db_exists ? ` · ${(storage.size_bytes / 1024).toFixed(0)} KB` : " · not on disk yet"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-text-muted">Providers (enabled / total)</dt>
+            <dd className="font-mono text-text-primary">
+              {health.data?.providers.enabled ?? 0} / {health.data?.providers.total ?? 0}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-text-muted">Active accounts</dt>
+            <dd className="font-mono text-text-primary">{health.data?.providers.accounts ?? 0}</dd>
+          </div>
+        </dl>
+      ) : null}
+    </Card>
   );
 }
 

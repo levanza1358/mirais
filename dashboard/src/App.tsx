@@ -13,7 +13,8 @@ import ProviderDetail from "./pages/ProviderDetail";
 import Combos from "./pages/Combos";
 import Keys from "./pages/Keys";
 import Logs from "./pages/Logs";
-import WarmupLogs from "./pages/WarmupLogs";
+import WarmupLogsRedirect from "./pages/WarmupLogs";
+import TestLogsRedirect from "./pages/TestLogs";
 import UsageLog from "./pages/UsageLog";
 import Settings from "./pages/Settings";
 import Integrations from "./pages/Integrations";
@@ -97,7 +98,8 @@ export default function App() {
                 <Route path="combos" element={<Combos />} />
                 <Route path="keys" element={<Keys />} />
                 <Route path="logs" element={<Logs />} />
-                <Route path="warmup-logs" element={<WarmupLogs />} />
+                <Route path="warmup-logs" element={<WarmupLogsRedirect />} />
+                <Route path="test-logs" element={<TestLogsRedirect />} />
                 <Route path="usage" element={<UsageLog />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="integrations" element={<Integrations />} />

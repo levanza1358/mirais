@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import fs from "node:fs";
 import type { Database } from "bun:sqlite";
 import { SettingsRepo } from "../store/repos/settings";
 import { LogsRepo } from "../store/repos/logs";
@@ -7,6 +8,13 @@ import { settingsUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { config } from "../config";
 import { log } from "../utils/logger";
+
+function fsSyncExists(p: string): boolean {
+  try { return fs.statSync(p).isFile(); } catch { return false; }
+}
+function fsSyncSize(p: string): number {
+  try { return fs.statSync(p).size; } catch { return 0; }
+}
 
 export function settingsRoutes(db: Database) {
   const settings = new SettingsRepo(db);
@@ -117,6 +125,16 @@ export function healthRoutes(db: Database) {
           total: list.length,
           enabled: list.filter((p) => p.enabled).length,
           accounts: list.reduce((n, p) => n + providers.listAccounts(p.id).filter((a) => a.enabled).length, 0),
+        },
+        // Surface where the on-disk DB actually lives so the dashboard can
+        // tell the operator whether they're connected to the right Mirais
+        // instance (matters when several VPS installs run side by side, or
+        // when systemd's WorkingDirectory moves the relative ./data path).
+        storage: {
+          data_dir: config.dataDir,
+          db_path: config.dbPath,
+          db_exists: fsSyncExists(config.dbPath),
+          size_bytes: fsSyncSize(config.dbPath),
         },
       };
     });

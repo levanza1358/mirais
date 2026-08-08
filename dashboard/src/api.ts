@@ -170,6 +170,18 @@ export interface TokenSaverSettings {
   rules: { gitDiff: boolean; grep: boolean; ls: boolean; longOutputMaxLines: number };
 }
 
+export const healthInfo = {
+  detailed: () => req<HealthInfo>("/api/health"),
+};
+
+export interface HealthInfo {
+  status: string;
+  version: string;
+  uptime_sec: number;
+  providers: { total: number; enabled: number; accounts: number };
+  storage: { data_dir: string; db_path: string; db_exists: boolean; size_bytes: number };
+}
+
 export interface Settings {
   token_saver: TokenSaverSettings | null;
   terse_mode: unknown;
@@ -475,7 +487,7 @@ export interface MusicSearchResult {
 
 export const music = {
   search: (q: string, limit = 20, page = 1) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/search?q=${encodeURIComponent(q)}&limit=${limit}&page=${page}`),
-  trending: (limit = 20, page = 1) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/trending?limit=${limit}&page=${page}`),
+  trending: (limit = 20, page = 1, force = false) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/trending?limit=${limit}&page=${page}${force ? "&force=1" : ""}`),
   listPlaylists: () => req<{ playlists: MusicPlaylist[] }>("/api/music/playlists"),
   createPlaylist: (name: string) => req<MusicPlaylist>("/api/music/playlists", { method: "POST", body: JSON.stringify({ name }) }),
   getPlaylist: (id: string) => req<MusicPlaylist>(`/api/music/playlists/${id}`),
