@@ -5,7 +5,7 @@ import { integrations, type IntegrationCli } from "../api";
 import { Button, Card, Skeleton, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { keys } from "../api";
-import { labelForProvider } from "../utils/modelLabels";
+// Labels show the full model id (no alias shortening).
 
 export default function Integrations() {
   const catalog = useQuery({ queryKey: ["integrations-catalog"], queryFn: integrations.catalog });
@@ -78,7 +78,7 @@ export default function Integrations() {
                 <label className="mb-1 block text-xs text-text-muted">Model from Mirais catalog</label>
                 <select value={effectiveModel} onChange={(event) => setModel(event.target.value)} className="h-10 w-full rounded-xl border border-border bg-bg-base px-3 text-sm text-text-primary outline-none focus:border-accent">
                   <option value="" disabled>Select a model</option>
-                  {models.map((entry) => <option key={`${entry.providerType}:${entry.id}`} value={entry.id}>{labelForProvider(entry.provider, entry.id)}</option>)}
+                  {models.map((entry) => <option key={`${entry.providerType}:${entry.id}`} value={entry.id}>{entry.id}</option>)}
                 </select>
                 {!models.length && <p className="mt-2 text-xs text-warning">No enabled models are available in Mirais.</p>}
               </div>

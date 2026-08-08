@@ -73,19 +73,6 @@ export class Router {
         const candidates = this.sortCandidates(this.filterCandidates(raw, policy), policy);
         return { kind: "direct", requested: model, candidates };
       }
-      // Try short-id resolution (e.g. "bb/gpt-5.4" → "blackboxai/openai/gpt-5.4")
-      if (providerName && modelId) {
-        const shortMatch = this.providers.findModelByShortId(providerName, modelId);
-        if (shortMatch.length) {
-          const raw = shortMatch.map((m) => ({
-            provider: m.provider,
-            modelId: m.model_id,
-            accounts: this.pickAccounts(m.provider),
-          }));
-          const candidates = this.sortCandidates(this.filterCandidates(raw, policy), policy);
-          return { kind: "direct", requested: model, candidates };
-        }
-      }
       throw new GatewayError(404, "not_found_error", `Provider '${providerName}' not found or disabled`);
     }
 

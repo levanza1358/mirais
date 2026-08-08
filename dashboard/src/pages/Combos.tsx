@@ -4,7 +4,7 @@ import { Plus, Trash2, GitBranch, ChevronRight, X } from "lucide-react";
 import { combos, providers, type Combo } from "../api";
 import { Button, Card, Modal, Input, Select, Badge, EmptyState, ConfirmModal, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { simplifyQualifiedTarget } from "../utils/modelLabels";
+// Labels show the full provider/model id (no alias shortening).
 
 export default function Combos() {
   const qc = useQueryClient();
@@ -70,7 +70,7 @@ export default function Combos() {
                   .map((e, i) => (
                     <span key={e.id} className="flex items-center gap-1.5">
                       {i > 0 && <ChevronRight size={12} className="text-text-muted/50" />}
-                      <code className="rounded bg-bg-base px-2 py-0.5 font-mono text-xs" title={e.target}>{simplifyQualifiedTarget(e.target)}</code>
+                      <code className="rounded bg-bg-base px-2 py-0.5 font-mono text-xs" title={e.target}>{e.target}</code>
                     </span>
                   ))}
               </div>
@@ -144,7 +144,7 @@ function ComboModal({ combo, targets, onClose }: { combo: Combo | null; targets:
           <label className="mb-1 block text-xs text-text-muted">Fallback chain (tried in order)</label>
           <div className="mb-2 flex gap-2">
             <Select value={pick} onChange={(e) => setPick(e.target.value)}>
-              {targets.map((t) => <option key={t} value={t}>{simplifyQualifiedTarget(t)}</option>)}
+              {targets.map((t) => <option key={t} value={t}>{t}</option>)}
             </Select>
             <Button type="button" variant="outline" onClick={addTarget} disabled={chain.length >= MAX_CHAIN}>Add</Button>
           </div>
@@ -155,7 +155,7 @@ function ComboModal({ combo, targets, onClose }: { combo: Combo | null; targets:
               {chain.map((t, i) => (
                 <div key={t} className="flex items-center gap-2 rounded-lg bg-bg-base/50 px-3 py-1.5 text-xs">
                   <span className="w-4 text-text-muted">{i + 1}.</span>
-                  <code className="font-mono" title={t}>{simplifyQualifiedTarget(t)}</code>
+                  <code className="font-mono" title={t}>{t}</code>
                   <button type="button" onClick={() => setChain(chain.filter((x) => x !== t))} className="ml-auto text-text-muted hover:text-danger" aria-label={`Remove ${t}`}>
                     <X size={13} />
                   </button>

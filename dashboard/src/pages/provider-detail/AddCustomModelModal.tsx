@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
 import { Badge, Button, Input, Modal } from "../../components/ui";
-import { normalizeCustomModelId } from "../../utils/modelLabels";
 import type { ModelTestResult } from "./types";
 
 export function AddCustomModelModal({
@@ -30,12 +29,12 @@ export function AddCustomModelModal({
   }, [open]);
 
   async function handleTest() {
-    const normalized = normalizeCustomModelId(modelId);
-    if (!normalized) return;
+    const trimmed = modelId.trim();
+    if (!trimmed) return;
     setTesting(true);
     try {
-      setModelId(normalized);
-      const out = await onTest(normalized);
+      setModelId(trimmed);
+      const out = await onTest(trimmed);
       setResult(out);
     } finally {
       setTesting(false);
@@ -55,7 +54,7 @@ export function AddCustomModelModal({
           <Button variant="outline" onClick={handleTest} loading={testing} disabled={!modelId.trim()}>
             <Zap size={14} /> Test model
           </Button>
-          <Button onClick={() => result && onSave(normalizeCustomModelId(modelId), result)} disabled={!result?.ok || saving} loading={saving}>Save model</Button>
+          <Button onClick={() => result && onSave(modelId.trim(), result)} disabled={!result?.ok || saving} loading={saving}>Save model</Button>
         </div>
 
         {result && (

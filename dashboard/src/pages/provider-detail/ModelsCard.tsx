@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
 import { type Provider, providers } from "../../api";
 import { Button, Card, ConfirmModal, Modal, toast } from "../../components/ui";
-import { labelForProvider } from "../../utils/modelLabels";
+// Labels show the full model id (no alias shortening).
 import { AddCustomModelModal } from "./AddCustomModelModal";
 import type { ModelTestResult } from "./types";
 
@@ -52,7 +52,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
         capabilities: res.capabilities,
       };
       setResults((r) => ({ ...r, [modelId]: out }));
-      const modelLabel = labelForProvider(p.name, modelId);
+      const modelLabel = modelId;
       if (res.ok) {
         toast(res.preview_text?.trim() || `${modelLabel} responded in ${res.latency_ms}ms`, "success", { title: `Model: ${modelLabel}` });
       } else {
@@ -62,7 +62,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
     } catch (err) {
       const out: ModelTestResult = { ok: false, latency_ms: 0, detail: err instanceof Error ? err.message : String(err) };
       setResults((r) => ({ ...r, [modelId]: out }));
-      toast(`Test failed: ${out.detail ?? "Unknown error"}`, "error", { title: `Model: ${labelForProvider(p.name, modelId)}` });
+      toast(`Test failed: ${out.detail ?? "Unknown error"}`, "error", { title: `Model: ${modelId}` });
       return out;
     }
   }
@@ -165,7 +165,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
         <div className="flex flex-wrap gap-1.5">
           {models.map((m) => {
             const r = results[m.model_id];
-            const modelLabel = labelForProvider(p.name, m.model_id);
+            const modelLabel = m.model_id;
             const caps = parseCaps(m.capabilities);
             const meta: string[] = [];
             if (m.context_length) meta.push(`Context: ${m.context_length.toLocaleString()} tokens`);

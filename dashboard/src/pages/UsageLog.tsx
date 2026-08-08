@@ -5,7 +5,7 @@ import { Activity, BarChart3, Download, ShieldAlert, TimerReset, Trash2 } from "
 import { logs } from "../api";
 import { Button, Card, Select, Badge, EmptyState, Skeleton, fmtNum, fmtMs, fmtTime, ConfirmModal, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { labelForProvider } from "../utils/modelLabels";
+// Labels show the full model id (no alias shortening).
 import { downloadCsv, toCsv } from "../utils/csv";
 
 export default function UsageLog() {
@@ -37,7 +37,7 @@ export default function UsageLog() {
   const avgLatency = rows.length ? Math.round(rows.reduce((n, r) => n + r.avg_latency_ms, 0) / rows.length) : 0;
   const chartData = useMemo(
     () => rows.slice(0, 8).map((r) => ({
-      name: r.model && r.provider ? labelForProvider(r.provider, r.model) : (r.model ?? r.provider ?? "—"),
+      name: r.model && r.provider ? `${r.provider}/${r.model}` : (r.model ?? r.provider ?? "—"),
       requests: r.requests,
       input: r.input_tokens,
       output: r.output_tokens,
@@ -190,7 +190,7 @@ export default function UsageLog() {
               <tbody className="divide-y divide-border">
                 {rows.map((r) => (
                   <tr key={`${r.provider}/${r.model}`} className="hover:bg-bg-raised/50">
-                    <td className="px-4 py-2.5 font-mono text-xs" title={r.model ?? undefined}>{r.model && r.provider ? labelForProvider(r.provider, r.model) : (r.model ?? "—")}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs" title={r.model ?? undefined}>{r.model && r.provider ? `${r.provider}/${r.model}` : (r.model ?? "—")}</td>
                     <td className="px-4 py-2.5 text-xs text-text-muted">{r.provider ?? "—"}</td>
                     <td className="px-4 py-2.5 text-right text-xs font-medium">{fmtNum(r.requests)}</td>
                     <td className="px-4 py-2.5 text-right text-xs">

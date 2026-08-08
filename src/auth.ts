@@ -30,19 +30,9 @@ export function authenticateGatewayKey(db: Database, authHeader: string | null):
   return key;
 }
 
-export function authorizeModel(key: GatewayKey, model: string, db?: Database): void {
+export function authorizeModel(key: GatewayKey, model: string, _db?: Database): void {
   const allowed = allowedModels(key);
   if (allowed === null) return;
   if (allowed.includes("*") || allowed.includes(model)) return;
-  // Try resolving short IDs (e.g. "bb/gpt-5.4") against allowed full model IDs
-  if (db && model.includes("/")) {
-    const [shortProv, ...rest] = model.split("/");
-    const shortModel = rest.join("/") || "";
-    if (shortProv && shortModel) {
-      const repo = new ProvidersRepo(db);
-      const resolved = repo.findModelByShortId(shortProv, shortModel);
-      if (resolved.length > 0 && resolved[0] && allowed.includes(resolved[0].model_id)) return;
-    }
-  }
   throw new GatewayError(403, "invalid_request_error", `Key is not permitted to use model '${model}'`);
 }

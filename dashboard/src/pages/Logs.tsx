@@ -14,7 +14,7 @@ import {
 import { logs, providers, type RequestLog } from "../api";
 import { Badge, Button, Card, EmptyState, Select, Skeleton, fmtMs, fmtNum, fmtTime, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { labelForProvider } from "../utils/modelLabels";
+// Labels show the full model id (no alias shortening).
 import { downloadCsv, toCsv } from "../utils/csv";
 
 type LogTab = "request" | "warmup" | "test";
@@ -245,7 +245,7 @@ export default function Logs() {
           <div className="min-w-0">
             <Select value={model} onChange={(e) => { setModel(e.target.value); setPage(1); }} disabled={tab !== "request"} className={tab !== "request" ? "opacity-60" : ""}>
               <option value="">All models</option>
-              {uniqueModels.map((m) => <option key={m.model_id} value={m.model_id}>{labelForProvider(modelMap.get(m.model_id) ?? "", m.model_id)}</option>)}
+              {uniqueModels.map((m) => <option key={m.model_id} value={m.model_id}>{m.model_id}</option>)}
             </Select>
           </div>
           <label className="flex flex-col gap-1 text-[10px] uppercase tracking-[0.18em] text-text-muted">
@@ -381,7 +381,7 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
               <Badge tone={statusTone(l.status)}>{l.status}</Badge>
               <span className="text-xs text-text-muted">{fmtTime(l.ts)}</span>
             </div>
-            <p className="mt-2 font-mono text-sm text-text-primary" title={l.requested_model}>{labelForProvider(l.provider ?? "", l.requested_model)}</p>
+            <p className="mt-2 font-mono text-sm text-text-primary" title={l.requested_model}>{l.requested_model}</p>
             <p className="mt-1 text-xs text-text-muted">{l.provider ?? "—"} · upstream {l.model ?? "—"}{l.account_label ? ` · account ${l.account_label}` : ""}</p>
           </div>
           <div className="grid gap-1 text-xs text-text-muted">
@@ -449,7 +449,7 @@ function WarmupRow({ log }: { log: RequestLog }) {
           <Badge tone={success ? "success" : "danger"}>{log.status}</Badge>
           <span className="text-xs text-text-muted">{fmtTime(log.ts)}</span>
         </div>
-        <p className="mt-2 font-mono text-sm text-text-primary" title={log.requested_model}>{labelForProvider(log.provider ?? "", log.requested_model)}</p>
+        <p className="mt-2 font-mono text-sm text-text-primary" title={log.requested_model}>{log.requested_model}</p>
         <p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"} · {log.model ?? "no upstream model"}</p>
       </div>
       <div className="grid gap-1 text-xs text-text-muted">
@@ -489,7 +489,7 @@ function TestRow({ log }: { log: RequestLog }) {
             <Badge tone={log.status === "success" ? "success" : "danger"}>{log.status}</Badge>
             <span className="text-xs text-text-muted">{fmtTime(log.ts)}</span>
           </div>
-          <p className="mt-2 font-mono text-sm text-text-primary">{labelForProvider(log.provider ?? "", log.requested_model)}</p>
+          <p className="mt-2 font-mono text-sm text-text-primary">{log.requested_model}</p>
           <p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"} · account {log.account_label ?? "—"}</p>
           {log.error && <p className="mt-1 truncate text-xs text-danger" title={log.error}>{log.error}</p>}
         </div>
