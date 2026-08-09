@@ -10,6 +10,7 @@ jobs:
   verify:
     name: typecheck + test + build
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -21,7 +22,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Install root deps
         run: bun install --frozen-lockfile
@@ -41,6 +42,7 @@ jobs:
   smoke-ubuntu:
     name: post-deploy smoke (Ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -50,7 +52,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Install root deps
         run: bun install --frozen-lockfile
@@ -69,6 +71,7 @@ jobs:
           PORT=1463 \
           bun run src/server.ts &
           SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
           for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
             if curl -sf http://127.0.0.1:1463/health > /dev/null; then
               echo "server up after ${i}s"
@@ -79,4 +82,3 @@ jobs:
           curl -sS http://127.0.0.1:1463/health
           echo ""
           curl -sS http://127.0.0.1:1463/api/health
-          kill "$SERVER_PID" || true

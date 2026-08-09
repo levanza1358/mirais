@@ -104,4 +104,36 @@ describe("applyTokenSaver", () => {
     expect(r.tokensSaved).toBe(0);
     expect(r.request).toBe(req);
   });
+
+  test("deduplicates repeated tool outputs and compacts stale results", () => {
+    const content = "same verbose output ".repeat(200);
+    const request = {
+      model: "m",
+      messages: [
+        { role: "tool" as const, content, tool_call_id: "1" },
+        { role: "tool" as const, content: "older unique ".repeat(200), tool_call_id: "2" },
+        { role: "tool" as const, content, tool_call_id: "3" },
+      ],
+    };
+    const result = applyTokenSaver(request, { enabled: true, rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200, deduplicateToolOutputs: true, keepRecentToolResults: 1 } });
+    expect(String(result.request.messages[0]?.content)).toContain("stale tool output compacted");
+    expect(String(result.request.messages[2]?.content)).toContain("duplicate tool output omitted");
+    expect(result.tokensSaved).toBeGreaterThan(0);
+  });
+
+  test("never grows short duplicate or stale outputs", () => {
+    const request = { model: "m", messages: [
+      { role: "tool" as const, content: "x", tool_call_id: "1" },
+      { role: "tool" as const, content: "x", tool_call_id: "2" },
+    ] };
+    const result = applyTokenSaver(request, { enabled: true, rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200, deduplicateToolOutputs: true, keepRecentToolResults: 0 } });
+    expect(result.request.messages.map((message) => message.content)).toEqual(["x", "x"]);
+  });
+
+  test("compacts repetitive build logs", () => {
+    const repeated = Array.from({ length: 40 }, (_, index) => `compile module ${index}ms`).join("\n");
+    const result = compressToolOutput(repeated, { enabled: true, rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200, buildLogs: true } });
+    expect(result.text).toContain("repeated build lines omitted");
+    expect(result.text.length).toBeLessThan(repeated.length);
+  });
 });

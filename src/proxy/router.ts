@@ -14,6 +14,25 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   "codebuddy-cn": "https://copilot.tencent.com/v2",
 };
 
+export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
+  mode: "balanced",
+  preferProviders: [],
+  denyProviders: [],
+  denyModels: [],
+  maxAttempts: 3,
+  respectPriority: true,
+};
+
+export function normalizeRoutingPolicy(policy?: Partial<RoutingPolicy> | null): RoutingPolicy {
+  return {
+    ...DEFAULT_ROUTING_POLICY,
+    ...policy,
+    preferProviders: policy?.preferProviders ?? [],
+    denyProviders: policy?.denyProviders ?? [],
+    denyModels: policy?.denyModels ?? [],
+  };
+}
+
 export function baseUrlFor(provider: Provider): string {
   return provider.base_url ?? DEFAULT_BASE_URLS[provider.type] ?? "https://api.openai.com/v1";
 }
@@ -30,17 +49,11 @@ export class Router {
   ) {}
 
   resolve(model: string, forbidden: Set<string> = new Set()): ResolvedRoute {
-    return this.resolveWithPolicy(model, {
-      mode: "balanced",
-      preferProviders: [],
-      denyProviders: [],
-      denyModels: [],
-      maxAttempts: 3,
-      respectPriority: true,
-    }, forbidden);
+    return this.resolveWithPolicy(model, DEFAULT_ROUTING_POLICY, forbidden);
   }
 
   resolveWithPolicy(model: string, policy: RoutingPolicy, forbidden: Set<string> = new Set()): ResolvedRoute {
+    policy = normalizeRoutingPolicy(policy);
     // 1. qualified provider/model
     if (model.includes("/")) {
       const [providerName, ...rest] = model.split("/");
@@ -49,6 +62,9 @@ export class Router {
       if (provider && provider.enabled) {
         if (policy.denyProviders.includes(provider.name) || policy.denyModels.includes(modelId)) {
           throw new GatewayError(403, "invalid_request_error", `Model '${model}' is blocked by routing policy`);
+        }
+        if (!this.providers.findProviderModel(provider.id, modelId)) {
+          throw new GatewayError(404, "not_found_error", `Model '${modelId}' not found or disabled for provider '${provider.name}'`);
         }
         const accounts = this.pickAccounts(provider);
         return { kind: "qualified", requested: model, candidates: [{ provider, modelId, accounts }] };
@@ -82,17 +98,23 @@ export class Router {
     }
 
     // 3. combo
-    const combo = this.combos.getByName(model);
+    const comboName = model.startsWith("combo:") ? model.slice("combo:".length) : model;
+    const combo = this.combos.getByName(comboName);
     if (combo) {
+      const marker = `combo:${combo.name}`;
+      if (forbidden.has(marker)) {
+        throw new GatewayError(400, "invalid_request_error", `Combo '${model}' resolves into a cycle`);
+      }
       const candidates: RouteCandidate[] = [];
       const seen = new Set(forbidden);
-      seen.add(`combo:${combo.name}`);
+      seen.add(marker);
       for (const entry of combo.entries) {
         try {
           const r = this.resolveWithPolicy(entry.target, policy, new Set(seen));
           candidates.push(...r.candidates);
-        } catch {
-          // skip unresolvable entry
+        } catch (error) {
+          if (!(error instanceof GatewayError) || error.status === 400 || error.status === 403) throw error;
+          // Skip unavailable entries so the next combo target can be tried.
         }
       }
       if (!candidates.length) {

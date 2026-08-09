@@ -42,6 +42,7 @@ export const chatCompletionsSchema = z.object({
       name: z.string(),
       description: z.string().optional(),
       parameters: z.record(z.unknown()).optional(),
+      strict: z.boolean().optional(),
     }),
   })).optional(),
   tool_choice: z.unknown().optional(),
@@ -53,6 +54,56 @@ export const chatCompletionsSchema = z.object({
     budget_tokens: z.number().int().min(0).max(2_000_000).optional(),
   }).optional(),
 }).passthrough();
+
+const responsesContentPartSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.enum(["input_text", "output_text"]), text: z.string() }),
+  z.object({ type: z.literal("input_image"), image_url: z.string().url() }),
+]);
+
+const responsesInputItemSchema = z.union([
+  z.object({
+    type: z.literal("message").optional(),
+    role: z.enum(["user", "assistant", "system", "developer"]),
+    content: z.union([z.string(), z.array(responsesContentPartSchema).min(1)]),
+  }),
+  z.object({ type: z.literal("function_call"), call_id: z.string().min(1), name: z.string().min(1), arguments: z.string() }),
+  z.object({ type: z.literal("function_call_output"), call_id: z.string().min(1), output: z.string() }),
+]);
+
+export const responsesCreateSchema = z.object({
+  model: z.string().min(1),
+  input: z.union([z.string(), z.array(responsesInputItemSchema).min(1)]),
+  instructions: z.string().optional(),
+  stream: z.boolean().optional(),
+  max_output_tokens: z.number().int().positive().optional(),
+  temperature: z.number().optional(),
+  top_p: z.number().optional(),
+  tools: z.array(z.object({
+    type: z.literal("function"),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    parameters: z.record(z.unknown()).optional(),
+    strict: z.boolean().optional(),
+  })).optional(),
+  tool_choice: z.unknown().optional(),
+  reasoning: z.object({ effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional() }).optional(),
+  store: z.literal(false).nullable().optional(),
+  background: z.literal(false).nullable().optional(),
+  previous_response_id: z.null().optional(),
+  parallel_tool_calls: z.boolean().optional(),
+  text: z.object({ format: z.union([
+    z.object({ type: z.literal("text") }),
+    z.object({ type: z.literal("json_object") }),
+    z.object({ type: z.literal("json_schema"), name: z.string().min(1), schema: z.record(z.unknown()), strict: z.boolean().optional() }),
+  ]).optional() }).optional(),
+  metadata: z.record(z.string()).optional(),
+  user: z.string().optional(),
+  safety_identifier: z.string().optional(),
+  service_tier: z.string().optional(),
+  truncation: z.literal("disabled").optional(),
+}).strict().superRefine((value, ctx) => {
+  void value;
+});
 
 // ── Anthropic Messages ──
 
@@ -108,8 +159,34 @@ export const accountUpdateSchema = z.object({
 
 export const aliasCreateSchema = z.object({
   alias: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
-  target: z.string().min(1),
+  target: z.string().trim().min(1).max(1024),
 });
+
+export const providerModelUpdateSchema = z.object({
+  displayName: z.string().trim().min(1).max(256).nullable().optional(),
+  enabled: z.boolean().optional(),
+  contextLength: z.number().int().positive().max(10_000_000).nullable().optional(),
+  maxOutputTokens: z.number().int().positive().max(10_000_000).nullable().optional(),
+  capabilities: z.array(z.string().trim().min(1).max(64)).max(32).nullable().optional(),
+}).strict();
+
+export const upstreamModelSchema = z.object({
+  id: z.string().trim().min(1).max(1024),
+  context_length: z.number().int().positive().optional(),
+  max_tokens: z.number().int().positive().optional(),
+  max_output_tokens: z.number().int().positive().optional(),
+  max_completion_tokens: z.number().int().positive().optional(),
+  top_provider: z.object({
+    context_length: z.number().int().positive().optional(),
+    max_completion_tokens: z.number().int().positive().optional(),
+  }).passthrough().optional(),
+  supported_parameters: z.array(z.string()).optional(),
+  capabilities: z.record(z.boolean()).optional(),
+}).passthrough();
+
+export const upstreamModelsResponseSchema = z.object({
+  data: z.array(upstreamModelSchema),
+}).passthrough();
 
 export const comboCreateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
@@ -149,7 +226,19 @@ export const settingsUpdateSchema = z.object({
       grep: z.boolean(),
       ls: z.boolean(),
       longOutputMaxLines: z.number().int().min(10).max(2000),
+      maxToolOutputChars: z.number().int().min(1000).max(1_000_000).optional(),
+      collapseWhitespace: z.boolean().optional(),
+      deduplicateToolOutputs: z.boolean().optional(),
+      keepRecentToolResults: z.number().int().min(0).max(100).optional(),
+      gitStatus: z.boolean().optional(),
+      findTree: z.boolean().optional(),
+      buildLogs: z.boolean().optional(),
     }),
+  }).optional(),
+  memory: z.object({
+    enabled: z.boolean(),
+    ttlDays: z.number().int().min(1).max(365),
+    maxMessages: z.number().int().min(2).max(200),
   }).optional(),
   terse_mode: z.object({
     enabled: z.boolean(),

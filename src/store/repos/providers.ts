@@ -133,6 +133,18 @@ export class ProvidersRepo {
     return rows.map((row) => this.hydrateModel(row));
   }
 
+  findProviderModel(providerId: string, modelId: string): ProviderModel | null {
+    return (this.db
+      .query("SELECT * FROM provider_models WHERE provider_id = ? AND model_id = ? AND enabled = 1")
+      .get(providerId, modelId) as ProviderModel) ?? null;
+  }
+
+  getProviderModel(providerId: string, modelId: string): ProviderModel | null {
+    return (this.db
+      .query("SELECT * FROM provider_models WHERE provider_id = ? AND model_id = ?")
+      .get(providerId, modelId) as ProviderModel) ?? null;
+  }
+
   private hydrateModel(row: Record<string, unknown>): ProviderModel & { provider: Provider } {
     return {
       id: row.id,
@@ -156,7 +168,7 @@ export class ProvidersRepo {
     } as ProviderModel & { provider: Provider };
   }
 
-  upsertModel(providerId: string, modelId: string, patch?: Partial<{ displayName: string; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>): void {
+  upsertModel(providerId: string, modelId: string, patch?: Partial<{ displayName: string | null; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null; source: "manual" | "sync" }>): void {
     const caps = patch?.capabilities !== undefined ? (patch.capabilities ? JSON.stringify(patch.capabilities) : null) : undefined;
     const existing = this.db
       .query("SELECT id FROM provider_models WHERE provider_id = ? AND model_id = ?")
@@ -164,18 +176,19 @@ export class ProvidersRepo {
     if (existing) {
       const cur = this.db.query("SELECT * FROM provider_models WHERE id = ?").get(existing.id) as ProviderModel;
       this.db
-        .query("UPDATE provider_models SET display_name=?, enabled=?, context_length=?, max_output_tokens=?, capabilities=? WHERE id=?")
+        .query("UPDATE provider_models SET display_name=?, enabled=?, context_length=?, max_output_tokens=?, capabilities=?, source=? WHERE id=?")
         .run(
           patch?.displayName ?? cur.display_name,
           patch?.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
           patch?.contextLength !== undefined ? patch.contextLength : cur.context_length,
           patch?.maxOutputTokens !== undefined ? patch.maxOutputTokens : cur.max_output_tokens,
           caps !== undefined ? caps : cur.capabilities,
+          cur.source === "manual" ? "manual" : (patch?.source ?? cur.source),
           existing.id,
         );
     } else {
       this.db
-        .query("INSERT INTO provider_models (id, provider_id, model_id, display_name, enabled, context_length, max_output_tokens, capabilities) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .query("INSERT INTO provider_models (id, provider_id, model_id, display_name, enabled, context_length, max_output_tokens, capabilities, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(
           ulid(),
           providerId,
@@ -185,8 +198,31 @@ export class ProvidersRepo {
           patch?.contextLength ?? null,
           patch?.maxOutputTokens ?? null,
           caps !== undefined ? caps : null,
+          patch?.source ?? "manual",
         );
     }
+  }
+
+  replaceSyncedModels(providerId: string, models: Array<{ id: string; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>): number {
+    const kept = new Set(models.map((model) => model.id));
+    return this.db.transaction(() => {
+      for (const model of models) {
+        this.upsertModel(providerId, model.id, {
+          contextLength: model.contextLength,
+          maxOutputTokens: model.maxOutputTokens,
+          capabilities: model.capabilities,
+          source: "sync",
+        });
+      }
+      let pruned = 0;
+      for (const existing of this.listModels(providerId)) {
+        if (existing.source === "sync" && !kept.has(existing.model_id)) {
+          this.removeModel(providerId, existing.model_id);
+          pruned++;
+        }
+      }
+      return pruned;
+    })();
   }
 
   removeModel(providerId: string, modelId: string) {

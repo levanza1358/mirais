@@ -2,9 +2,14 @@ import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import { AliasesRepo, CombosRepo } from "../store/repos/routing";
 import { KeysRepo } from "../store/repos/keys";
+import { MemoryRepo } from "../store/repos/memory";
 import { aliasCreateSchema, comboCreateSchema, comboUpdateSchema, keyCreateSchema, keyUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { log } from "../utils/logger";
+import { ProvidersRepo } from "../store/repos/providers";
+import { SettingsRepo } from "../store/repos/settings";
+import { normalizeRoutingPolicy, Router } from "../proxy/router";
+import type { RoutingPolicy } from "../shared/types";
 
 export function aliasRoutes(db: Database) {
   const repo = new AliasesRepo(db);
@@ -24,27 +29,63 @@ export function aliasRoutes(db: Database) {
 
 export function comboRoutes(db: Database) {
   const repo = new CombosRepo(db);
+  const router = new Router(new ProvidersRepo(db), new AliasesRepo(db), repo);
+  const settings = new SettingsRepo(db);
   return new Elysia({ prefix: "/api/combos" })
     .get("/", () => repo.list())
     .post("/", ({ body }) => {
       const parsed = comboCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       if (repo.getByName(parsed.data.name)) throw new AdminError(409, "Combo already exists");
-      const c = repo.create(parsed.data.name, parsed.data.chain, parsed.data.strategy);
-      log.info("combo created", { name: c.name, entries: parsed.data.chain.length });
-      return c;
+      const combo = repo.create(parsed.data.name, parsed.data.chain, parsed.data.strategy);
+      log.info("combo created", { name: combo.name, entries: parsed.data.chain.length });
+      return combo;
     })
     .patch("/:id", ({ params, body }) => {
       const parsed = comboUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const c = repo.update(params.id, parsed.data);
-      if (!c) throw new AdminError(404, "Combo not found");
-      return c;
+      const combo = repo.update(params.id, parsed.data);
+      if (!combo) throw new AdminError(404, "Combo not found");
+      return combo;
+    })
+    .post("/:id/test", ({ params }) => {
+      const combo = repo.get(params.id);
+      if (!combo) throw new AdminError(404, "Combo not found");
+      const policy = normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+      try {
+        const route = router.resolveWithPolicy(`combo:${combo.name}`, policy);
+        return {
+          combo: combo.name,
+          requested_model: `combo:${combo.name}`,
+          candidates: route.candidates.map((candidate, index) => ({
+            position: index,
+            provider: candidate.provider.name,
+            model: candidate.modelId,
+            available_accounts: candidate.accounts.length,
+            healthy_accounts: candidate.accounts.filter((account) => account.last_warmup_status === "healthy").length,
+          })),
+        };
+      } catch (error) {
+        throw new AdminError(error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 400,
+          error instanceof Error ? error.message : "Combo cannot be resolved");
+      }
     })
     .delete("/:id", ({ params }) => {
       repo.remove(params.id);
       return { ok: true };
     });
+}
+
+export function memoryRoutes(db: Database) {
+  const repo = new MemoryRepo(db);
+  return new Elysia({ prefix: "/api/admin/memory" })
+    .get("/", () => repo.list())
+    .delete("/:id", ({ params }) => {
+      repo.remove(params.id);
+      return { ok: true };
+    })
+    .post("/clear", () => ({ removed: repo.clearAll() }))
+    .get("/stats", () => repo.stats());
 }
 
 export function keyRoutes(db: Database) {
@@ -58,22 +99,21 @@ export function keyRoutes(db: Database) {
       try {
         created = repo.create(parsed.data);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unable to create key";
-        throw new AdminError(409, message);
+        throw new AdminError(409, error instanceof Error ? error.message : "Unable to create key");
       }
       const { record, plaintext } = created;
       log.info("gateway key created", { label: record.label });
       set.status = 201;
       const { key_hash, ...rest } = record;
       void key_hash;
-      return { ...rest, plaintext }; // plaintext shown exactly once
+      return { ...rest, plaintext };
     })
     .patch("/:id", ({ params, body }) => {
       const parsed = keyUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const rec = repo.update(params.id, parsed.data);
-      if (!rec) throw new AdminError(404, "Key not found");
-      const { key_hash, ...rest } = rec;
+      const record = repo.update(params.id, parsed.data);
+      if (!record) throw new AdminError(404, "Key not found");
+      const { key_hash, ...rest } = record;
       void key_hash;
       return rest;
     })

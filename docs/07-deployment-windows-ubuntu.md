@@ -36,6 +36,11 @@ mirais start
 mirais autostart on
 ```
 
+The Windows installer automatically opens a UAC prompt and relaunches itself
+with administrator access. Administrator access is used to install the global
+`mirais` command in `C:\Windows`; no manually elevated PowerShell window is
+required.
+
 ### Manual path
 
 ```bash
@@ -90,6 +95,10 @@ mirais doctor       # diagnose and repair safe installation issues
 mirais doctor --fix # run the full repair flow
 mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry
 mirais expose off  # switch back to localhost-only; restart required
+mirais gc          # remove expired memory sessions
+mirais memory list
+mirais memory stats
+mirais memory clear [session-id]  # omit id to clear all sessions
 ```
 (Equivalents: `bun run mirais start`, `bun run svc:start|svc:stop|svc:restart|svc:status`.)
 

@@ -75,7 +75,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 - ✅ fresh-machine test: Windows 11 (bun install → dev) verified; Ubuntu Server 24.04 (docker compose up → curl completion) — pending manual run
 
 ## Post-v1 Backlog (not in initial build)
-- `/v1/responses` full parity, Gemini native translation
+- OpenAI-hosted platform resources beyond the implemented stateless Responses gateway (persistent response/conversation resources and hosted tools), Gemini native translation
 - Parallel combo strategy ("fusion": race + judge)
 - OAuth providers (Claude Code/Codex-style token import + refresh)
 - SSE realtime dashboard (replace polling)

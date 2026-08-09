@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, GitBranch, ChevronRight, X } from "lucide-react";
-import { combos, providers, type Combo } from "../api";
-import { Button, Card, Modal, Input, Select, Badge, EmptyState, ConfirmModal, toast } from "../components/ui";
+import { Plus, Trash2, GitBranch, ChevronRight, X, Play } from "lucide-react";
+import { combos, providers, type Combo, type ComboDiagnostic } from "../api";
+import { Button, Card, Modal, Input, Select, Badge, EmptyState, ConfirmModal, Skeleton, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 // Labels show the full provider/model id (no alias shortening).
 
@@ -10,6 +10,7 @@ export default function Combos() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Combo | "new" | null>(null);
   const [deleting, setDeleting] = useState<Combo | null>(null);
+  const [diagnostic, setDiagnostic] = useState<ComboDiagnostic | null>(null);
 
   const list = useQuery({ queryKey: ["combos"], queryFn: combos.list });
   const provs = useQuery({ queryKey: ["providers"], queryFn: providers.list });
@@ -18,6 +19,11 @@ export default function Combos() {
   const del = useMutation({
     mutationFn: (id: string) => combos.remove(id),
     onSuccess: () => { invalidate(); setDeleting(null); toast("Combo deleted"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+  const testCombo = useMutation({
+    mutationFn: (id: string) => combos.test(id),
+    onSuccess: setDiagnostic,
     onError: (e) => toast(e.message, "error"),
   });
 
@@ -35,7 +41,9 @@ export default function Combos() {
         </Button>
       </PageHeader>
 
-      {list.isLoading ? null : (list.data ?? []).length === 0 ? (
+      {list.isLoading || provs.isLoading ? <div className="grid gap-4 md:grid-cols-2"><Skeleton className="h-32" /><Skeleton className="h-32" /></div>
+      : list.isError || provs.isError ? <Card><p className="text-sm text-danger">Failed to load combos or provider models.</p></Card>
+      : (list.data ?? []).length === 0 ? (
         <Card>
           <EmptyState
             icon={<GitBranch size={32} />}
@@ -57,6 +65,7 @@ export default function Combos() {
                 <h3 className="font-medium">{c.name}</h3>
                 <div className="flex items-center gap-1">
                   <Badge tone="accent">{c.strategy}</Badge>
+                  <Button variant="ghost" size="sm" onClick={() => testCombo.mutate(c.id)} loading={testCombo.isPending && testCombo.variables === c.id} aria-label="Test resolution"><Play size={14} /> Test</Button>
                   <Button variant="ghost" size="sm" onClick={() => setEditing(c)} aria-label="Edit">Edit</Button>
                   <Button variant="ghost" size="sm" onClick={() => setDeleting(c)} aria-label="Delete">
                     <Trash2 size={14} className="text-danger" />
@@ -96,6 +105,15 @@ export default function Combos() {
         danger
         loading={del.isPending}
       />
+      {diagnostic && <Modal open onClose={() => setDiagnostic(null)} title={`Resolution: ${diagnostic.combo}`}>
+        <p className="mb-3 text-xs text-text-muted">Requested model: <code>{diagnostic.requested_model}</code></p>
+        <div className="space-y-2">
+          {diagnostic.candidates.map((candidate) => <div key={`${candidate.position}-${candidate.provider}-${candidate.model}`} className="rounded-lg bg-bg-base/60 p-3 text-sm">
+            <div className="font-mono">{candidate.position + 1}. {candidate.provider}/{candidate.model}</div>
+            <div className="mt-1 text-xs text-text-muted">{candidate.healthy_accounts} healthy / {candidate.available_accounts} available accounts</div>
+          </div>)}
+        </div>
+      </Modal>}
     </div>
   );
 }

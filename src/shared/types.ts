@@ -38,6 +38,7 @@ export interface ToolDef {
     name: string;
     description?: string;
     parameters?: Record<string, unknown>;
+    strict?: boolean;
   };
 }
 
@@ -75,6 +76,9 @@ export interface CanonicalRequest {
   tools?: ToolDef[];
   tool_choice?: unknown;
   response_format?: unknown;
+  parallel_tool_calls?: boolean;
+  service_tier?: string;
+  stream_options?: { include_usage?: boolean };
   /** Universal reasoning/thinking configuration. */
   reasoning?: ReasoningSpec;
 }
@@ -167,6 +171,7 @@ export interface ProviderModel {
   context_length: number | null;
   max_output_tokens: number | null;
   capabilities: string | null;
+  source: "manual" | "sync";
 }
 
 export interface Alias {

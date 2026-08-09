@@ -54,6 +54,7 @@ export default function Settings() {
         <AppearanceSection />
         <ModelSyncSection />
         <TokenSaverSection />
+        <MemorySection />
         <BackupSection />
         <div className="lg:col-span-2">
           <DatabaseSection />
@@ -62,6 +63,29 @@ export default function Settings() {
       </div>
     </div>
   );
+}
+
+function MemorySection() {
+  const qc = useQueryClient();
+  const query = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const [memory, setMemory] = useState({ enabled: false, ttlDays: 30, maxMessages: 40 });
+  useEffect(() => { if (query.data?.memory) setMemory(query.data.memory); }, [query.data]);
+  const save = useMutation({
+    mutationFn: () => settings.update({ memory }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Memory settings saved"); },
+    onError: (error) => toast(error.message, "error"),
+  });
+  return <Card>
+    <div className="mb-4 flex items-center justify-between">
+      <div><h3 className="text-sm font-medium">Conversation memory</h3><p className="mt-0.5 text-xs text-text-muted">Opt-in continuity for clients sending X-Mirais-Session-Id. Sessions are isolated per gateway key.</p></div>
+      <Switch checked={memory.enabled} onChange={(enabled) => setMemory({ ...memory, enabled })} aria-label="Enable conversation memory" />
+    </div>
+    <div className={`grid gap-3 sm:grid-cols-2 ${memory.enabled ? "" : "pointer-events-none opacity-50"}`}>
+      <div><label className="mb-1 block text-xs text-text-muted">Retention days</label><Input type="number" min={1} max={365} value={memory.ttlDays} onChange={(event) => setMemory({ ...memory, ttlDays: Number(event.target.value) })} /></div>
+      <div><label className="mb-1 block text-xs text-text-muted">Maximum messages per session</label><Input type="number" min={2} max={200} value={memory.maxMessages} onChange={(event) => setMemory({ ...memory, maxMessages: Number(event.target.value) })} /></div>
+    </div>
+    <div className="mt-3 flex justify-end"><Button onClick={() => save.mutate()} loading={save.isPending}>Save memory settings</Button></div>
+  </Card>;
 }
 
 function DatabaseSection() {
@@ -313,7 +337,7 @@ function TokenSaverSection() {
   const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
   const [ts, setTs] = useState<TokenSaverSettings>({
     enabled: false,
-    rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
+    rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200, maxToolOutputChars: 80000, collapseWhitespace: true, deduplicateToolOutputs: true, keepRecentToolResults: 8, gitStatus: true, findTree: true, buildLogs: true },
   });
 
   useEffect(() => {
@@ -351,6 +375,11 @@ function TokenSaverSection() {
           ["gitDiff", "Compress git diff output"],
           ["grep", "Compress grep/search output"],
           ["ls", "Compress directory listings"],
+          ["collapseWhitespace", "Collapse redundant whitespace"],
+          ["deduplicateToolOutputs", "Omit duplicate tool outputs"],
+          ["gitStatus", "Compress git status/log output"],
+          ["findTree", "Compress find/tree output"],
+          ["buildLogs", "Deduplicate repetitive build logs"],
         ] as const).map(([k, label]) => (
           <label key={k} className="flex items-center justify-between text-xs">
             <span>{label}</span>
@@ -362,10 +391,18 @@ function TokenSaverSection() {
           <Input
             type="number"
             min={10}
-            max={5000}
+            max={2000}
             value={ts.rules.longOutputMaxLines}
             onChange={(e) => setRule("longOutputMaxLines", Number(e.target.value))}
           />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Recent tool results kept in full</label>
+          <Input type="number" min={0} max={100} value={ts.rules.keepRecentToolResults ?? 8} onChange={(e) => setRule("keepRecentToolResults", Number(e.target.value))} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Maximum characters per tool result</label>
+          <Input type="number" min={1000} max={1000000} value={ts.rules.maxToolOutputChars ?? 80000} onChange={(e) => setRule("maxToolOutputChars", Number(e.target.value))} />
         </div>
         <div className="flex justify-end">
           <Button type="submit" loading={save.isPending}>Save</Button>

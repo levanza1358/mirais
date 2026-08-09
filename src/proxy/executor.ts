@@ -168,9 +168,10 @@ export async function executeRequest(
   const fallbackPlan = plan.filter(({ account }) => account.last_warmup_status !== "healthy");
   const orderedPlan = preferredPlan.length ? [...preferredPlan, ...fallbackPlan] : plan;
 
-  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, Math.max(MAX_ATTEMPTS, preferredPlan.length || 0), orderedPlan.length);
+  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, orderedPlan.length);
   for (let attemptNo = 0; attemptNo < maxAttempts; attemptNo++) {
     const { candidate, account } = orderedPlan[attemptNo]!;
+    const effectiveReq = clampMaxTokens(req, candidate, providersRepo);
     const started = Date.now();
     const format = upstreamFormat(candidate.provider);
     const base = baseUrlFor(candidate.provider);
@@ -183,7 +184,7 @@ export async function executeRequest(
         if (!providersRepo) throw new GatewayError(500, "server_error", "OAuth account requires a providers repo in the executor");
         const accessToken = await ensureFreshToken(providersRepo, account);
         if (req.stream) {
-          const result = await openCodexStream(req, candidate, account, accessToken, ctx.signal);
+          const result = await openCodexStream(effectiveReq, candidate, account, accessToken, ctx.signal);
           markSuccess(cdKey);
           attempts.push({
             provider: candidate.provider.name,
@@ -195,7 +196,7 @@ export async function executeRequest(
           });
           return { kind: "stream", stream: result.stream, candidate, accountLabel: account.label, attempts, usagePromise: result.usagePromise };
         }
-        const response = await callCodex(req, candidate, account, accessToken, ctx.signal);
+        const response = await callCodex(effectiveReq, candidate, account, accessToken, ctx.signal);
         markSuccess(cdKey);
         attempts.push({
           provider: candidate.provider.name,
@@ -210,7 +211,7 @@ export async function executeRequest(
       }
 
       if (req.stream) {
-        const result = await openUpstreamStream(req, candidate, account.api_key, base, format, ctx.signal);
+        const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
         markSuccess(cdKey);
         attempts.push({
           provider: candidate.provider.name,
@@ -231,7 +232,7 @@ export async function executeRequest(
         };
       }
 
-      const result = await callUpstream(req, candidate, account.api_key, base, format, ctx.signal);
+      const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
       markSuccess(cdKey);
       attempts.push({
         provider: candidate.provider.name,
@@ -310,7 +311,7 @@ async function callUpstream(
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
   if (isCodeBuddyProvider(candidate.provider.type)) {
-    const forced = withRequiredSystemMessage(clampMaxTokens(req, candidate.modelId));
+    const forced = withRequiredSystemMessage(req);
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
@@ -343,7 +344,7 @@ async function callUpstream(
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(toOpenAiBody({ ...clampMaxTokens(req, candidate.modelId), stream: false }, candidate.modelId)),
+    body: JSON.stringify(toOpenAiBody({ ...req, stream: false }, candidate.modelId)),
     signal: combined,
   });
   if (!res.ok) throw await upstreamError(res);
@@ -353,11 +354,12 @@ async function callUpstream(
 /** Cap max_tokens at the model's documented output limit (never hardcoded per
  * account — it follows the model's own spec). Leaves the request untouched
  * when no limit is known or the client didn't set max_tokens. */
-function clampMaxTokens(req: CanonicalRequest, modelId: string): CanonicalRequest {
+export function clampMaxTokens(req: CanonicalRequest, candidate: RouteCandidate, providersRepo?: ProvidersRepo): CanonicalRequest {
   if (req.max_tokens == null) return req;
-  const cap = metaForModel(modelId)?.maxOutputTokens;
+  const cap = providersRepo?.getProviderModel(candidate.provider.id, candidate.modelId)?.max_output_tokens
+    ?? metaForModel(candidate.modelId)?.maxOutputTokens;
   if (!cap || req.max_tokens <= cap) return req;
-  log.debug("clamping max_tokens to model limit", { model: modelId, requested: req.max_tokens, cap });
+  log.debug("clamping max_tokens to model limit", { provider: candidate.provider.name, model: candidate.modelId, requested: req.max_tokens, cap });
   return { ...req, max_tokens: cap };
 }
 
@@ -374,7 +376,7 @@ async function openUpstreamStream(
 
   let res: Response;
   if (isCodeBuddyProvider(candidate.provider.type)) {
-    const forced = withRequiredSystemMessage(clampMaxTokens(req, candidate.modelId));
+    const forced = withRequiredSystemMessage(req);
     res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
@@ -402,7 +404,7 @@ async function openUpstreamStream(
         Authorization: `Bearer ${apiKey}`,
         accept: "text/event-stream",
       },
-      body: JSON.stringify(toOpenAiBody({ ...clampMaxTokens(req, candidate.modelId), stream: true }, candidate.modelId)),
+      body: JSON.stringify(toOpenAiBody({ ...req, stream: true }, candidate.modelId)),
       signal: combined,
     });
   }

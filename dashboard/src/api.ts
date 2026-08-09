@@ -99,6 +99,12 @@ export interface Combo {
   entries: ComboEntry[];
 }
 
+export interface ComboDiagnostic {
+  combo: string;
+  requested_model: string;
+  candidates: Array<{ position: number; provider: string; model: string; available_accounts: number; healthy_accounts: number }>;
+}
+
 export interface GatewayKey {
   id: string;
   label: string;
@@ -167,7 +173,7 @@ export interface TimeseriesPoint {
 
 export interface TokenSaverSettings {
   enabled: boolean;
-  rules: { gitDiff: boolean; grep: boolean; ls: boolean; longOutputMaxLines: number };
+  rules: { gitDiff: boolean; grep: boolean; ls: boolean; longOutputMaxLines: number; maxToolOutputChars?: number; collapseWhitespace?: boolean; deduplicateToolOutputs?: boolean; keepRecentToolResults?: number; gitStatus?: boolean; findTree?: boolean; buildLogs?: boolean };
 }
 
 export const healthInfo = {
@@ -184,6 +190,7 @@ export interface HealthInfo {
 
 export interface Settings {
   token_saver: TokenSaverSettings | null;
+  memory?: { enabled: boolean; ttlDays: number; maxMessages: number };
   terse_mode: unknown;
   log_retention_days: number;
   session_remember_default: boolean;
@@ -197,6 +204,7 @@ export interface Settings {
 // ── providers ──
 export const providers = {
   list: () => req<Provider[]>("/api/providers"),
+  models: (id: string) => req<ProviderModel[]>(`/api/providers/${id}/models`),
   create: (input: { name: string; type: string; baseUrl?: string; priority?: number }) =>
     req<Provider>("/api/providers", { method: "POST", body: JSON.stringify(input) }),
   update: (id: string, patch: Partial<{ name: string; baseUrl: string | null; enabled: boolean; priority: number }>) =>
@@ -270,6 +278,7 @@ export const combos = {
   update: (id: string, patch: { name?: string; chain?: string[] }) =>
     req<Combo>(`/api/combos/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id: string) => req<{ ok: boolean }>(`/api/combos/${id}`, { method: "DELETE" }),
+  test: (id: string) => req<ComboDiagnostic>(`/api/combos/${id}/test`, { method: "POST" }),
 };
 
 // ── keys ──
@@ -334,6 +343,21 @@ export const logs = {
 export const settings = {
   get: () => req<Settings>("/api/settings"),
   update: (patch: unknown) => req<{ ok: boolean }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+};
+
+export interface MemorySession {
+  id: string;
+  count: number;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+}
+
+export const memory = {
+  list: () => req<MemorySession[]>("/api/admin/memory"),
+  stats: () => req<{ sessions: number; messages: number }>("/api/admin/memory/stats"),
+  remove: (id: string) => req<{ ok: boolean }>(`/api/admin/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  clear: () => req<{ removed: number }>("/api/admin/memory/clear", { method: "POST" }),
 };
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");

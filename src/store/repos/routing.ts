@@ -37,6 +37,15 @@ export class CombosRepo {
     }));
   }
 
+  get(id: string): (Combo & { entries: ComboEntry[] }) | null {
+    const combo = this.db.query("SELECT * FROM combos WHERE id = ?").get(id) as Combo | null;
+    if (!combo) return null;
+    const entries = this.db
+      .query("SELECT * FROM combo_entries WHERE combo_id = ? ORDER BY position ASC")
+      .all(combo.id) as ComboEntry[];
+    return { ...combo, entries };
+  }
+
   getByName(name: string): (Combo & { entries: ComboEntry[] }) | null {
     const c = this.db.query("SELECT * FROM combos WHERE name = ?").get(name) as Combo | null;
     if (!c) return null;

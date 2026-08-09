@@ -3,7 +3,8 @@ import type { Database } from "bun:sqlite";
 import { ProvidersRepo } from "../store/repos/providers";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
-import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema } from "../shared/schemas";
+import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema, providerModelUpdateSchema, upstreamModelsResponseSchema } from "../shared/schemas";
+import type { z } from "zod";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
 import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage } from "../proxy/codex";
@@ -434,10 +435,17 @@ export function providerRoutes(db: Database) {
       return resetCodexBankedUsage(account, accessToken);
     })
     // ── models ──
+    .get("/:id/models", ({ params }) => {
+      if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
+      return repo.listModels(params.id);
+    })
     .put("/:id/models/:modelId", ({ params, body }) => {
       if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
-      const patch = (body ?? {}) as Partial<{ displayName: string; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>;
-      repo.upsertModel(params.id, decodeURIComponent(params.modelId), patch);
+      const parsed = providerModelUpdateSchema.safeParse(body ?? {});
+      if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid model payload");
+      const modelId = decodeURIComponent(params.modelId).trim();
+      if (!modelId || modelId.length > 1024) throw new AdminError(400, "Invalid model ID");
+      repo.upsertModel(params.id, modelId, parsed.data);
       return { ok: true };
     })
     .delete("/:id/models/:modelId", ({ params }) => {
@@ -703,19 +711,21 @@ export function providerRoutes(db: Database) {
 
       if (isCodeBuddyProviderType(p.type)) {
         const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
-        const kept = (CODEBUDDY_MODELS[p.type] ?? [])
-          .filter((id) => keepModel(id, "all"))
+        const syncedModels = (CODEBUDDY_MODELS[p.type] ?? [])
+          .filter((id) => keepModel(id, mode))
           .map((id) => {
             const meta = resolveModelMeta(id, { contextLength: null, maxOutputTokens: null, capabilities: null });
-            repo.upsertModel(p.id, id, {
+            return {
+              id,
               contextLength: meta?.contextLength ?? null,
               maxOutputTokens: meta?.maxOutputTokens ?? null,
               capabilities: meta?.capabilities ?? null,
-            });
-            return id;
+            };
           });
+        const pruned = repo.replaceSyncedModels(p.id, syncedModels);
+        const kept = syncedModels.map((model) => model.id);
         log.info("codebuddy models synced", { provider: p.name, count: kept.length, mode });
-        return { synced: kept.length, models: kept, mode };
+        return { synced: kept.length, pruned, models: kept, mode };
       }
 
       // OAuth accounts: fetch the live Codex model catalog (same endpoint the
@@ -723,15 +733,11 @@ export function providerRoutes(db: Database) {
       if (isOAuthAccount(account)) {
         const accessToken = await ensureFreshToken(repo, account);
         const models = await fetchCodexModels(account, accessToken);
-        for (const m of models) {
-          repo.upsertModel(p.id, m.id, {
-            contextLength: m.contextLength,
-            maxOutputTokens: m.maxOutputTokens,
-            capabilities: m.capabilities,
-          });
-        }
-        log.info("codex models synced", { provider: p.name, count: models.length });
-        return { synced: models.length, models: models.map((m) => m.id) };
+        const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
+        const kept = models.filter((model) => keepModel(model.id, mode));
+        const pruned = repo.replaceSyncedModels(p.id, kept);
+        log.info("codex models synced", { provider: p.name, count: kept.length, pruned, mode });
+        return { synced: kept.length, pruned, mode, models: kept.map((m) => m.id) };
       }
 
       const base = baseUrlFor(p);
@@ -740,16 +746,7 @@ export function providerRoutes(db: Database) {
       // is offered (OpenAI-style fields + OpenRouter-style top_provider /
       // supported_parameters) so the dashboard can show context length, max
       // output tokens, and capability badges.
-      interface UpstreamModel {
-        id: string;
-        context_length?: number;
-        max_tokens?: number;
-        max_output_tokens?: number;
-        max_completion_tokens?: number;
-        top_provider?: { context_length?: number; max_completion_tokens?: number };
-        supported_parameters?: string[];
-        capabilities?: Record<string, boolean>;
-      }
+      type UpstreamModel = z.infer<typeof upstreamModelsResponseSchema>["data"][number];
 
       function capsOf(m: UpstreamModel): string[] {
         const caps = new Set<string>();
@@ -776,16 +773,18 @@ export function providerRoutes(db: Database) {
           signal: AbortSignal.timeout(20_000),
         });
         if (!res.ok) throw new AdminError(502, `Upstream returned HTTP ${res.status}`);
-        const data = (await res.json()) as { data?: UpstreamModel[] };
-        entries = data.data ?? [];
+        const data = upstreamModelsResponseSchema.safeParse(await res.json());
+        if (!data.success) throw new AdminError(502, "Upstream returned an invalid model catalog");
+        entries = data.data.data;
       } else {
         const res = await fetch(`${base}/models`, {
           headers: { Authorization: `Bearer ${account.api_key}` },
           signal: AbortSignal.timeout(20_000),
         });
         if (!res.ok) throw new AdminError(502, `Upstream returned HTTP ${res.status}`);
-        const data = (await res.json()) as { data?: UpstreamModel[] };
-        entries = data.data ?? [];
+        const data = upstreamModelsResponseSchema.safeParse(await res.json());
+        if (!data.success) throw new AdminError(502, "Upstream returned an invalid model catalog");
+        entries = data.data.data;
       }
 
       // Filter which models to keep. Mode is a global setting
@@ -793,7 +792,7 @@ export function providerRoutes(db: Database) {
       const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
 
       const kept: string[] = [];
-      const keptSet = new Set<string>();
+      const syncedModels: Array<{ id: string; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }> = [];
       let dropped = 0;
       for (const m of entries) {
         if (!m.id) continue;
@@ -802,7 +801,6 @@ export function providerRoutes(db: Database) {
           continue;
         }
         kept.push(m.id);
-        keptSet.add(m.id);
         // Upstream metadata wins; fall back to the per-model catalog so
         // upstreams that return no metadata (e.g. BlackBox) still get accurate
         // context length / max output / capabilities for each model.
@@ -811,7 +809,7 @@ export function providerRoutes(db: Database) {
           maxOutputTokens: m.max_output_tokens ?? m.max_completion_tokens ?? m.top_provider?.max_completion_tokens ?? m.max_tokens ?? null,
           capabilities: capsOf(m),
         });
-        repo.upsertModel(p.id, m.id, {
+        syncedModels.push({ id: m.id,
           contextLength: meta?.contextLength ?? null,
           maxOutputTokens: meta?.maxOutputTokens ?? null,
           capabilities: meta?.capabilities ?? null,
@@ -822,12 +820,7 @@ export function providerRoutes(db: Database) {
       // catalog stays clean (only when we actually got a non-empty upstream list).
       let pruned = 0;
       if (entries.length > 0) {
-        for (const existing of repo.listModels(p.id)) {
-          if (!keepModel(existing.model_id, mode)) {
-            repo.removeModel(p.id, existing.model_id);
-            pruned++;
-          }
-        }
+        pruned = repo.replaceSyncedModels(p.id, syncedModels);
       }
 
       log.info("models synced", { provider: p.name, kept: kept.length, dropped, pruned, mode });

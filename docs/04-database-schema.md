@@ -59,6 +59,8 @@ CREATE TABLE provider_models (
   context_length    INTEGER,                 -- e.g. 128000
   max_output_tokens INTEGER,
   capabilities      TEXT,                    -- JSON array, e.g. ["reasoning","vision","pdf","tools"]
+  -- 0014_provider_model_source: sync pruning never removes manual models
+  source            TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'sync')),
   UNIQUE(provider_id, model_id)
 );
 
@@ -84,6 +86,15 @@ CREATE TABLE combo_entries (
   position   INTEGER NOT NULL,               -- 0-based order
   target     TEXT NOT NULL,                  -- "provider/model" or model id or alias
   UNIQUE(combo_id, position)
+);
+
+-- 0015_memory_sessions: optional bounded, expiring conversation continuity
+CREATE TABLE memory_sessions (
+  id TEXT PRIMARY KEY,                         -- gateway-key id + explicit session id
+  messages TEXT NOT NULL DEFAULT '[]',         -- canonical message JSON
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL
 );
 
 -- ── Gateway API keys (hashed) ─────────────────────────────

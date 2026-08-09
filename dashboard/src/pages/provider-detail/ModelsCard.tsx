@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
 import { type Provider, providers } from "../../api";
 import { Button, Card, ConfirmModal, Modal, toast } from "../../components/ui";
@@ -34,9 +34,12 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
   const [testAllPrompt, setTestAllPrompt] = useState(false);
   const [addCustomOpen, setAddCustomOpen] = useState(false);
   const [deleteAllPrompt, setDeleteAllPrompt] = useState(false);
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["providers"] });
-
-  const models = p.models ?? [];
+  const modelsQuery = useQuery({ queryKey: ["providers", p.id, "models"], queryFn: () => providers.models(p.id) });
+  const invalidate = () => Promise.all([
+    qc.invalidateQueries({ queryKey: ["providers"] }),
+    qc.invalidateQueries({ queryKey: ["providers", p.id, "models"] }),
+  ]);
+  const models = modelsQuery.data ?? [];
 
   async function testOne(modelId: string): Promise<ModelTestResult> {
     setResults((r) => ({ ...r, [modelId]: { ok: false, latency_ms: 0, testing: true } }));
@@ -159,7 +162,9 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
         </div>
       </div>
 
-      {models.length === 0 ? (
+      {modelsQuery.isError ? <p className="py-4 text-center text-xs text-danger">Failed to load provider models.</p> : modelsQuery.isLoading ? (
+        <p className="py-4 text-center text-xs text-text-muted">Loading models…</p>
+      ) : models.length === 0 ? (
         <p className="py-4 text-center text-xs text-text-muted">{fetchModels.isPending ? "Fetching models from the provider…" : "No models registered. Press Fetch models to pull the full list from the provider."}</p>
       ) : (
         <div className="flex flex-wrap gap-1.5">

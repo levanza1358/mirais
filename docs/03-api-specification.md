@@ -47,13 +47,21 @@ Clients can control reasoning/thinking without speaking provider-specific dialec
 When enabled, the executor strips `temperature`/`top_p` for Anthropic upstreams as required by their API.
 
 ### POST `/v1/responses`
-OpenAI Responses API shape. Translated to canonical and routed the same way. Streaming supported.
+Stateless OpenAI Responses compatibility. Supports string/easy-message input, instructions, image URLs, client-executed function calls and outputs, strict function schemas, reasoning effort, structured JSON output, `max_output_tokens`, parallel function-call SSE, and usage events. `store` and `background` may be omitted or `false`; persistent response IDs, conversations, prompts, hosted web/file/code/computer/MCP tools, and retrieval/delete/cancel-by-ID resources are rejected rather than silently ignored. Disconnecting the HTTP request still cancels the active upstream operation.
+
+Responses/OpenAI endpoints return `x-request-id`. `/v1/messages` accepts either `Authorization: Bearer <gateway-key>` or the Anthropic SDK's `x-api-key: <gateway-key>` and returns `request-id` plus `x-request-id`. Sampling, service-tier, logprob, and strict-schema behavior can remain provider-dependent when a request is translated across API dialects.
+
+Optional memory headers (generation endpoints): `X-Mirais-Session-Id: <opaque-id>` enables a key-scoped session when memory is enabled in settings; `X-Mirais-Memory-Clear: 1` clears that session before processing. `X-Mirais-Memory-Mode: append|replace` controls whether stored history is prepended (`append`, default) or the current request replaces stored history after success (`replace`). Full-history clients should use `replace` to avoid duplicate history. Memory is disabled by default and never inferred from request contents.
+
+Memory administration: `GET /api/admin/memory`, `GET /api/admin/memory/stats`, `DELETE /api/admin/memory/:id`, and `POST /api/admin/memory/clear`. These passwordless dashboard endpoints expose session metadata and must only be reachable through the same trusted-network controls as the dashboard.
+
+`GET /api/health` includes bounded memory counts and process RSS/heap usage. It never includes conversation content.
 
 ### POST `/v1/messages`
 Anthropic Messages shape (`model`, `max_tokens`, `messages`, optional `system`, `tools`, `stream`). Response returned in Anthropic format.
 
 ### GET `/v1/models`
-Unified catalog in OpenAI list format: every enabled model from every enabled provider + aliases + combos (`id`, `object: "model"`, `owned_by`).
+Unified catalog in OpenAI list format: policy-allowed enabled models from enabled providers plus aliases and combos that currently resolve (`id`, `object: "model"`, `owned_by`). Key model ACLs are applied to the exposed catalog ID.
 
 ### GET `/health`
 `200 { "status": "ok", "uptime": 12345, "version": "0.1.0" }` — no auth.
@@ -134,7 +142,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET / POST | `/api/aliases` | List / create `{ alias, target }` (`fast` → `openrouter/auto`). **Target must use the qualified `provider/model` slash form** (same as the router) — the dashboard builds it as `` `${providerName}/${modelId}` `` |
+| GET / POST | `/api/aliases` | List / create `{ alias, target }` (`fast` → `openrouter/auto`). Targets accept the same forms as client model requests; qualified `provider/model` is recommended to avoid ambiguity. |
 | DELETE | `/api/aliases/:id` | Remove |
 
 ### Combos (fallback chains)

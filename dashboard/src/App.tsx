@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from "react-router-dom";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { music as musicApiClient, settings as settingsApi } from "./api";
 import { Layout } from "./components/Layout";
 import { ToastHost } from "./components/ui";
@@ -7,19 +7,21 @@ import CommandPalette from "./components/CommandPalette";
 import { MusicPlayerProvider } from "./hooks/useMusicPlayer";
 import MusicMiniPlayer from "./components/MusicMiniPlayer";
 import Landing from "./pages/Landing";
-import Overview from "./pages/Overview";
-import Providers from "./pages/Providers";
-import ProviderDetail from "./pages/ProviderDetail";
-import Combos from "./pages/Combos";
-import Keys from "./pages/Keys";
-import Logs from "./pages/Logs";
-import WarmupLogsRedirect from "./pages/WarmupLogs";
-import TestLogsRedirect from "./pages/TestLogs";
-import UsageLog from "./pages/UsageLog";
-import Settings from "./pages/Settings";
-import Integrations from "./pages/Integrations";
-import Proxy from "./pages/Proxy";
-import Music from "./pages/Music";
+
+const Overview = lazy(() => import("./pages/Overview"));
+const Providers = lazy(() => import("./pages/Providers"));
+const ProviderDetail = lazy(() => import("./pages/ProviderDetail"));
+const Combos = lazy(() => import("./pages/Combos"));
+const Keys = lazy(() => import("./pages/Keys"));
+const Logs = lazy(() => import("./pages/Logs"));
+const WarmupLogsRedirect = lazy(() => import("./pages/WarmupLogs"));
+const TestLogsRedirect = lazy(() => import("./pages/TestLogs"));
+const UsageLog = lazy(() => import("./pages/UsageLog"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Integrations = lazy(() => import("./pages/Integrations"));
+const Proxy = lazy(() => import("./pages/Proxy"));
+const Music = lazy(() => import("./pages/Music"));
+const Memory = lazy(() => import("./pages/Memory"));
 
 const ACCENT_STORAGE_KEY = "mirais.ui.accent";
 const ACCENT_DEFAULT = "#7c5cff";
@@ -91,22 +93,25 @@ export default function App() {
         <Route path="/dashboard/*" element={
           <MusicPlayerProvider streamUrlFor={musicApiClient.streamUrl}>
             <Layout>
-              <Routes>
-                <Route index element={<Overview />} />
-                <Route path="providers" element={<Providers />} />
-                <Route path="providers/:id" element={<ProviderDetail />} />
-                <Route path="combos" element={<Combos />} />
-                <Route path="keys" element={<Keys />} />
-                <Route path="logs" element={<Logs />} />
-                <Route path="warmup-logs" element={<WarmupLogsRedirect />} />
-                <Route path="test-logs" element={<TestLogsRedirect />} />
-                <Route path="usage" element={<UsageLog />} />
-                <Route path="settings" element={<Settings />} />
-                <Route path="integrations" element={<Integrations />} />
-                <Route path="proxies" element={<Proxy />} />
-                <Route path="music" element={<Music />} />
-                <Route path="*" element={<Navigate to="/dashboard" replace />} />
-              </Routes>
+              <Suspense fallback={<div className="p-8 text-sm text-muted">Loading…</div>}>
+                <Routes>
+                  <Route index element={<Overview />} />
+                  <Route path="providers" element={<Providers />} />
+                  <Route path="providers/:id" element={<ProviderDetail />} />
+                  <Route path="combos" element={<Combos />} />
+                  <Route path="keys" element={<Keys />} />
+                  <Route path="logs" element={<Logs />} />
+                  <Route path="warmup-logs" element={<WarmupLogsRedirect />} />
+                  <Route path="test-logs" element={<TestLogsRedirect />} />
+                  <Route path="usage" element={<UsageLog />} />
+                  <Route path="settings" element={<Settings />} />
+                  <Route path="integrations" element={<Integrations />} />
+                  <Route path="proxies" element={<Proxy />} />
+                  <Route path="music" element={<Music />} />
+                  <Route path="memory" element={<Memory />} />
+                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                </Routes>
+              </Suspense>
             </Layout>
             <MusicMiniPlayer />
           </MusicPlayerProvider>

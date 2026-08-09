@@ -66,7 +66,9 @@ sequenceDiagram
     alt key invalid or over limit
         G-->>C: 401 / 429 (OpenAI-style error)
     end
-    G->>G: 2. Token saver: compress tool_result blocks
+    G->>G: 2. Token saver: auto-compact tool results, duplicates, and stale outputs
+    - The deterministic saver follows RTK-style safety: transformations fail open, never replace content with an empty/larger result, preserve recent tool results, hash-mark omitted duplicates, and bound both lines and characters. It runs on the canonical request so OpenAI Chat, Responses, and Anthropic Messages receive identical behavior.
+    - Optional conversation memory is explicit and off by default. Clients opt in with `X-Mirais-Session-Id`; sessions are isolated by gateway-key ID, bounded by message count, expire by TTL, and can be cleared with `X-Mirais-Memory-Clear: 1`. Memory stores conversation messages, so exposed deployments must use the same reverse-proxy/firewall/VPN protections as the passwordless dashboard.
     G->>G: 3. Normalize: parse model → provider candidates<br/>(direct model, alias, or combo)
     G->>G: 4. Translate request → upstream format (if needed)
     loop failover chain (max N attempts)
@@ -139,7 +141,7 @@ Accounts added via **ChatGPT login** (`auth_kind = 'oauth'`) cannot call `api.op
 Each model's **context length**, **max output tokens**, and **capabilities** are stored per model (migration `0002`). They are never hardcoded per account — they follow the model's own spec:
 
 - At **sync**, upstream-provided metadata wins; when the upstream returns none (e.g. BlackBox's `/models` only returns `{ id, object, created }`), [src/proxy/modelMeta.ts](../src/proxy/modelMeta.ts) fills the gap from a catalog keyed by **model-family name pattern** (GPT-5, Claude, Gemini, DeepSeek, Llama, Mistral, Qwen, Grok, GLM, Kimi, Nemotron, …). Image/video-generation models (veo, sora, stable-diffusion, …) have no chat context and stay `null`.
-- At **request time**, the executor **clamps `max_tokens`** to the model's documented output limit (`clampMaxTokens`) so a client can never request more than the model supports — this prevents upstream "max_tokens too large" errors.
+- At **request time**, the executor **clamps `max_tokens`** to the selected provider model's stored output limit (`clampMaxTokens`), falling back to the static model catalog when upstream metadata is unavailable. The clamp runs before OpenAI, Anthropic, CodeBuddy, and Codex dialect conversion, preventing upstream "max_tokens too large" errors.
 
 ## 5. Token Saver
 

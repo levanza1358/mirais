@@ -32,20 +32,11 @@ function loadKey(db: Database, plaintext: string): GatewayKey | null {
   return new KeysRepo(db).getByPlaintextKey(plaintext);
 }
 
-function enabledKeyExists(db: Database): boolean {
-  // Cheap "any enabled key?" probe used by the optional-auth path.
-  const row = db.query("SELECT 1 AS x FROM gateway_keys WHERE enabled = 1 LIMIT 1").get() as { x: number } | null;
-  return row !== null;
-}
-
 export function authenticateGatewayKey(db: Database, authHeader: string | null): GatewayKey {
-  // No header: when auth is opt-out (env MIRAIS_AUTH_REQUIRED=off) OR no
-  // enabled key is configured at all, fall back to the anonymous identity so
-  // a self-hosted loopback listener can still serve traffic. Any provided
-  // header is still validated below — you can't bypass auth by simply
-  // omitting the header when auth is required.
+  // No header is allowed only when auth is explicitly disabled. The absence
+  // of a configured key must never silently make protected routes anonymous.
   if (!authHeader) {
-    if (!config.authRequired || !enabledKeyExists(db)) {
+    if (!config.authRequired) {
       return ANONYMOUS_KEY;
     }
     throw new GatewayError(401, "authentication_error", "Missing Authorization: Bearer <key> header");

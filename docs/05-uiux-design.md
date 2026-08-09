@@ -49,6 +49,8 @@
 
 ## 3. Pages
 
+The **Memory** operations page shows active opt-in sessions, aggregate message counts, expiry metadata, and destructive clear controls with confirmation. It never displays stored conversation bodies.
+
 ### 3.1 Login (`/login`)
 Centered card on a subtle aurora-gradient background: logo mark, "Mirais" wordmark, password field with show/hide eye, "Sign in" button, caps-lock hint, wrong-password shake + inline error, rate-limit countdown after 5 failures. No other chrome. Enter submits.
 
@@ -100,7 +102,7 @@ Header: back link, provider icon tile, name + type badge + disabled badge, "Get 
 - List of combos as cards; each card = vertical chain with numbered steps and connector line.
 - **Editor modal:** name + drag-and-drop sortable list of targets (autocomplete from all enabled models/aliases), remove buttons, "add step".
 - Strategy selector: `sequential` (v1 only; UI hints "parallel/judge — coming soon" disabled).
-- "Test resolution" button → shows ordered provider attempts with live health.
+- "Test resolution" button → performs a dry run (no upstream LLM request) and shows ordered provider/model candidates with healthy versus available account counts.
 - Empty state with sample `never-stop` template one-click create.
 
 ### 3.6 API Keys (`/keys`)

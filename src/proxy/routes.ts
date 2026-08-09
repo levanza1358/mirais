@@ -3,11 +3,11 @@ import type { Database } from "bun:sqlite";
 import { config } from "../config";
 import { authenticateGatewayKey, authorizeModel } from "../auth";
 import { checkRateLimit, acquireSlot, releaseSlot } from "../ratelimit";
-import { Router } from "./router";
+import { normalizeRoutingPolicy, Router } from "./router";
 import { executeRequest, cooldownSnapshot } from "./executor";
 import { applyTokenSaver } from "./saver/rules";
 import type { TokenSaverConfig } from "./saver/compress";
-import { chatCompletionsSchema, anthropicMessagesSchema } from "../shared/schemas";
+import { chatCompletionsSchema, anthropicMessagesSchema, responsesCreateSchema } from "../shared/schemas";
 import { anthropicToOpenaiRequest } from "./translator/anthropic-to-openai";
 import { openaiToAnthropicResponse } from "./translator/openai-to-anthropic";
 import { OpenAIToAnthropicStreamTranslator } from "./translator/stream";
@@ -18,29 +18,64 @@ import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
 import type { CanonicalRequest, CanonicalResponse, RoutingPolicy } from "../shared/types";
 import { log } from "../utils/logger";
+import { canonicalResponseToResponses, chatSseToResponses, responsesRequestToCanonical } from "./translator/responses";
+import { ulid } from "../utils/id";
+import { MemoryRepo } from "../store/repos/memory";
+import type { GatewayKey } from "../shared/types";
 
 export function v1Routes(db: Database) {
   const providersRepo = new ProvidersRepo(db);
   const router = new Router(providersRepo, new AliasesRepo(db), new CombosRepo(db));
   const logs = new LogsRepo(db);
   const settings = new SettingsRepo(db);
-  const defaultRoutingPolicy: RoutingPolicy = {
-    mode: "balanced",
-    preferProviders: [],
-    denyProviders: [],
-    denyModels: [],
-    maxAttempts: 3,
-    respectPriority: true,
-  };
-
+  const memory = new MemoryRepo(db);
   const app = new Elysia({ prefix: "/v1" });
 
+  const memoryContext = (request: Request, key: GatewayKey, req: CanonicalRequest) => {
+    const cfg = settings.getJson<{ enabled: boolean; ttlDays: number; maxMessages: number }>("memory") ?? { enabled: false, ttlDays: 30, maxMessages: 40 };
+    const raw = request.headers.get("x-mirais-session-id");
+    if (!cfg.enabled || !raw) return { req, save: (_message: string) => undefined };
+    if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(raw)) throw new GatewayError(400, "invalid_request_error", "Invalid X-Mirais-Session-Id");
+    const mode = request.headers.get("x-mirais-memory-mode") ?? "append";
+    if (mode !== "append" && mode !== "replace") throw new GatewayError(400, "invalid_request_error", "X-Mirais-Memory-Mode must be append or replace");
+    const id = `${key.id}:${raw}`;
+    if (request.headers.get("x-mirais-memory-clear") === "1") memory.remove(id);
+    const prior = mode === "append" ? memory.get(id) : [];
+    const merged = prior.length ? { ...req, messages: [...prior, ...req.messages] } : req;
+    return {
+      req: merged,
+      save: (assistant: string) => memory.set(id, [...merged.messages, { role: "assistant", content: assistant }], cfg.ttlDays, cfg.maxMessages),
+    };
+  };
+
+  const tokenSaverConfig = (request: Request): TokenSaverConfig => {
+    const configured = settings.getJson<TokenSaverConfig>("token_saver") ?? {
+      enabled: config.tokenSaverDefault,
+      rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
+    };
+    return request.headers.get("x-mirais-token-saver") === "off" ? { ...configured, enabled: false } : configured;
+  };
+
   app.get("/models", ({ request }) => {
-    authenticateGatewayKey(db, request.headers.get("authorization"));
+    const key = authenticateGatewayKey(db, request.headers.get("authorization"));
     const providers = new ProvidersRepo(db);
-    const models = providers.listAllModels().filter((m) => m.enabled);
+    const policy = normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const models = providers.listAllModels().filter((m) => {
+      const provider = providers.get(m.provider_id);
+      const exposedId = provider ? `${provider.name}/${m.model_id}` : m.model_id;
+      try { authorizeModel(key, exposedId); } catch { return false; }
+      return Boolean(m.enabled && provider?.enabled && !policy.denyProviders.includes(provider.name) && !policy.denyModels.includes(m.model_id));
+    });
     const aliases = new AliasesRepo(db).list();
     const combos = new CombosRepo(db).list();
+    const visibleVirtualModel = (id: string): boolean => {
+      try {
+        authorizeModel(key, id);
+        return router.resolveWithPolicy(id, policy).candidates.length > 0;
+      } catch {
+        return false;
+      }
+    };
     return {
       object: "list",
       data: [
@@ -56,13 +91,14 @@ export function v1Routes(db: Database) {
             owned_by: pname,
           };
         }),
-        ...aliases.map((a) => ({ id: a.alias, object: "model", created: 0, owned_by: "mirais-alias" })),
-        ...combos.map((c) => ({ id: c.name, object: "model", created: 0, owned_by: "mirais-combo" })),
+        ...aliases.filter((a) => visibleVirtualModel(a.alias)).map((a) => ({ id: a.alias, object: "model", created: 0, owned_by: "mirais-alias" })),
+        ...combos.filter((c) => visibleVirtualModel(`combo:${c.name}`)).map((c) => ({ id: `combo:${c.name}`, object: "model", created: 0, owned_by: "mirais-combo" })),
       ],
     };
   });
 
   app.post("/chat/completions", async ({ request, set }) => {
+    set.headers["x-request-id"] = `req_${ulid()}`;
     const started = Date.now();
     const key = authenticateGatewayKey(db, request.headers.get("authorization"));
     const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
@@ -81,6 +117,8 @@ export function v1Routes(db: Database) {
     if (req.max_completion_tokens && !req.max_tokens) req.max_tokens = req.max_completion_tokens;
 
     authorizeModel(key, req.model);
+    const chatMemory = memoryContext(request, key, req);
+    req = chatMemory.req;
 
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
@@ -91,10 +129,7 @@ export function v1Routes(db: Database) {
     }
 
     // token saver
-    const saverCfg = settings.getJson<TokenSaverConfig>("token_saver") ?? {
-      enabled: config.tokenSaverDefault,
-      rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
-    };
+    const saverCfg = tokenSaverConfig(request);
     const saver = applyTokenSaver(req, saverCfg);
     req = saver.request;
 
@@ -104,20 +139,24 @@ export function v1Routes(db: Database) {
       req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     }
 
-    const routingPolicy = settings.getJson<RoutingPolicy>("routing_policy") ?? defaultRoutingPolicy;
+    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
+      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
     const route = router.resolveWithPolicy(req.model, routingPolicy);
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
-      const result = await executeRequest(req, route.candidates, {}, providersRepo, routingPolicy);
+      const result = await executeRequest(req, route.candidates, { signal: request.signal }, providersRepo, routingPolicy);
 
       if (result.kind === "stream") {
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
         set.headers["cache-control"] = "no-cache";
         set.headers["connection"] = "keep-alive";
+        set.headers["x-accel-buffering"] = "no";
         const tap = tapOpenAiStream(result.stream);
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([usage, text]) => {
+            if (text) chatMemory.save(text);
             logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
@@ -130,6 +169,8 @@ export function v1Routes(db: Database) {
       logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
+      const assistantText = result.response.choices[0]?.message.content;
+      if (typeof assistantText === "string") chatMemory.save(assistantText);
       return result.response;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
@@ -142,9 +183,71 @@ export function v1Routes(db: Database) {
     }
   });
 
-  app.post("/messages", async ({ request, set }) => {
+  app.post("/responses", async ({ request, set }) => {
+    set.headers["x-request-id"] = `req_${ulid()}`;
     const started = Date.now();
     const key = authenticateGatewayKey(db, request.headers.get("authorization"));
+    let rawBody: unknown;
+    try { rawBody = await request.json(); }
+    catch { throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON"); }
+    const parsed = responsesCreateSchema.safeParse(rawBody);
+    if (!parsed.success) throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+    let req = responsesRequestToCanonical(parsed.data);
+    authorizeModel(key, req.model);
+    const responseMemory = memoryContext(request, key, req);
+    req = responseMemory.req;
+    const rl = checkRateLimit(db, key);
+    if (rl.retryAfterSec !== undefined) throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
+    const saverCfg = tokenSaverConfig(request);
+    const saver = applyTokenSaver(req, saverCfg);
+    req = saver.request;
+    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    if (terse?.enabled) req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
+    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
+      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = router.resolveWithPolicy(req.model, routingPolicy);
+    const logKeyId = key.id === "anonymous" ? null : key.id;
+    if (logKeyId) acquireSlot(logKeyId);
+    try {
+      const result = await executeRequest(req, route.candidates, { signal: request.signal }, providersRepo, routingPolicy);
+      if (result.kind === "stream") {
+        const translated = chatSseToResponses(result.stream, req.model);
+        set.headers["content-type"] = "text/event-stream; charset=utf-8";
+        set.headers["cache-control"] = "no-cache";
+        set.headers["x-accel-buffering"] = "no";
+        Promise.all([result.usagePromise, translated.usagePromise, translated.textPromise])
+          .then(([upstreamUsage, translatedUsage, text]) => {
+            if (text) responseMemory.save(text);
+            logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
+              result.attempts.length, "success", 200, null, started, translatedUsage ?? upstreamUsage, saver.tokensSaved, result.attempts, undefined, "request");
+          })
+          .catch(() => undefined)
+          .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
+        return translated.stream;
+      }
+      logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
+        result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts);
+      const assistantText = result.response.choices[0]?.message.content;
+      if (typeof assistantText === "string") responseMemory.save(assistantText);
+      return canonicalResponseToResponses(result.response, req.model);
+    } catch (error) {
+      const status = error instanceof GatewayError ? error.status : 500;
+      logRequest(logKeyId, "/v1/responses", req.model, null, null, 1, status < 500 ? "client_error" : "error", status,
+        error instanceof Error ? error.message : String(error), started);
+      throw error;
+    } finally {
+      if (!req.stream && logKeyId) releaseSlot(logKeyId);
+    }
+  });
+
+  app.post("/messages", async ({ request, set }) => {
+    const requestId = `req_${ulid()}`;
+    set.headers["request-id"] = requestId;
+    set.headers["x-request-id"] = requestId;
+    const started = Date.now();
+    const anthropicKey = request.headers.get("x-api-key");
+    const key = authenticateGatewayKey(db, request.headers.get("authorization") ?? (anthropicKey ? `Bearer ${anthropicKey}` : null));
     const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
 
     let rawBody: unknown;
@@ -161,6 +264,8 @@ export function v1Routes(db: Database) {
     let req = anthropicToOpenaiRequest(anthropicBody);
 
     authorizeModel(key, req.model);
+    const messagesMemory = memoryContext(request, key, req);
+    req = messagesMemory.req;
 
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
@@ -169,10 +274,7 @@ export function v1Routes(db: Database) {
       return { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } };
     }
 
-    const saverCfg = settings.getJson<TokenSaverConfig>("token_saver") ?? {
-      enabled: config.tokenSaverDefault,
-      rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
-    };
+    const saverCfg = tokenSaverConfig(request);
     const saver = applyTokenSaver(req, saverCfg);
     req = saver.request;
 
@@ -181,12 +283,14 @@ export function v1Routes(db: Database) {
       req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     }
 
-    const routingPolicy = settings.getJson<RoutingPolicy>("routing_policy") ?? defaultRoutingPolicy;
+    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
+      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
     const route = router.resolveWithPolicy(req.model, routingPolicy);
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
-      const result = await executeRequest(req, route.candidates, {}, providersRepo, routingPolicy);
+      const result = await executeRequest(req, route.candidates, { signal: request.signal }, providersRepo, routingPolicy);
 
       if (result.kind === "stream") {
         // need Anthropic-shaped SSE back to client
@@ -195,8 +299,10 @@ export function v1Routes(db: Database) {
         const outStream = translateOpenAiSseToAnthropic(tap.stream, translator);
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
         set.headers["cache-control"] = "no-cache";
+        set.headers["x-accel-buffering"] = "no";
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([, text]) => {
+            if (text) messagesMemory.save(text);
             const u = translator.result().usage;
             logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
@@ -208,6 +314,8 @@ export function v1Routes(db: Database) {
       }
 
       const anthropicResp = openaiToAnthropicResponse(result.response);
+      const assistantText = result.response.choices[0]?.message.content;
+      if (typeof assistantText === "string") messagesMemory.save(assistantText);
       logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);

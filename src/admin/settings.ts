@@ -8,6 +8,8 @@ import { settingsUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { config } from "../config";
 import { log } from "../utils/logger";
+import { normalizeRoutingPolicy } from "../proxy/router";
+import { MemoryRepo } from "../store/repos/memory";
 
 function fsSyncExists(p: string): boolean {
   try { return fs.statSync(p).isFile(); } catch { return false; }
@@ -30,19 +32,13 @@ export function settingsRoutes(db: Database) {
   return new Elysia({ prefix: "/api/settings" })
     .get("/", () => ({
       token_saver: settings.getJson("token_saver"),
+      memory: settings.getJson("memory") ?? { enabled: false, ttlDays: 30, maxMessages: 40 },
       terse_mode: settings.getJson("terse_mode"),
       log_retention_days: Number(settings.get("log_retention_days") ?? 30),
       session_remember_default: settings.get("session_remember_default") === "1",
       network_binding: currentNetworkBinding(),
       model_sync_mode: settings.getJson("model_sync_mode") ?? "curated",
-      routing_policy: settings.getJson("routing_policy") ?? {
-        mode: "balanced",
-        preferProviders: [],
-        denyProviders: [],
-        denyModels: [],
-        maxAttempts: 3,
-        respectPriority: true,
-      },
+      routing_policy: normalizeRoutingPolicy(settings.getJson("routing_policy")),
       ui: settings.getJson("ui"),
       env: {
         port: config.port,
@@ -55,6 +51,7 @@ export function settingsRoutes(db: Database) {
       const parsed = settingsUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       if (parsed.data.token_saver) settings.setJson("token_saver", parsed.data.token_saver);
+      if (parsed.data.memory) settings.setJson("memory", parsed.data.memory);
       if (parsed.data.terse_mode) settings.setJson("terse_mode", parsed.data.terse_mode);
       if (parsed.data.log_retention_days !== undefined) {
         settings.set("log_retention_days", String(parsed.data.log_retention_days));
@@ -66,7 +63,10 @@ export function settingsRoutes(db: Database) {
       if (parsed.data.model_sync_mode !== undefined) {
         settings.setJson("model_sync_mode", parsed.data.model_sync_mode);
       }
-      if (parsed.data.routing_policy) settings.setJson("routing_policy", parsed.data.routing_policy);
+      if (parsed.data.routing_policy) {
+        const current = normalizeRoutingPolicy(settings.getJson("routing_policy"));
+        settings.setJson("routing_policy", normalizeRoutingPolicy({ ...current, ...parsed.data.routing_policy }));
+      }
       if (parsed.data.ui) settings.setJson("ui", parsed.data.ui);
       log.info("settings updated", { keys: Object.keys(parsed.data) });
       return { ok: true };
@@ -109,6 +109,7 @@ export function logRoutes(db: Database) {
 
 export function healthRoutes(db: Database) {
   const providers = new ProvidersRepo(db);
+  const memory = new MemoryRepo(db);
   return new Elysia()
     .get("/health", () => ({
       status: "ok",
@@ -125,6 +126,11 @@ export function healthRoutes(db: Database) {
           total: list.length,
           enabled: list.filter((p) => p.enabled).length,
           accounts: list.reduce((n, p) => n + providers.listAccounts(p.id).filter((a) => a.enabled).length, 0),
+        },
+        memory: memory.stats(),
+        process: {
+          rss_bytes: process.memoryUsage().rss,
+          heap_used_bytes: process.memoryUsage().heapUsed,
         },
         // Surface where the on-disk DB actually lives so the dashboard can
         // tell the operator whether they're connected to the right Mirais

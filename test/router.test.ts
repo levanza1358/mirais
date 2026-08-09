@@ -5,6 +5,8 @@ import { ProvidersRepo } from "../src/store/repos/providers";
 import { AliasesRepo, CombosRepo } from "../src/store/repos/routing";
 import { Router, baseUrlFor, upstreamFormat } from "../src/proxy/router";
 import { GatewayError } from "../src/shared/errors";
+import { clampMaxTokens } from "../src/proxy/executor";
+import { MemoryRepo } from "../src/store/repos/memory";
 
 let db: Database;
 let providers: ProvidersRepo;
@@ -66,7 +68,7 @@ describe("Router.resolve", () => {
   });
 
   test("known provider prefix still wins over direct fallback", () => {
-    seedProvider("blackbox", "openai", ["blackbox/meta/llama-3.1-70b"]);
+    seedProvider("blackbox", "openai", ["meta/llama-3.1-70b", "blackbox/meta/llama-3.1-70b"]);
     const r = router.resolve("blackbox/meta/llama-3.1-70b");
     expect(r.kind).toBe("qualified");
     expect(r.candidates[0]!.modelId).toBe("meta/llama-3.1-70b");
@@ -116,6 +118,24 @@ describe("Router.resolve", () => {
     expect(r.candidates.map((c) => c.modelId)).toEqual(["m1", "m2"]);
   });
 
+  test("documented combo:name syntax resolves", () => {
+    seedProvider("p1", "openai", ["m1"]);
+    combos.create("fallback", ["m1"]);
+    const r = router.resolve("combo:fallback");
+    expect(r.kind).toBe("combo");
+    expect(r.candidates[0]!.modelId).toBe("m1");
+  });
+
+  test("combo cycle → 400", () => {
+    combos.create("a", ["combo:b"]);
+    combos.create("b", ["combo:a"]);
+    try { router.resolve("combo:a"); expect.unreachable(); }
+    catch (e) {
+      expect((e as GatewayError).status).toBe(400);
+      expect((e as GatewayError).message).toContain("cycle");
+    }
+  });
+
   test("combo with no usable entries → 503", () => {
     combos.create("empty", ["nope1", "nope2"]);
     try { router.resolve("empty"); expect.unreachable(); }
@@ -134,5 +154,61 @@ describe("Router.resolve", () => {
     providers.update(p.id, { enabled: false });
     try { router.resolve("mx"); expect.unreachable(); }
     catch (e) { expect((e as GatewayError).status).toBe(404); }
+  });
+
+  test("qualified unknown or disabled model → 404", () => {
+    const p = seedProvider("provider", "openai", ["enabled", "disabled"]);
+    providers.upsertModel(p.id, "disabled", { enabled: false });
+    for (const model of ["provider/unknown", "provider/disabled"]) {
+      try { router.resolve(model); expect.unreachable(); }
+      catch (e) { expect((e as GatewayError).status).toBe(404); }
+    }
+  });
+});
+
+describe("model output limits", () => {
+  test("stored provider limit overrides static model metadata", () => {
+    const p = seedProvider("provider", "openai", ["gpt-4o"]);
+    providers.upsertModel(p.id, "gpt-4o", { maxOutputTokens: 1234 });
+    const candidate = router.resolve("provider/gpt-4o").candidates[0]!;
+    const result = clampMaxTokens({ model: "provider/gpt-4o", messages: [{ role: "user", content: "hi" }], max_tokens: 9999 }, candidate, providers);
+    expect(result.max_tokens).toBe(1234);
+  });
+});
+
+describe("model sync provenance", () => {
+  test("prunes stale synced models but preserves manual models", () => {
+    const p = seedProvider("provider", "openai", []);
+    providers.upsertModel(p.id, "manual-model");
+    providers.upsertModel(p.id, "stale-model", { source: "sync" });
+    providers.upsertModel(p.id, "kept-model", { source: "sync" });
+    const pruned = providers.replaceSyncedModels(p.id, [{ id: "kept-model", contextLength: 1000, maxOutputTokens: 100, capabilities: [] }]);
+    expect(pruned).toBe(1);
+    expect(providers.listModels(p.id).map((model) => model.model_id).sort()).toEqual(["kept-model", "manual-model"]);
+    expect(providers.getProviderModel(p.id, "manual-model")?.source).toBe("manual");
+  });
+});
+
+describe("session memory", () => {
+  test("stores bounded messages and clears a session", () => {
+    const memory = new MemoryRepo(db);
+    memory.set("key:session", [
+      { role: "user", content: "old" },
+      { role: "assistant", content: "answer" },
+      { role: "user", content: "new" },
+    ], 30, 2);
+    expect(memory.get("key:session").map((message) => message.content)).toEqual(["answer", "new"]);
+    memory.remove("key:session");
+    expect(memory.get("key:session")).toEqual([]);
+  });
+
+  test("lists stats and clears all sessions", () => {
+    const memory = new MemoryRepo(db);
+    memory.set("key:a", [{ role: "user", content: "one" }], 30, 10);
+    memory.set("key:b", [{ role: "user", content: "two" }, { role: "assistant", content: "three" }], 30, 10);
+    expect(memory.stats()).toEqual({ sessions: 2, messages: 3 });
+    expect(memory.list()).toHaveLength(2);
+    expect(memory.clearAll()).toBe(2);
+    expect(memory.stats()).toEqual({ sessions: 0, messages: 0 });
   });
 });

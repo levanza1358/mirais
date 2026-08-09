@@ -302,18 +302,23 @@ export class SseParser {
   feed(chunk: string): Array<{ event: string; data: string }> {
     this.buffer += chunk;
     const events: Array<{ event: string; data: string }> = [];
-    let idx: number;
-    while ((idx = this.buffer.indexOf("\n\n")) !== -1) {
-      const raw = this.buffer.slice(0, idx);
-      this.buffer = this.buffer.slice(idx + 2);
+    let separator: RegExpExecArray | null;
+    while ((separator = /\r?\n\r?\n/.exec(this.buffer)) !== null) {
+      const raw = this.buffer.slice(0, separator.index);
+      this.buffer = this.buffer.slice(separator.index + separator[0].length);
       let event = "message";
       const dataLines: string[] = [];
-      for (const line of raw.split("\n")) {
+      for (const line of raw.split(/\r?\n/)) {
         if (line.startsWith("event:")) event = line.slice(6).trim();
         else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
       }
       if (dataLines.length) events.push({ event, data: dataLines.join("\n") });
     }
     return events;
+  }
+
+  finish(): Array<{ event: string; data: string }> {
+    if (!this.buffer.trim()) { this.buffer = ""; return []; }
+    return this.feed("\n\n");
   }
 }
