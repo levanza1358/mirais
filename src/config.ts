@@ -11,6 +11,11 @@ const envSchema = z.object({
   REQUEST_BODY_LIMIT_MB: z.coerce.number().positive().default(25),
   UPSTREAM_TIMEOUT_MS: z.coerce.number().positive().default(120000),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  // When `true` (default), every /v1/* request must carry a valid gateway
+  // key. Set `MIRAIS_AUTH_REQUIRED=false` to allow anonymous proxy use when
+  // the operator is confident the listener is only reachable from a trusted
+  // network (loopback bind, reverse proxy, VPN, private network).
+  MIRAIS_AUTH_REQUIRED: z.enum(["on", "off"]).default("on"),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -46,6 +51,7 @@ export const config = {
   requestBodyLimit: parsed.REQUEST_BODY_LIMIT_MB * 1024 * 1024,
   upstreamTimeoutMs: parsed.UPSTREAM_TIMEOUT_MS,
   logLevel: parsed.LOG_LEVEL,
+  authRequired: parsed.MIRAIS_AUTH_REQUIRED === "on",
   version: "1.0.0",
   startedAt: Date.now(),
 } as const;

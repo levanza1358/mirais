@@ -9,7 +9,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 ## Phase 0 — Scaffold (½ day) — DONE
 - [x] `bun init` root + `dashboard/` (Vite React-TS template, Tailwind v4)
 - [x] tsconfig paths, eslint, `.gitattributes`, `.env.example`, `scripts/dev.ts`
-- [ ] CI (GitHub Actions): typecheck + `bun test` on `windows-latest` & `ubuntu-latest`
+- [x] CI (GitHub Actions): typecheck + `bun test` + `bun run build` on `windows-latest` & `ubuntu-latest` (`.github/workflows/ci.yml`); Ubuntu post-deploy smoke runs against `/health` + `/api/health`
 - ✅ `bun run dev` starts empty Elysia on `:1463` + Vite dev server; `/health` returns ok
 
 ## Phase 1 — Storage & Config (1 day) — DONE

@@ -190,6 +190,16 @@ export default function Keys() {
                 <span className="block text-text-primary">Rotate</span>
                 <span>Generates a new secret and invalidates the old one.</span>
               </li>
+              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
+                <span className="block text-text-primary">Use without a key</span>
+                <span>
+                  Set <code className="font-mono text-[11px] text-accent">MIRAIS_AUTH_REQUIRED=off</code> on the server. Requests with no <code className="font-mono text-[11px] text-accent">Authorization</code> header (or the placeholder <code className="font-mono text-[11px] text-accent">Bearer anonymous</code>) are accepted. Only safe when Mirais listens on 127.0.0.1 / a trusted network.
+                </span>
+              </li>
+              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
+                <span className="block text-text-primary">Rotate = pause</span>
+                <span>The AI coding agent must never rotate this key on its own. Confirm with you before any change.</span>
+              </li>
             </ul>
           </Card>
         </div>

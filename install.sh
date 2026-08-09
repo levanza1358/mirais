@@ -52,6 +52,10 @@ JSON
 sudo ln -sf "$INSTALL_DIR/mirais" /usr/local/bin/mirais
 sudo chmod +x "$INSTALL_DIR/mirais"
 
-if bun run scripts/extras.ts >/dev/null 2>&1; then :; else :; fi
+# Optional: install yt-dlp / ffmpeg extras (audio + video discovery). Run
+# `bun run extras` any time later if you skipped it here.
+if [ "${MIRAIS_INSTALL_EXTRAS:-1}" = "1" ]; then
+  bun run scripts/extras.ts >/dev/null 2>&1 || echo "extras install failed (non-fatal); run 'bun run extras' later"
+fi
 
 echo "Installation successful. Check dashboard at http://localhost:1463"

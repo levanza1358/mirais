@@ -60,6 +60,7 @@ bun run smoke          # post-deploy verification
 - Do not store plaintext gateway keys — only SHA-256 hash + display prefix.
 - Do not introduce `any` types, `// @ts-ignore`, or console.log debugging in committed code.
 - Do not break the exit criteria of the current phase (doc 06) — work phase by phase.
+- **Never rotate, regenerate, revoke, or disable the global gateway API key, run a one-off key creation, or touch `gateway_keys` rows in any way, without explicit confirmation from the user.** The user owns the key and rotates it manually from the dashboard's "Generate new key" button (or the `mirais rotate` CLI command). If a task seems to require touching the key — pause and ask. This rule is independent of any other permission; it overrides general workflow guidance.
 
 ## Current status
 

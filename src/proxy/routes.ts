@@ -19,18 +19,6 @@ import { SettingsRepo } from "../store/repos/settings";
 import type { CanonicalRequest, CanonicalResponse, RoutingPolicy } from "../shared/types";
 import { log } from "../utils/logger";
 
-// Short names for the `owned_by` field and model-id trimming so clients see
-// compact labels like `bb/gpt-5.4` instead of `blackboxai/openai/gpt-5.4`.
-const PROVIDER_SHORT: Record<string, string> = {
-  blackboxai: "bb", blackbox: "bb", openai: "oa", anthropic: "an",
-  google: "gg", moonshotai: "ms", "x-ai": "x",
-};
-function shortProv(name: string) { return PROVIDER_SHORT[name] ?? name; }
-function tailOfModel(modelId: string) {
-  const parts = modelId.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? modelId;
-}
-
 export function v1Routes(db: Database) {
   const providersRepo = new ProvidersRepo(db);
   const router = new Router(providersRepo, new AliasesRepo(db), new CombosRepo(db));
@@ -58,8 +46,11 @@ export function v1Routes(db: Database) {
       data: [
         ...models.map((m) => {
           const pname = providers.get(m.provider_id)?.name ?? "unknown";
+          // Surface the full provider/model id so OpenAI-compatible clients
+          // can pass it straight back to /v1/chat/completions without
+          // knowing about any internal aliasing.
           return {
-            id: `${shortProv(pname)}/${tailOfModel(m.model_id)}`,
+            id: `${pname}/${m.model_id}`,
             object: "model",
             created: 0,
             owned_by: pname,
@@ -89,13 +80,13 @@ export function v1Routes(db: Database) {
     let req = parsed.data as unknown as CanonicalRequest & { max_completion_tokens?: number };
     if (req.max_completion_tokens && !req.max_tokens) req.max_tokens = req.max_completion_tokens;
 
-    authorizeModel(key, req.model, db);
+    authorizeModel(key, req.model);
 
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
       set.status = 429;
       set.headers["retry-after"] = String(rl.retryAfterSec);
-      logRequest(key.id, "/v1/chat/completions", req.model, null, null, 1, "rate_limited", 429, "rate limit", started);
+      logRequest(key.id === "anonymous" ? null : key.id, "/v1/chat/completions", req.model, null, null, 1, "rate_limited", 429, "rate limit", started);
       return new GatewayError(429, "rate_limit_error", "Rate limit exceeded").toJSON();
     }
 
@@ -115,7 +106,8 @@ export function v1Routes(db: Database) {
 
     const routingPolicy = settings.getJson<RoutingPolicy>("routing_policy") ?? defaultRoutingPolicy;
     const route = router.resolveWithPolicy(req.model, routingPolicy);
-    acquireSlot(key.id);
+    const logKeyId = key.id === "anonymous" ? null : key.id;
+    if (logKeyId) acquireSlot(logKeyId);
     try {
       const result = await executeRequest(req, route.candidates, {}, providersRepo, routingPolicy);
 
@@ -126,27 +118,27 @@ export function v1Routes(db: Database) {
         const tap = tapOpenAiStream(result.stream);
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([usage, text]) => {
-            logRequest(key.id, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+            logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
           })
           .catch(() => undefined)
-          .finally(() => releaseSlot(key.id));
+          .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
         return tap.stream;
       }
 
-      logRequest(key.id, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+      logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
       return result.response;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
       const msg = err instanceof Error ? err.message : String(err);
-      logRequest(key.id, "/v1/chat/completions", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+      logRequest(logKeyId, "/v1/chat/completions", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
         undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind);
       throw err;
     } finally {
-      if (req.stream !== true) releaseSlot(key.id);
+      if (req.stream !== true && logKeyId) releaseSlot(logKeyId);
     }
   });
 
@@ -168,7 +160,7 @@ export function v1Routes(db: Database) {
     const anthropicBody = rawBody as Record<string, unknown>;
     let req = anthropicToOpenaiRequest(anthropicBody);
 
-    authorizeModel(key, req.model, db);
+    authorizeModel(key, req.model);
 
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
@@ -191,7 +183,8 @@ export function v1Routes(db: Database) {
 
     const routingPolicy = settings.getJson<RoutingPolicy>("routing_policy") ?? defaultRoutingPolicy;
     const route = router.resolveWithPolicy(req.model, routingPolicy);
-    acquireSlot(key.id);
+    const logKeyId = key.id === "anonymous" ? null : key.id;
+    if (logKeyId) acquireSlot(logKeyId);
     try {
       const result = await executeRequest(req, route.candidates, {}, providersRepo, routingPolicy);
 
@@ -205,24 +198,24 @@ export function v1Routes(db: Database) {
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([, text]) => {
             const u = translator.result().usage;
-            logRequest(key.id, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
+            logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
           })
           .catch(() => undefined)
-          .finally(() => releaseSlot(key.id));
+          .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
         return outStream;
       }
 
       const anthropicResp = openaiToAnthropicResponse(result.response);
-      logRequest(key.id, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
+      logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
       return anthropicResp;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
       const msg = err instanceof Error ? err.message : String(err);
-      logRequest(key.id, "/v1/messages", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+      logRequest(logKeyId, "/v1/messages", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
         undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind);
       if (err instanceof GatewayError) {
         set.status = err.status;
@@ -230,7 +223,7 @@ export function v1Routes(db: Database) {
       }
       throw err;
     } finally {
-      if (req.stream !== true) releaseSlot(key.id);
+      if (req.stream !== true && logKeyId) releaseSlot(logKeyId);
     }
   });
 

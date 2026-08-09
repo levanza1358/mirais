@@ -14,11 +14,6 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   "codebuddy-cn": "https://copilot.tencent.com/v2",
 };
 
-const PROVIDER_SHORT_ALIASES: Record<string, string> = {
-  cbc: "codebuddy-cn",
-  cbg: "codebuddy-global",
-};
-
 export function baseUrlFor(provider: Provider): string {
   return provider.base_url ?? DEFAULT_BASE_URLS[provider.type] ?? "https://api.openai.com/v1";
 }
@@ -50,8 +45,7 @@ export class Router {
     if (model.includes("/")) {
       const [providerName, ...rest] = model.split("/");
       const modelId = rest.join("/");
-      const resolvedProviderName = providerName ? (PROVIDER_SHORT_ALIASES[providerName] ?? providerName) : undefined;
-      const provider = resolvedProviderName ? this.providers.getByName(resolvedProviderName) : undefined;
+      const provider = providerName ? this.providers.getByName(providerName) : undefined;
       if (provider && provider.enabled) {
         if (policy.denyProviders.includes(provider.name) || policy.denyModels.includes(modelId)) {
           throw new GatewayError(403, "invalid_request_error", `Model '${model}' is blocked by routing policy`);

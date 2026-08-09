@@ -49,10 +49,17 @@ Technical and product design decisions for Mirais, each with context and consequ
 **Decision:** SHA-256 hash stored; prefix kept for display; constant-time compare; plaintext revealed only at creation.
 **Consequences:** + leak-resistant; − lost key = re-issue (documented in UI).
 
-## ADR-010: Dashboard auth = single password + signed cookie
+## ADR-010: Dashboard auth = single password + signed cookie (SUPERSEDED by ADR-016)
 **Context:** Single-user/team tool; multi-user auth is a non-goal.
 **Decision:** scrypt password hash in settings; HMAC-signed `HttpOnly SameSite=Lax` cookie; 12h TTL; login rate-limited 5/5min/IP; first-run setup screen if no password configured.
 **Consequences:** + zero-friction yet safe; − shared-password model (acceptable per PRD personas).
+**Status:** Superseded — the password + cookie flow was removed in `b550db4`; see ADR-016.
+
+## ADR-016: Dashboard has no application-level login
+**Context:** Initial design (ADR-010) added a per-install password + HMAC cookie. Real deployments showed this created a second secret to manage (the dashboard password) and was repeatedly mistaken for a network authentication layer — operators left it default or shared it with clients. Multi-user auth is explicitly a non-goal (ADR-010 itself stated so).
+**Decision:** Dashboard routes under `/api/*` are intentionally public to anyone who can reach the listener. Access control is delegated to the network boundary (loopback bind, reverse proxy, firewall, VPN, or private network — see `docs/07-deployment-windows-ubuntu.md`). The `/api/auth/login|logout|setup|session` routes are removed entirely. `AGENTS.md` §7 and `RULES.md` R1.3 are the source of truth.
+**Consequences:** + one fewer secret to rotate; + zero auth surface area in the dashboard bundle; + trivially auditable; − operators MUST be told to bind to 127.0.0.1 (or put it behind a proxy) — `config.ts` aborts startup if `HOST=0.0.0.0` and no dashboard password is set, and a startup warning is logged if `DATA_DIR` is writable by group/other on Linux.
+**Status:** Active.
 
 ## ADR-011: Dark-first bespoke UI, no component library
 **Context:** Heavy kits (MUI/AntD) fight the aesthetic and bloat the bundle.

@@ -26,7 +26,7 @@ Developers using AI coding tools (Claude Code, Cursor, Cline, Codex, Continue) f
 - **G2:** Automatic failover across providers/accounts with cooldowns; multi-account round-robin.
 - **G3:** On-the-fly OpenAI ↔ Anthropic translation (requests, responses, streams, tools, images).
 - **G4:** Token saver compressing tool outputs; measurable savings shown in UI.
-- **G5:** Dashboard (password-protected) for providers, accounts, models, aliases, combos, gateway API keys, logs, analytics, settings.
+- **G5:** Dashboard (passwordless; network-bound) for providers, accounts, models, aliases, combos, gateway API keys, logs, analytics, settings. External access must be gated by a reverse proxy, firewall, VPN, or private network — the dashboard itself has no application login.
 - **G6:** Usage analytics: tokens, estimated cost, latency, success rate — per model/provider/key.
 - **G7:** First-class on Windows 10/11 **and** Ubuntu/Server; deploy via source, systemd/NSSM, or Docker.
 
@@ -90,7 +90,7 @@ Priority: **P0** must-have v1 · **P1** should-have v1 · **P2** v1.x stretch
 - FR-7.2 Usable as `combo:name` in any client request
 
 ### FR-8 Dashboard — P0
-- FR-8.1 Password login → session cookie; rate-limited; first-run password setup when env unset
+- FR-8.1 Failed-over retries only count retriable upstream errors (429, 5xx, network, upstream-auth); client errors pass through untouched.
 - FR-8.2 Pages: Overview, Providers, Models, Combos, API Keys, Logs, Settings (spec: doc 05)
 - FR-8.3 Dark/light theme, responsive ≥1280px desktop-first, accessible (focus/aria/contrast AA)
 
@@ -101,7 +101,7 @@ Priority: **P0** must-have v1 · **P1** should-have v1 · **P2** v1.x stretch
 
 ### FR-10 Settings & Ops — P1
 - FR-10.1 Token saver config, pricing table editor, retention, backup now, config export/import, factory reset (typed confirm)
-- FR-10.2 Change dashboard password; view/revoke sessions
+- FR-10.2 Surface operational health (uptime, DB size, configured providers/accounts) on the Settings page; export diagnostic bundles for support tickets.
 
 ## 5. Non-Functional Requirements
 
@@ -109,7 +109,7 @@ Priority: **P0** must-have v1 · **P1** should-have v1 · **P2** v1.x stretch
 |---|---|
 | **Performance** | p50 proxy overhead < 15 ms (excluding upstream); ≥ 500 concurrent SSE streams on 2 vCPU/2 GB; dashboard first load < 1 s local |
 | **Reliability** | No request data loss on crash mid-stream (log row written on abort); SQLite WAL; restart-safe |
-| **Security** | Keys hashed; session HMAC-signed HttpOnly cookie; login rate limit 5/5min; constant-time compare; `DATA_DIR` 0700 on Linux; no telemetry |
+| **Security** | Gateway keys hashed (SHA-256) with display prefix only; `DASHBOARD_PASSWORD` field removed (dashboard is intentionally passwordless per `RULES.md` R1.3); constant-time compare; `DATA_DIR` 0700 on Linux; no telemetry. External dashboard access is a network concern, not an app concern. |
 | **Compatibility** | Windows 10/11 x64, Ubuntu 22.04/24.04 x64 (+arm64 via Docker); Bun ≥ 1.1; Chrome/Edge/Firefox latest |
 | **Observability** | Structured JSON logs to stdout; `/health` for monitors; in-app logs page |
 | **Maintainability** | 100% TypeScript strict; typecheck + tests green in CI on both OSes |

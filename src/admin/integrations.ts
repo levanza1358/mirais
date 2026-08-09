@@ -6,7 +6,6 @@ import type { Database } from "bun:sqlite";
 import { ProvidersRepo } from "../store/repos/providers";
 import { AdminError } from "../shared/errors";
 import { log } from "../utils/logger";
-import { shortProviderName } from "../shared/providerShort";
 
 const CLI_IDS = ["opencode", "codex", "claude-code", "aider"] as const;
 type CliId = typeof CLI_IDS[number];
@@ -152,13 +151,13 @@ export function integrationRoutes(db: Database) {
         .flatMap((provider) => providers.listModels(provider.id)
           .filter((model) => model.enabled)
           .map((model) => {
-            const prefix = shortProviderName(provider.type);
-            // Upstream ids often carry vendor segments (e.g. `openai/gpt-5.4`,
-            // `moonshotai/kimi-k3`); keep only the tail so the dashboard
-            // shows compact labels like `bb/gpt-5.4` instead of
-            // `bb/openai/gpt-5.4`.
-            const tail = model.model_id.split("/").filter(Boolean).pop() ?? model.model_id;
-            return { id: `${prefix}/${tail}`, provider: provider.name, providerType: provider.type };
+            // Surface the full provider/model id so the CLI config picks
+            // the exact same model the dashboard routes use.
+            return {
+              id: `${provider.name}/${model.model_id}`,
+              provider: provider.name,
+              providerType: provider.type,
+            };
           }));
       return {
         baseUrl: "http://127.0.0.1:1463",
