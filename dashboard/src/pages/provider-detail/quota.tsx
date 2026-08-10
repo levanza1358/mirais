@@ -48,6 +48,26 @@ export function QuotaBar({ title, windowData }: { title: string; windowData: Cod
   );
 }
 
+export function InlineCodexQuota({ data, loading }: { data: CodexQuota | undefined; loading: boolean }) {
+  if (loading) return <span className="text-[11px] text-text-muted">Checking quota…</span>;
+  if (!data) return <span className="text-[11px] text-text-muted">Quota unavailable</span>;
+
+  const windowData = data.secondary ?? data.primary;
+  const used = Math.max(0, Math.min(100, windowData?.used_percent ?? 0));
+  const remaining = Math.max(0, Math.min(100, windowData?.remaining_percent ?? 100));
+  const color = used >= 100 ? "bg-danger" : used >= 80 ? "bg-warning" : "bg-accent";
+
+  return (
+    <div className="flex min-w-44 items-center gap-2" title={`${windowLabel(windowData, "Quota")}: ${Math.round(remaining)}% remaining, resets ${resetLabel(windowData)}`}>
+      <span className="shrink-0 text-[11px] text-text-muted">{Math.round(remaining)}% left</span>
+      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-bg-base">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${used}%` }} />
+      </div>
+      <span className="truncate text-[11px] text-text-muted">resets {resetLabel(windowData)}</span>
+    </div>
+  );
+}
+
 function isCodeBuddyQuota(data: CodexQuota | undefined, account: ProviderAccount): data is CodexQuota & {
   plan?: string | null;
   quotas?: {

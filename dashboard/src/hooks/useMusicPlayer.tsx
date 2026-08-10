@@ -15,7 +15,22 @@ function logError(message: string, meta?: Record<string, unknown>) {
 
 const PLAYER_PREFS_KEY = "mirais.music.player.preferences";
 const PLAYER_SNAPSHOT_KEY = "mirais.music.player.snapshot";
+const MUSIC_TAB_LOCK_KEY = "mirais.music.player.active-tab";
 const SNAPSHOT_THROTTLE_MS = 1000;
+const TAB_LOCK_TTL_MS = 8_000;
+const TAB_LOCK_RENEW_MS = 3_000;
+
+function musicTabId(): string {
+  try {
+    const existing = window.sessionStorage.getItem(MUSIC_TAB_LOCK_KEY);
+    if (existing) return existing;
+    const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    window.sessionStorage.setItem(MUSIC_TAB_LOCK_KEY, id);
+    return id;
+  } catch {
+    return `${Date.now()}-${Math.random()}`;
+  }
+}
 
 export interface MusicTrack {
   id: string;
@@ -84,6 +99,8 @@ const PlayerContext = createContext<(PlayerState & PlayerControls) | null>(null)
 
 export function MusicPlayerProvider({ children, streamUrlFor }: { children: ReactNode; streamUrlFor: (videoId: string) => string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const tabIdRef = useRef(musicTabId());
+  const ownsMusicTabRef = useRef(false);
   const [state, setState] = useState<PlayerState>({ current: null, queue: [], isPlaying: false, currentTime: 0, duration: 0, isBuffering: false, showQueue: false, error: null, history: [], recentlyPlayed: [], favorites: [], shuffle: false, repeatMode: "off", volume: 1, muted: false, presentation: "hidden", visible: false });
 
   useEffect(() => {
@@ -143,6 +160,49 @@ function plainClone(value: unknown): unknown {
   // because the audio element setup effect runs later and needs to read
   // the snapshot first.
   const restoredRef = useRef(false);
+
+  // The browser may open the dashboard in multiple tabs, but only one tab
+  // may hydrate or control the music player at a time. A short, renewable
+  // localStorage lease also survives a normal F5 reload without allowing a
+  // second tab to start a duplicate player.
+  useEffect(() => {
+    const claimTab = () => {
+      try {
+        const raw = window.localStorage.getItem(MUSIC_TAB_LOCK_KEY);
+        const lock = raw ? JSON.parse(raw) as { tabId?: string; expiresAt?: number } : null;
+        const now = Date.now();
+        const canClaim = !lock || !lock.tabId || !lock.expiresAt || lock.expiresAt <= now || lock.tabId === tabIdRef.current;
+        if (canClaim) {
+          window.localStorage.setItem(MUSIC_TAB_LOCK_KEY, JSON.stringify({ tabId: tabIdRef.current, expiresAt: now + TAB_LOCK_TTL_MS }));
+          ownsMusicTabRef.current = true;
+        } else {
+          ownsMusicTabRef.current = false;
+          audioRef.current?.pause();
+        }
+      } catch {
+        // If storage is unavailable, retain normal single-document playback.
+        ownsMusicTabRef.current = true;
+      }
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== MUSIC_TAB_LOCK_KEY || !event.newValue) return;
+      try {
+        const lock = JSON.parse(event.newValue) as { tabId?: string };
+        if (lock.tabId && lock.tabId !== tabIdRef.current) {
+          ownsMusicTabRef.current = false;
+          audioRef.current?.pause();
+        }
+      } catch { /* ignore */ }
+    };
+    claimTab();
+    const renew = window.setInterval(claimTab, TAB_LOCK_RENEW_MS);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.clearInterval(renew);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
   useEffect(() => {
     // Don't write/clear until the restore effect has had a chance to run.
     if (!restoredRef.current) return;
@@ -301,7 +361,7 @@ function plainClone(value: unknown): unknown {
           shuffle?: boolean;
           repeatMode?: "off" | "all" | "one";
         };
-        if (snapshot.current) {
+        if (snapshot.current && ownsMusicTabRef.current) {
           audio.volume = typeof snapshot.volume === "number" ? snapshot.volume : audio.volume;
           audio.muted = !!snapshot.muted;
           audio.src = streamUrlFor(snapshot.current.source_id);
@@ -320,20 +380,24 @@ function plainClone(value: unknown): unknown {
             history: Array.isArray(snapshot.history) ? snapshot.history : [],
             currentTime: typeof snapshot.currentTime === "number" ? snapshot.currentTime : 0,
             duration: typeof snapshot.duration === "number" ? snapshot.duration : snapshot.current.duration_sec ?? 0,
-            isPlaying: false,
-            isBuffering: true,
+            isPlaying: !!snapshot.isPlaying,
+            isBuffering: !!snapshot.isPlaying,
             presentation: snapshot.presentation ?? "player",
             visible: (snapshot.presentation ?? "player") === "player",
             shuffle: typeof snapshot.shuffle === "boolean" ? snapshot.shuffle : prev.shuffle,
             repeatMode: snapshot.repeatMode ?? prev.repeatMode,
           }));
-          const resumeOnGesture = () => {
-            if (audio.paused) void audio.play().catch(() => undefined);
-            window.removeEventListener("pointerdown", resumeOnGesture);
-            window.removeEventListener("keydown", resumeOnGesture);
-          };
-          window.addEventListener("pointerdown", resumeOnGesture, { once: true });
-          window.addEventListener("keydown", resumeOnGesture, { once: true });
+          if (snapshot.isPlaying) {
+            const resumeOnGesture = () => {
+              if (audio.paused) void audio.play().catch(() => undefined);
+              window.removeEventListener("pointerdown", resumeOnGesture);
+              window.removeEventListener("keydown", resumeOnGesture);
+            };
+            void audio.play().catch(() => {
+              window.addEventListener("pointerdown", resumeOnGesture, { once: true });
+              window.addEventListener("keydown", resumeOnGesture, { once: true });
+            });
+          }
         }
       }
     } catch {
@@ -352,6 +416,7 @@ function plainClone(value: unknown): unknown {
 
   const play = useCallback(
     (track: MusicTrack, queue?: MusicTrack[]) => {
+      if (!ownsMusicTabRef.current) return;
       setState((prev) => {
         // When playback was started from the dock (or is currently in dock
         // mode), keep it collapsed. Otherwise present the expanded player.
@@ -389,16 +454,19 @@ function plainClone(value: unknown): unknown {
   );
 
   const pause = useCallback(() => {
+    if (!ownsMusicTabRef.current) return;
     audioRef.current?.pause();
     setState((prev) => ({ ...prev, isPlaying: false }));
   }, []);
 
   const resume = useCallback(() => {
+    if (!ownsMusicTabRef.current) return;
     audioRef.current?.play().catch(() => undefined);
     setState((prev) => ({ ...prev, isPlaying: true, isBuffering: true }));
   }, []);
 
   const toggle = useCallback(() => {
+    if (!ownsMusicTabRef.current) return;
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) void audio.play().catch(() => undefined);
@@ -407,6 +475,7 @@ function plainClone(value: unknown): unknown {
   }, []);
 
   const next = useCallback(() => {
+    if (!ownsMusicTabRef.current) return;
     setState((prev) => {
       if (!prev.current) return prev;
       const [head, ...tail] = prev.queue;
@@ -421,6 +490,7 @@ function plainClone(value: unknown): unknown {
   }, [streamUrlFor]);
 
   const previous = useCallback(() => {
+    if (!ownsMusicTabRef.current) return;
     setState((prev) => {
       const history = [...prev.history];
       const back = history.pop();
@@ -444,6 +514,7 @@ function plainClone(value: unknown): unknown {
   }, [streamUrlFor]);
 
   const clear = useCallback(() => {
+    if (!ownsMusicTabRef.current) return;
     const audio = audioRef.current;
     if (audio) {
       audio.pause();
@@ -481,6 +552,7 @@ function plainClone(value: unknown): unknown {
   const removeFromQueue = useCallback((index: number) => setState((prev) => ({ ...prev, queue: prev.queue.filter((_, i) => i !== index) })), []);
   const clearQueue = useCallback(() => setState((prev) => ({ ...prev, queue: [], showQueue: false })), []);
   const jumpToQueue = useCallback((index: number) => {
+    if (!ownsMusicTabRef.current) return;
     setState((prev) => {
       const target = prev.queue[index];
       if (!target) return prev;

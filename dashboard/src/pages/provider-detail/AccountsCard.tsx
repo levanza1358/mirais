@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cable, ChevronLeft, ChevronRight, Gauge, Pencil, Plus, Trash2 } from "lucide-react";
 import { type Provider, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, Card, ConfirmModal, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
 import { AccountMetaModal } from "./AccountMetaModal";
 import { AddAccountModal } from "./AddAccountModal";
-import { CodexQuotaModal, quotaTitle } from "./quota";
+import { CodexQuotaModal, InlineCodexQuota, quotaTitle } from "./quota";
 import { ACCOUNT_PAGE_SIZE_OPTIONS, DEFAULT_ACCOUNTS_PER_PAGE } from "./types";
 
 export function AccountsCard({ provider }: { provider: Provider }) {
@@ -52,6 +52,20 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   });
 
   const accounts = provider.accounts ?? [];
+  const codexAccounts = accounts.filter((account) => account.auth_kind === "oauth" && provider.type === "openai");
+  const codexQuotaQueries = useQueries({
+    queries: codexAccounts.map((account) => ({
+      queryKey: ["codex-quota", account.id],
+      queryFn: () => providers.codexQuota(account.id),
+      refetchInterval: 60_000,
+      staleTime: 30_000,
+      retry: 1,
+    })),
+  });
+  const codexQuotaByAccountId = useMemo(
+    () => new Map(codexAccounts.map((account, index) => [account.id, codexQuotaQueries[index]])),
+    [codexAccounts, codexQuotaQueries],
+  );
   const totalPages = Math.max(1, Math.ceil(accounts.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageAccounts = accounts.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -80,8 +94,9 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       <div className="space-y-2">
         {pageAccounts.map((account) => {
           const row = usageByLabel.get(account.label);
+          const quota = codexQuotaByAccountId.get(account.id);
           return (
-            <div key={account.id} className="rounded-lg bg-bg-base/50 px-3 py-3 text-xs">
+            <div key={account.id} className="relative rounded-lg bg-bg-base/50 px-3 py-3 text-xs">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
@@ -94,6 +109,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                   </div>
                   <div className="flex flex-col gap-1 text-text-muted sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                     <span title={row ? `Today: ${row.requests_today} req · ${fmtNum(row.tokens_today)} tok\nAll-time: ${row.requests_total} req · ${fmtNum(row.tokens_total)} tok` : "No usage recorded yet"}>{row ? `${fmtNum(row.requests_today)} req · ${fmtNum(row.tokens_today)} tok today` : "—"}</span>
+                    {quota && <div className="lg:hidden"><InlineCodexQuota data={quota.data} loading={quota.isLoading} /></div>}
                     <span>{fmtTime(account.created_at)}</span>
                     {account.last_warmup_at && <span>Warmup: {fmtTime(account.last_warmup_at)}</span>}
                     {account.last_warmup_latency_ms != null && <span>{account.last_warmup_latency_ms}ms</span>}
@@ -116,6 +132,11 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                   <Button variant="ghost" size="sm" onClick={() => setRemoving(account)} aria-label={`Remove ${account.label}`}><Trash2 size={13} className="text-danger" /></Button>
                 </div>
               </div>
+              {quota && (
+                <div className="pointer-events-none absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 lg:block">
+                  <InlineCodexQuota data={quota.data} loading={quota.isLoading} />
+                </div>
+              )}
             </div>
           );
         })}
