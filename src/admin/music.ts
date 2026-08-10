@@ -305,6 +305,7 @@ export async function searchMusic(query: string, limit = 20, page = 1): Promise<
 // to a fresh resolve via the audio error handler.
 const STREAM_URL_CACHE_TTL_MS = 5 * 60_000;
 const streamUrlCache = new Map<string, { url: string; contentType?: string; via: "yt-dlp" | "invidious"; expiresAt: number }>();
+const videoStreamUrlCache = new Map<string, { url: string; contentType?: string; via: "yt-dlp" | "invidious"; expiresAt: number }>();
 
 /** Resolve an audio stream URL for a YouTube video id. Returns a redirect URL. */
 export async function resolveAudioStreamUrl(videoId: string): Promise<{ url: string; contentType?: string; via: "yt-dlp" | "invidious" } | null> {
@@ -476,4 +477,49 @@ export async function fetchTrending(limit = 20, page = 1, force = false): Promis
     }
   }
   return { source: "yt-dlp", results: [] };
+}
+
+/** Resolve a progressive video stream so the dashboard can use a native video element without YouTube overlays. */
+export async function resolveVideoStreamUrl(videoId: string): Promise<{ url: string; contentType?: string; via: "yt-dlp" | "invidious" } | null> {
+  if (!/^[A-Za-z0-9_-]{6,15}$/.test(videoId)) return null;
+
+  const cached = videoStreamUrlCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) return { url: cached.url, contentType: cached.contentType, via: cached.via };
+
+  const dlp = await runYtDlp([
+    "--get-url",
+    "--format", "best[acodec!=none][vcodec!=none][ext=mp4]/best[acodec!=none][vcodec!=none]",
+    "--no-warnings",
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ]);
+  if (dlp.ok) {
+    const url = dlp.stdout.trim().split("\n")[0] ?? "";
+    if (url.startsWith("http")) {
+      const entry = { url, contentType: "video/mp4", via: "yt-dlp" as const, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS };
+      videoStreamUrlCache.set(videoId, entry);
+      return entry;
+    }
+  }
+
+  for (const base of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await withTimeout(
+        fetch(`${base}/api/v1/videos/${videoId}?fields=formatStreams`, { headers: { "user-agent": "Mozilla/5.0 Mirais" } }),
+        FETCH_TIMEOUT_MS,
+        `invidious progressive video (${base})`,
+      );
+      if (!res.ok) continue;
+      const data = (await res.json()) as { formatStreams?: Array<{ type?: string; url?: string }> };
+      const video = (data.formatStreams ?? []).find((format) => format.type?.startsWith("video/") && format.url);
+      if (video?.url) {
+        const entry = { url: video.url, contentType: video.type, via: "invidious" as const, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS };
+        videoStreamUrlCache.set(videoId, entry);
+        return entry;
+      }
+    } catch {
+      /* try next instance */
+    }
+  }
+
+  return null;
 }

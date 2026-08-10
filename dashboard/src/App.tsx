@@ -1,9 +1,8 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 import { music as musicApiClient, settings as settingsApi } from "./api";
 import { Layout } from "./components/Layout";
 import { ToastHost } from "./components/ui";
-import CommandPalette from "./components/CommandPalette";
 import { MusicPlayerProvider } from "./hooks/useMusicPlayer";
 import MusicMiniPlayer from "./components/MusicMiniPlayer";
 import Landing from "./pages/Landing";
@@ -83,6 +82,11 @@ function AccentBoot() {
   return null;
 }
 
+function DashboardMusicMiniPlayer() {
+  const location = useLocation();
+  return location.pathname === "/dashboard/music" ? null : <MusicMiniPlayer />;
+}
+
 export default function App() {
   return (
     <>
@@ -111,12 +115,11 @@ export default function App() {
                 </Routes>
               </Suspense>
             </Layout>
-            <MusicMiniPlayer />
+            <DashboardMusicMiniPlayer />
           </MusicPlayerProvider>
         } />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <CommandPalette />
       <ToastHost />
     </>
   );

@@ -103,6 +103,8 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 |--------|------|-------|
 | GET | `/api/music/search?q=&limit=&page=` | YouTube search results. Defaults to 30 results per page; `limit` is capped at 30 and pages are available through page 20. |
 | GET | `/api/music/trending?limit=&page=` | Paged music discovery feed. `limit` is capped at 50 and pages are available through page 20. |
+| GET | `/api/music/stream?id=` | Range-capable proxied audio stream for the Music player. |
+| GET | `/api/music/video-stream?id=` | Range-capable proxied progressive video stream for the muted, native Music visual player. |
 
 ### Providers & accounts
 

@@ -505,4 +505,5 @@ export const music = {
     req<MusicTrack>(`/api/music/playlists/${playlistId}/tracks`, { method: "POST", body: JSON.stringify(input) }),
   removeTrack: (trackId: string) => req<{ ok: boolean }>(`/api/music/tracks/${trackId}`, { method: "DELETE" }),
   streamUrl: (videoId: string) => `/api/music/stream?id=${encodeURIComponent(videoId)}`,
+  videoStreamUrl: (videoId: string) => `/api/music/video-stream?id=${encodeURIComponent(videoId)}`,
 };

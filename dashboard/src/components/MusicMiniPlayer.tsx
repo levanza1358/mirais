@@ -1,6 +1,8 @@
 import { Play, Pause, SkipForward, SkipBack, X, Volume2, VolumeX, ChevronDown, Disc3, ListMusic, Repeat, Repeat1, Shuffle, Trash2, Heart, AlertCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMusicPlayer } from "../hooks/useMusicPlayer";
+
+type DockPosition = { x: number; y: number };
 
 function fmtTime(sec: number | null | undefined): string {
   if (!sec || sec <= 0) return "—";
@@ -21,6 +23,9 @@ function fmtTime(sec: number | null | undefined): string {
  */
 export default function MusicMiniPlayer() {
   const player = useMusicPlayer();
+  const [dockPosition, setDockPosition] = useState<DockPosition | null>(null);
+  const dockDrag = useRef<{ pointerId: number; offsetX: number; offsetY: number; moved: boolean } | null>(null);
+  const suppressDockClick = useRef(false);
   const [isMobile, setIsMobile] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia("(max-width: 767px)").matches;
@@ -35,6 +40,46 @@ export default function MusicMiniPlayer() {
     return () => mq.removeEventListener("change", apply);
   }, []);
 
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("mirais.music.dock-position");
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (typeof parsed === "object" && parsed !== null && "x" in parsed && "y" in parsed && typeof parsed.x === "number" && typeof parsed.y === "number") {
+          setDockPosition({ x: parsed.x, y: parsed.y });
+        }
+      }
+    } catch {
+      // Ignore an invalid or unavailable saved position.
+    }
+  }, []);
+
+  const onDockPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    dockDrag.current = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onDockPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dockDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (Math.abs(event.movementX) + Math.abs(event.movementY) > 0) drag.moved = true;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.max(8, Math.min(window.innerWidth - rect.width - 8, event.clientX - drag.offsetX));
+    const y = Math.max(8, Math.min(window.innerHeight - rect.height - 8, event.clientY - drag.offsetY));
+    setDockPosition({ x, y });
+  };
+
+  const onDockPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dockDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    suppressDockClick.current = drag.moved;
+    dockDrag.current = null;
+    if (dockPosition) {
+      try { window.localStorage.setItem("mirais.music.dock-position", JSON.stringify(dockPosition)); } catch { /* ignore */ }
+    }
+  };
+
   if (!player.current && player.presentation === "hidden") return null;
   const track = player.current;
   if (!track) return null;
@@ -43,21 +88,33 @@ export default function MusicMiniPlayer() {
   // Dock: floating compact pill above the dashboard chrome. Tap to expand.
   if (player.presentation === "dock") {
     return (
-      <button
-        type="button"
-        onClick={player.show}
-        className="fixed right-3 bottom-20 z-[150] flex max-w-[260px] items-center gap-2 rounded-full border border-border/80 bg-bg-surface/95 px-3 py-2 text-left shadow-[0_18px_44px_rgba(0,0,0,0.42)] backdrop-blur-xl md:bottom-3"
-        aria-label="Show music player"
+      <div
+        className={`fixed z-[150] cursor-grab touch-none active:cursor-grabbing ${dockPosition ? "" : "right-3 bottom-20 md:bottom-3"}`}
+        style={dockPosition ? { left: dockPosition.x, top: dockPosition.y } : undefined}
+        onPointerDown={onDockPointerDown}
+        onPointerMove={onDockPointerMove}
+        onPointerUp={onDockPointerUp}
+        onPointerCancel={onDockPointerUp}
       >
-        <span className={`flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-accent ${player.isPlaying ? "animate-[spin_4s_linear_infinite]" : ""}`}>
-          <Disc3 size={18} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-text-primary">{track.title}</span>
-          <span className="block truncate text-[10px] text-text-muted">{track.channel ?? "Now playing"}</span>
-        </span>
-        <span className="rounded-full bg-bg-raised/70 px-2 py-1 text-[10px] text-text-muted">{player.queue.length}</span>
-      </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (suppressDockClick.current) { suppressDockClick.current = false; return; }
+            player.show();
+          }}
+          className="flex max-w-[260px] items-center gap-2 rounded-full border border-border/80 bg-bg-surface/95 px-3 py-2 text-left shadow-[0_18px_44px_rgba(0,0,0,0.42)] backdrop-blur-xl"
+          aria-label="Show music player"
+        >
+          <span className={`flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-accent ${player.isPlaying ? "animate-[spin_4s_linear_infinite]" : ""}`}>
+            <Disc3 size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-medium text-text-primary">{track.title}</span>
+            <span className="block truncate text-[10px] text-text-muted">{track.channel ?? "Now playing"}</span>
+          </span>
+          <span className="rounded-full bg-bg-raised/70 px-2 py-1 text-[10px] text-text-muted">{player.queue.length}</span>
+        </button>
+      </div>
     );
   }
 

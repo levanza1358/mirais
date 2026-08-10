@@ -150,6 +150,9 @@ TOKEN_SAVER=on                 # on | off
 TRACK_PAYLOADS=meta            # none | meta | full   (full stores req/resp bodies)
 REQUEST_BODY_LIMIT_MB=25
 UPSTREAM_TIMEOUT_MS=120000
+# Match this with `codex --version` after updating the official Codex CLI.
+# Codex uses it to decide which ChatGPT-authenticated models to return.
+CODEX_CLIENT_VERSION=0.145.0
 LOG_LEVEL=info                 # debug | info | warn | error
 
 # ── Proxy (corp machines) ──

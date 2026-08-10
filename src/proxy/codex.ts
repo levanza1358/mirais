@@ -1,5 +1,6 @@
 import type { CanonicalRequest, CanonicalResponse, ProviderAccount, Usage } from "../shared/types";
 import { GatewayError } from "../shared/errors";
+import { config } from "../config";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { SseParser } from "./translator/stream";
 import { ulid } from "../utils/id";
@@ -228,10 +229,6 @@ export const CODEX_MODELS: Array<{ id: string; contextLength: number; maxOutputT
   { id: "gpt-5.4-mini", contextLength: 272_000, maxOutputTokens: 128_000, capabilities: ["reasoning", "tools", "json", "vision"] },
 ];
 
-// Client version sent to the catalog endpoint — the catalog is gated on
-// minimal_client_version, so an older version returns fewer models.
-const CODEX_CLIENT_VERSION = "1.0.0";
-
 interface CodexCatalogModel {
   slug?: string;
   visibility?: string;
@@ -248,7 +245,7 @@ interface CodexCatalogModel {
  */
 export async function fetchCodexModels(account: ProviderAccount, accessToken: string): Promise<Array<{ id: string; contextLength: number; maxOutputTokens: number; capabilities: string[] }>> {
   try {
-    const res = await fetch(`${CODEX_BASE}/models?client_version=${CODEX_CLIENT_VERSION}`, {
+    const res = await fetch(`${CODEX_BASE}/models?client_version=${config.codexClientVersion}`, {
       headers: codexHeaders(account, accessToken, false),
       signal: AbortSignal.timeout(15_000),
     });

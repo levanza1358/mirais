@@ -10,6 +10,9 @@ const envSchema = z.object({
   TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("meta"),
   REQUEST_BODY_LIMIT_MB: z.coerce.number().positive().default(25),
   UPSTREAM_TIMEOUT_MS: z.coerce.number().positive().default(120000),
+  // The ChatGPT Codex model catalog is gated by this official CLI version.
+  // Override it after updating Codex CLI if its catalog includes newer models.
+  CODEX_CLIENT_VERSION: z.string().regex(/^\d+\.\d+\.\d+$/, "must be a semantic version").default("0.145.0"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   // When `true` (default), every /v1/* request must carry a valid gateway
   // key. Set `MIRAIS_AUTH_REQUIRED=false` to allow anonymous proxy use when
@@ -50,6 +53,7 @@ export const config = {
   trackPayloads: parsed.TRACK_PAYLOADS,
   requestBodyLimit: parsed.REQUEST_BODY_LIMIT_MB * 1024 * 1024,
   upstreamTimeoutMs: parsed.UPSTREAM_TIMEOUT_MS,
+  codexClientVersion: parsed.CODEX_CLIENT_VERSION,
   logLevel: parsed.LOG_LEVEL,
   authRequired: parsed.MIRAIS_AUTH_REQUIRED === "on",
   version: "1.0.0",

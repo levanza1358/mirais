@@ -576,7 +576,7 @@ export function providerRoutes(db: Database) {
             } catch {
               failureDetail = `HTTP ${res.status}`;
             }
-            if (isRateLimitDetail(failureDetail)) {
+            if (isRateLimitDetail(failureDetail) || /model is not supported when using Codex/i.test(failureDetail ?? "")) {
               lastRateLimited = { res, account };
               continue;
             }
@@ -729,15 +729,33 @@ export function providerRoutes(db: Database) {
       }
 
       // OAuth accounts: fetch the live Codex model catalog (same endpoint the
-      // Codex CLI uses) instead of the api.openai.com /models listing.
-      if (isOAuthAccount(account)) {
-        const accessToken = await ensureFreshToken(repo, account);
-        const models = await fetchCodexModels(account, accessToken);
+      // Codex CLI uses) instead of the api.openai.com /models listing. Keep the
+      // catalog exactly as each token advertises it and merge catalogs across
+      // enabled accounts. Entitlements can differ between ChatGPT accounts, so
+      // using only the first account can hide models such as gpt-5.6-sol that
+      // another enabled account is allowed to use.
+      const oauthAccounts = accounts.filter(isOAuthAccount);
+      if (oauthAccounts.length) {
+        const byId = new Map<string, Awaited<ReturnType<typeof fetchCodexModels>>[number]>();
+        const failures: string[] = [];
+        for (const oauthAccount of oauthAccounts) {
+          try {
+            const accessToken = await ensureFreshToken(repo, oauthAccount);
+            for (const model of await fetchCodexModels(oauthAccount, accessToken)) {
+              if (!byId.has(model.id)) byId.set(model.id, model);
+            }
+          } catch (err) {
+            failures.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+        if (!byId.size) {
+          throw new AdminError(502, failures[0] ?? "No OAuth model catalog available");
+        }
+        const models = [...byId.values()];
         const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
-        const kept = models.filter((model) => keepModel(model.id, mode));
-        const pruned = repo.replaceSyncedModels(p.id, kept);
-        log.info("codex models synced", { provider: p.name, count: kept.length, pruned, mode });
-        return { synced: kept.length, pruned, mode, models: kept.map((m) => m.id) };
+        const pruned = repo.replaceSyncedModels(p.id, models);
+        log.info("codex models synced", { provider: p.name, count: models.length, pruned, mode, accounts: oauthAccounts.length, failures: failures.length });
+        return { synced: models.length, pruned, mode, models: models.map((m) => m.id) };
       }
 
       const base = baseUrlFor(p);

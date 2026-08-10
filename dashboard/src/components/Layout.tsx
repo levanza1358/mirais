@@ -16,7 +16,6 @@ import {
   ChevronDown,
   Music,
   Menu,
-  Search,
   X,
 } from "lucide-react";
 import { health } from "../api";
@@ -141,19 +140,6 @@ export function Layout({ children }: { children: ReactNode }) {
       >
         <Menu size={15} />
         <span className="hidden xs:inline">Menu</span>
-      </button>
-
-      {/* Desktop search trigger — fires the same shortcut as Ctrl+K */}
-      <button
-        type="button"
-        onClick={() => window.dispatchEvent(new CustomEvent("mirais:command-palette"))}
-        className="fixed right-3 top-3 z-30 hidden h-9 items-center gap-2 rounded-xl border border-border/80 bg-bg-surface/90 px-3 text-xs text-text-muted shadow-md backdrop-blur hover:text-text-primary md:flex"
-        aria-label="Search pages"
-        title="Search pages (Ctrl+K)"
-      >
-        <Search size={13} />
-        <span>Search pages…</span>
-        <kbd className="ml-2 rounded-md border border-border/70 bg-bg-base/60 px-1.5 py-0.5 text-[10px]">⌘K</kbd>
       </button>
 
       {/* sidebar */}

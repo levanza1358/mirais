@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -16,6 +16,7 @@ import {
   ListMusic,
   Disc3,
   GripVertical,
+  Shuffle,
 } from "lucide-react";
 import { music as musicApi, type MusicSearchResult } from "../api";
 import { Card, Input, Skeleton, Badge, Button } from "../components/ui";
@@ -38,6 +39,8 @@ export default function Music() {
   const [debounced, setDebounced] = useState("");
   const [trendingPage, setTrendingPage] = useState(1);
   const [searchPage, setSearchPage] = useState(1);
+  const [playerHeight, setPlayerHeight] = useState(42);
+  const splitDrag = useRef<number | null>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -48,6 +51,35 @@ export default function Music() {
   useEffect(() => {
     setSearchPage(1);
   }, [debounced]);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("mirais.music.player-height");
+      if (saved) setPlayerHeight(Math.max(25, Math.min(75, Number(saved) || 42)));
+    } catch {
+      // Ignore unavailable local storage.
+    }
+  }, []);
+
+  const onSplitPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    splitDrag.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onSplitPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (splitDrag.current !== event.pointerId) return;
+    const bounds = event.currentTarget.parentElement?.getBoundingClientRect();
+    if (!bounds || bounds.height <= 0) return;
+    const nextHeight = Math.max(25, Math.min(75, ((event.clientY - bounds.top) / bounds.height) * 100));
+    setPlayerHeight(nextHeight);
+    try { window.localStorage.setItem("mirais.music.player-height", String(nextHeight)); } catch { /* ignore */ }
+  };
+
+  const onSplitPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (splitDrag.current !== event.pointerId) return;
+    splitDrag.current = null;
+    try { window.localStorage.setItem("mirais.music.player-height", String(playerHeight)); } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     if (debounced) return;
@@ -114,6 +146,15 @@ export default function Music() {
     player.play(trackFromSearch(result), queue);
   };
 
+  const isCurrentTrack = (sourceId: string) => player.current?.source_id === sourceId;
+  const playOrToggleTrack = (result: MusicSearchResult) => {
+    if (isCurrentTrack(result.id)) {
+      player.toggle();
+      return;
+    }
+    playTrack(result);
+  };
+
   const isFav = (sourceId: string) => player.favorites.some((f) => f.source_id === sourceId);
 
   return (
@@ -170,17 +211,17 @@ export default function Music() {
                 <>
                   <ul className="divide-y divide-border/60">
                     {activeList.map((r, i) => (
-                      <li key={r.id} className="grid grid-cols-[1.25rem_4rem_minmax(0,1fr)] items-center gap-2 px-2 py-2 hover:bg-bg-raised/40 sm:flex">
+                      <li key={r.id} className={`grid grid-cols-[1.25rem_4rem_minmax(0,1fr)] items-center gap-2 px-2 py-2 transition-colors sm:flex ${isCurrentTrack(r.id) ? "bg-accent/15 ring-1 ring-inset ring-accent/30" : "hover:bg-bg-raised/40"}`}>
                         <span className="w-5 shrink-0 text-center text-[11px] font-mono text-text-muted">{((searchPage - 1) * RESULTS_PER_PAGE) + i + 1}</span>
-                        <button type="button" onClick={() => playTrack(r)} className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`Play ${r.title}`}>
+                        <button type="button" onClick={() => playOrToggleTrack(r)} className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`${isCurrentTrack(r.id) && player.isPlaying ? "Pause" : "Play"} ${r.title}`}>
                           <img src={r.thumbnail_url ?? ""} alt="" className="h-10 w-16 rounded object-cover bg-bg-raised" loading="lazy" referrerPolicy="no-referrer" />
                         </button>
-                        <button type="button" onClick={() => playTrack(r)} className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`Play ${r.title}`}>
+                        <button type="button" onClick={() => playOrToggleTrack(r)} className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`${isCurrentTrack(r.id) && player.isPlaying ? "Pause" : "Play"} ${r.title}`}>
                           <p className="truncate text-sm">{r.title}</p>
                           <p className="truncate text-[11px] text-text-muted">{r.channel ?? "—"} · {fmtTime(r.duration_sec)}</p>
                         </button>
                         <div className="col-span-3 flex justify-end gap-1 sm:col-auto sm:ml-auto">
-                          <Button size="sm" onClick={() => playTrack(r)} title="Play"><Play size={12} /></Button>
+                          <Button size="sm" onClick={() => playOrToggleTrack(r)} title={isCurrentTrack(r.id) && player.isPlaying ? "Pause" : "Play"}>{isCurrentTrack(r.id) && player.isPlaying ? <Pause size={12} /> : <Play size={12} />}</Button>
                           <Button
                             size="sm"
                             variant="outline"
@@ -209,17 +250,17 @@ export default function Music() {
               <>
                 <ul className="divide-y divide-border/60">
                   {activeList.map((r, i) => (
-                    <li key={r.id} className="grid grid-cols-[1.25rem_4rem_minmax(0,1fr)] items-center gap-2 px-2 py-2 hover:bg-bg-raised/40 sm:flex">
+                    <li key={r.id} className={`grid grid-cols-[1.25rem_4rem_minmax(0,1fr)] items-center gap-2 px-2 py-2 transition-colors sm:flex ${isCurrentTrack(r.id) ? "bg-accent/15 ring-1 ring-inset ring-accent/30" : "hover:bg-bg-raised/40"}`}>
                       <span className="w-5 shrink-0 text-center text-[11px] font-mono text-text-muted">{((trendingPage - 1) * RESULTS_PER_PAGE) + i + 1}</span>
-                      <button type="button" onClick={() => playTrack(r)} className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`Play ${r.title}`}>
+                      <button type="button" onClick={() => playOrToggleTrack(r)} className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`${isCurrentTrack(r.id) && player.isPlaying ? "Pause" : "Play"} ${r.title}`}>
                         <img src={r.thumbnail_url ?? ""} alt="" className="h-10 w-16 rounded object-cover bg-bg-raised" loading="lazy" referrerPolicy="no-referrer" />
                       </button>
-                      <button type="button" onClick={() => playTrack(r)} className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`Play ${r.title}`}>
+                      <button type="button" onClick={() => playOrToggleTrack(r)} className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`${isCurrentTrack(r.id) && player.isPlaying ? "Pause" : "Play"} ${r.title}`}>
                         <p className="truncate text-sm">{r.title}</p>
                         <p className="truncate text-[11px] text-text-muted">{r.channel ?? "—"} · {fmtTime(r.duration_sec)}</p>
                       </button>
                       <div className="col-span-3 flex justify-end gap-1 sm:col-auto sm:ml-auto">
-                        <Button size="sm" onClick={() => playTrack(r)} title="Play"><Play size={12} /></Button>
+                        <Button size="sm" onClick={() => playOrToggleTrack(r)} title={isCurrentTrack(r.id) && player.isPlaying ? "Pause" : "Play"}>{isCurrentTrack(r.id) && player.isPlaying ? <Pause size={12} /> : <Play size={12} />}</Button>
                         <Button size="sm" variant="ghost" onClick={() => player.playNext(trackFromSearch(r))} title="Play next"><SkipForward size={12} /></Button>
                         <Button
                           size="sm"
@@ -241,7 +282,10 @@ export default function Music() {
         </Card>
 
         {/* ── Right column: video player (top) + favorites (bottom) ── */}
-        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden">
+        <div
+          className="grid min-h-0 overflow-hidden"
+          style={{ gridTemplateRows: `${playerHeight}fr 10px ${100 - playerHeight}fr` }}
+        >
           <InlinePlayer
             track={player.current}
             isPlaying={player.isPlaying}
@@ -255,9 +299,24 @@ export default function Music() {
             onPrevious={player.previous}
             onSeek={player.seek}
             onClear={player.clear}
+            onToggleShuffle={player.toggleShuffle}
+            isShuffle={player.shuffle}
             onToggleFavorite={() => player.current && player.toggleFavorite(player.current)}
             isFavorite={!!player.current && isFav(player.current.source_id)}
           />
+
+          <div
+            role="separator"
+            aria-label="Resize video player and favorites"
+            aria-orientation="horizontal"
+            onPointerDown={onSplitPointerDown}
+            onPointerMove={onSplitPointerMove}
+            onPointerUp={onSplitPointerUp}
+            onPointerCancel={onSplitPointerUp}
+            className="group relative z-10 flex cursor-row-resize items-center justify-center touch-none"
+          >
+            <span className="h-1 w-16 rounded-full bg-border transition-colors group-hover:bg-accent" />
+          </div>
 
           <Card className="flex min-h-0 flex-col overflow-hidden p-2 sm:p-3">
             <div className="mb-2 flex shrink-0 items-center justify-between">
@@ -281,6 +340,9 @@ export default function Music() {
                   onPlayNext={(item) => player.playNext(item)}
                   onRemove={(item) => player.toggleFavorite(item)}
                   onReorder={(from, to) => player.reorderFavorites(from, to)}
+                  currentSourceId={player.current?.source_id}
+                  isPlaying={player.isPlaying}
+                  onToggleCurrent={player.toggle}
                 />
               )}
             </div>
@@ -297,12 +359,18 @@ function FavoritesList({
   onPlayNext,
   onRemove,
   onReorder,
+  currentSourceId,
+  isPlaying,
+  onToggleCurrent,
 }: {
   items: MusicTrack[];
   onPlay: (item: MusicTrack) => void;
   onPlayNext: (item: MusicTrack) => void;
   onRemove: (item: MusicTrack) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
+  currentSourceId?: string;
+  isPlaying: boolean;
+  onToggleCurrent: () => void;
 }) {
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -346,7 +414,7 @@ function FavoritesList({
             }}
             className={`flex items-center gap-2 px-2 py-2 transition-colors ${
               isDragging ? "opacity-40" : ""
-            } ${isDragOver ? "bg-accent/15" : "hover:bg-bg-raised/40"}`}
+            } ${isDragOver || item.source_id === currentSourceId ? "bg-accent/15 ring-1 ring-inset ring-accent/30" : "hover:bg-bg-raised/40"}`}
           >
             <button
               type="button"
@@ -358,19 +426,19 @@ function FavoritesList({
             >
               <GripVertical size={12} />
             </button>
-            <button type="button" onClick={() => onPlay(item)} className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`Play ${item.title}`}>
+            <button type="button" onClick={() => item.source_id === currentSourceId ? onToggleCurrent() : onPlay(item)} className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`${item.source_id === currentSourceId && isPlaying ? "Pause" : "Play"} ${item.title}`}>
               {item.thumbnail_url ? (
                 <img src={item.thumbnail_url} alt="" className="h-10 w-16 rounded object-cover bg-bg-raised" loading="lazy" referrerPolicy="no-referrer" />
               ) : (
                 <div className="h-10 w-16 rounded bg-bg-raised" />
               )}
             </button>
-            <button type="button" onClick={() => onPlay(item)} className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`Play ${item.title}`}>
+            <button type="button" onClick={() => item.source_id === currentSourceId ? onToggleCurrent() : onPlay(item)} className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-accent" aria-label={`${item.source_id === currentSourceId && isPlaying ? "Pause" : "Play"} ${item.title}`}>
               <p className="truncate text-sm">{item.title}</p>
               <p className="truncate text-[11px] text-text-muted">{item.channel ?? "—"} · {fmtTime(item.duration_sec)}</p>
             </button>
             <div className="flex shrink-0 gap-1">
-              <Button size="sm" onClick={() => onPlay(item)} title="Play"><Play size={12} /></Button>
+              <Button size="sm" onClick={() => item.source_id === currentSourceId ? onToggleCurrent() : onPlay(item)} title={item.source_id === currentSourceId && isPlaying ? "Pause" : "Play"}>{item.source_id === currentSourceId && isPlaying ? <Pause size={12} /> : <Play size={12} />}</Button>
               <Button size="sm" variant="ghost" onClick={() => onPlayNext(item)} title="Play next"><SkipForward size={12} /></Button>
               <Button size="sm" variant="ghost" onClick={() => onRemove(item)} aria-label="Remove from favorites" title="Remove">
                 <X size={12} />
@@ -415,6 +483,8 @@ function InlinePlayer({
   onPrevious,
   onSeek,
   onClear,
+  onToggleShuffle,
+  isShuffle,
   onToggleFavorite,
   isFavorite,
 }: {
@@ -430,12 +500,43 @@ function InlinePlayer({
   onPrevious: () => void;
   onSeek: (t: number) => void;
   onClear: () => void;
+  onToggleShuffle: () => void;
+  isShuffle: boolean;
   onToggleFavorite: () => void;
   isFavorite: boolean;
 }) {
+  const videoFrame = useRef<HTMLVideoElement>(null);
+  const lastSyncedVideoTime = useRef<number | null>(null);
   const effectiveDuration = duration || track?.duration_sec || 0;
+
+  const sendVideoCommand = useCallback((func: "playVideo" | "pauseVideo" | "seekTo", args: number[] = []) => {
+    const video = videoFrame.current;
+    if (!video) return;
+    if (func === "playVideo") void video.play().catch(() => undefined);
+    if (func === "pauseVideo") video.pause();
+    if (func === "seekTo" && args[0] !== undefined && Math.abs(video.currentTime - args[0]) >= 0.5) video.currentTime = args[0];
+  }, []);
+
+  useEffect(() => {
+    if (!track) return;
+    sendVideoCommand(isPlaying ? "playVideo" : "pauseVideo");
+  }, [isPlaying, sendVideoCommand, track]);
+
+  useEffect(() => {
+    if (!track || Math.abs((lastSyncedVideoTime.current ?? currentTime) - currentTime) < 2) return;
+    lastSyncedVideoTime.current = currentTime;
+    sendVideoCommand("seekTo", [currentTime, true]);
+  }, [currentTime, sendVideoCommand, track]);
+
+  const synchronizeVideo = () => {
+    if (!track) return;
+    lastSyncedVideoTime.current = currentTime;
+    sendVideoCommand("seekTo", [currentTime, true]);
+    sendVideoCommand(isPlaying ? "playVideo" : "pauseVideo");
+  };
+
   return (
-    <Card className="flex flex-col p-2 sm:p-3">
+    <Card className="flex min-h-0 flex-col overflow-y-auto p-2 sm:p-3">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold">
           <Disc3 size={14} className="text-accent" />
@@ -453,23 +554,24 @@ function InlinePlayer({
           </div>
         </div>
       ) : (
-        <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-bg-base/60">
-          {track.thumbnail_url ? (
-            <img src={track.thumbnail_url} alt="" className="h-full w-full object-cover" loading="lazy" referrerPolicy="no-referrer" />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-bg-raised text-text-muted">
-              <Disc3 size={36} className="opacity-60" />
-            </div>
-          )}
+        <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-bg-base/60 lg:aspect-[16/7]">
+          {track ? (
+            <video
+              key={track.source_id}
+              ref={videoFrame}
+              src={musicApi.videoStreamUrl(track.source_id)}
+              className="pointer-events-none h-full w-full border-0"
+              muted
+              playsInline
+              preload="auto"
+              onLoad={synchronizeVideo}
+              onCanPlay={synchronizeVideo}
+            />
+          ) : null}
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3">
             <p className="truncate text-sm font-medium text-white">{track.title}</p>
             <p className="truncate text-[11px] text-white/80">{track.channel ?? "—"}</p>
           </div>
-          {isPlaying && (
-            <div className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-accent/80 text-white shadow-lg">
-              <Disc3 size={18} className="animate-[spin_4s_linear_infinite]" />
-            </div>
-          )}
         </div>
       )}
       <div className="mt-2 flex items-center gap-2">
@@ -497,6 +599,17 @@ function InlinePlayer({
           </Button>
           <Button size="sm" variant="outline" onClick={onNext} disabled={queueLength === 0} aria-label="Next" title="Next">
             <SkipForward size={13} />
+          </Button>
+          <Button
+            size="sm"
+            variant={isShuffle ? "outline" : "ghost"}
+            onClick={onToggleShuffle}
+            aria-pressed={isShuffle}
+            aria-label={isShuffle ? "Disable shuffle" : "Enable shuffle"}
+            title={isShuffle ? "Shuffle on" : "Shuffle off"}
+            className={isShuffle ? "border-accent/60 bg-accent/15 text-accent" : undefined}
+          >
+            <Shuffle size={13} />
           </Button>
           <Button
             size="sm"

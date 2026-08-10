@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import { MusicRepo } from "../store/repos/music";
-import { searchMusic, resolveAudioStreamUrl, videoIdFromInput, fetchTrending } from "./music";
+import { searchMusic, resolveAudioStreamUrl, resolveVideoStreamUrl, videoIdFromInput, fetchTrending } from "./music";
 
 const DEFAULT_SEARCH_LIMIT = 30;
 const MAX_SEARCH_LIMIT = 30;
@@ -112,6 +112,34 @@ export function musicRoutes(db: Database) {
       } catch {
         set.status = 502;
         return { error: "could not proxy audio source" };
+      }
+    })
+
+    // Progressive video proxy used by the dashboard's native, muted visual player.
+    // Keeping it first-party removes the YouTube embed UI while audio remains
+    // managed by the dedicated audio stream player.
+    .get("/video-stream", async ({ query, request, set }) => {
+      const id = videoIdFromInput((query?.id ?? "").toString());
+      if (!id) { set.status = 400; return { error: "id or url is required" }; }
+      const resolved = await resolveVideoStreamUrl(id);
+      if (!resolved) { set.status = 502; return { error: "could not resolve video source" }; }
+      try {
+        const rangeHeader = request.headers.get("range");
+        const upstream = await fetch(resolved.url, {
+          method: "GET",
+          headers: {
+            "user-agent": "Mozilla/5.0 Mirais",
+            "accept": "video/mp4,video/webm,video/*;q=0.9,*/*;q=0.1",
+            ...(rangeHeader ? { range: rangeHeader } : {}),
+          },
+        });
+        const headers = new Headers(upstream.headers);
+        headers.set("cache-control", "no-store");
+        headers.set("x-mirais-source", resolved.via);
+        return new Response(upstream.body, { status: upstream.status, headers });
+      } catch {
+        set.status = 502;
+        return { error: "could not proxy video source" };
       }
     });
 }
