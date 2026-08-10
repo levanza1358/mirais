@@ -88,15 +88,6 @@ CREATE TABLE combo_entries (
   UNIQUE(combo_id, position)
 );
 
--- 0015_memory_sessions: optional bounded, expiring conversation continuity
-CREATE TABLE memory_sessions (
-  id TEXT PRIMARY KEY,                         -- gateway-key id + explicit session id
-  messages TEXT NOT NULL DEFAULT '[]',         -- canonical message JSON
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  expires_at TEXT NOT NULL
-);
-
 -- ── Gateway API keys (hashed) ─────────────────────────────
 CREATE TABLE gateway_keys (
   id                 TEXT PRIMARY KEY,

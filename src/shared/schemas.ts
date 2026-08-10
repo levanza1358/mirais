@@ -235,11 +235,6 @@ export const settingsUpdateSchema = z.object({
       buildLogs: z.boolean().optional(),
     }),
   }).optional(),
-  memory: z.object({
-    enabled: z.boolean(),
-    ttlDays: z.number().int().min(1).max(365),
-    maxMessages: z.number().int().min(2).max(200),
-  }).optional(),
   terse_mode: z.object({
     enabled: z.boolean(),
     prompt: z.string().max(500),

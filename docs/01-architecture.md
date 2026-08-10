@@ -68,7 +68,7 @@ sequenceDiagram
     end
     G->>G: 2. Token saver: auto-compact tool results, duplicates, and stale outputs
     - The deterministic saver follows RTK-style safety: transformations fail open, never replace content with an empty/larger result, preserve recent tool results, hash-mark omitted duplicates, and bound both lines and characters. It runs on the canonical request so OpenAI Chat, Responses, and Anthropic Messages receive identical behavior.
-    - Optional conversation memory is explicit and off by default. Clients opt in with `X-Mirais-Session-Id`; sessions are isolated by gateway-key ID, bounded by message count, expire by TTL, and can be cleared with `X-Mirais-Memory-Clear: 1`. Memory stores conversation messages, so exposed deployments must use the same reverse-proxy/firewall/VPN protections as the passwordless dashboard.
+
     G->>G: 3. Normalize: parse model → provider candidates<br/>(direct model, alias, or combo)
     G->>G: 4. Translate request → upstream format (if needed)
     loop failover chain (max N attempts)

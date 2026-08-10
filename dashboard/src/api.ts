@@ -190,7 +190,6 @@ export interface HealthInfo {
 
 export interface Settings {
   token_saver: TokenSaverSettings | null;
-  memory?: { enabled: boolean; ttlDays: number; maxMessages: number };
   terse_mode: unknown;
   log_retention_days: number;
   session_remember_default: boolean;
@@ -343,21 +342,6 @@ export const logs = {
 export const settings = {
   get: () => req<Settings>("/api/settings"),
   update: (patch: unknown) => req<{ ok: boolean }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
-};
-
-export interface MemorySession {
-  id: string;
-  count: number;
-  created_at: string;
-  updated_at: string;
-  expires_at: string;
-}
-
-export const memory = {
-  list: () => req<MemorySession[]>("/api/admin/memory"),
-  stats: () => req<{ sessions: number; messages: number }>("/api/admin/memory/stats"),
-  remove: (id: string) => req<{ ok: boolean }>(`/api/admin/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  clear: () => req<{ removed: number }>("/api/admin/memory/clear", { method: "POST" }),
 };
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");

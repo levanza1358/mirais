@@ -16,7 +16,6 @@ import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { readInstallRoot } from "./install-path";
 import { ensureExtras, ensureExtrasQuiet, ensureYtDlp } from "./extras";
-import { MemoryRepo } from "../src/store/repos/memory";
 
 const installRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
 
@@ -232,48 +231,6 @@ async function expose(mode: "on" | "off"): Promise<void> {
   console.log(`mirais network binding set to ${mode === "on" ? "0.0.0.0" : "127.0.0.1"} — restart Mirais to apply`);
 }
 
-async function gc(): Promise<void> {
-  const database = getDb(config.dbPath);
-  const removed = new MemoryRepo(database).purgeExpired();
-  closeDb();
-  console.log(`GC complete. Removed ${removed} expired memory session(s).`);
-}
-
-async function memoryList(): Promise<void> {
-  const database = getDb(config.dbPath);
-  const rows = new MemoryRepo(database).list();
-  closeDb();
-  if (rows.length === 0) {
-    console.log("No active memory sessions.");
-    return;
-  }
-  console.log("Active memory sessions:");
-  for (const r of rows) {
-    console.log(`  ${r.id} | msgs: ${r.count} | updated: ${r.updated_at} | expires: ${r.expires_at}`);
-  }
-}
-
-async function memoryClear(session?: string): Promise<void> {
-  const database = getDb(config.dbPath);
-  const repo = new MemoryRepo(database);
-  if (session) {
-    repo.remove(session);
-    console.log(`Cleared memory session: ${session}`);
-  } else {
-    const removed = repo.clearAll();
-    console.log(`Cleared ${removed} memory session(s).`);
-  }
-  closeDb();
-}
-
-async function memoryStats(): Promise<void> {
-  const database = getDb(config.dbPath);
-  const result = new MemoryRepo(database).stats();
-  closeDb();
-  console.log(`Memory sessions: ${result.sessions}`);
-  console.log(`Total stored messages: ${result.messages}`);
-}
-
 async function uninstall(): Promise<void> {
   if (process.argv[3] !== "--yes") {
     console.error("This permanently deletes Mirais, its database, logs, backups, and configuration.");
@@ -398,19 +355,7 @@ switch (cmd) {
     break;
   case "fix": await fix(); break;
   case "extras": await ensureExtras(); break;
-  case "gc": await gc(); break;
-  case "memory": {
-    const sub = process.argv[3];
-    if (sub === "list") await memoryList();
-    else if (sub === "clear") await memoryClear(process.argv[4]);
-    else if (sub === "stats") await memoryStats();
-    else {
-      console.log("Usage: mirais memory <list|clear [session]|stats>");
-      process.exitCode = 1;
-    }
-    break;
-  }
   default:
-    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix]|fix|update|extras|autostart on|off|expose on|off|uninstall --yes|gc|memory list|clear|stats>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix]|fix|update|extras|autostart on|off|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }

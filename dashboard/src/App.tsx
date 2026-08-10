@@ -21,7 +21,6 @@ const Settings = lazy(() => import("./pages/Settings"));
 const Integrations = lazy(() => import("./pages/Integrations"));
 const Proxy = lazy(() => import("./pages/Proxy"));
 const Music = lazy(() => import("./pages/Music"));
-const Memory = lazy(() => import("./pages/Memory"));
 
 const ACCENT_STORAGE_KEY = "mirais.ui.accent";
 const ACCENT_DEFAULT = "#7c5cff";
@@ -108,7 +107,6 @@ export default function App() {
                   <Route path="integrations" element={<Integrations />} />
                   <Route path="proxies" element={<Proxy />} />
                   <Route path="music" element={<Music />} />
-                  <Route path="memory" element={<Memory />} />
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
               </Suspense>

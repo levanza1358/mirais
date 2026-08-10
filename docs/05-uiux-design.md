@@ -49,8 +49,6 @@
 
 ## 3. Pages
 
-The **Memory** operations page shows active opt-in sessions, aggregate message counts, expiry metadata, and destructive clear controls with confirmation. It never displays stored conversation bodies.
-
 ### 3.1 Login (`/login`)
 Centered card on a subtle aurora-gradient background: logo mark, "Mirais" wordmark, password field with show/hide eye, "Sign in" button, caps-lock hint, wrong-password shake + inline error, rate-limit countdown after 5 failures. No other chrome. Enter submits.
 

@@ -20,7 +20,6 @@ import type { CanonicalRequest, CanonicalResponse, RoutingPolicy } from "../shar
 import { log } from "../utils/logger";
 import { canonicalResponseToResponses, chatSseToResponses, responsesRequestToCanonical } from "./translator/responses";
 import { ulid } from "../utils/id";
-import { MemoryRepo } from "../store/repos/memory";
 import type { GatewayKey } from "../shared/types";
 
 export function v1Routes(db: Database) {
@@ -28,25 +27,7 @@ export function v1Routes(db: Database) {
   const router = new Router(providersRepo, new AliasesRepo(db), new CombosRepo(db));
   const logs = new LogsRepo(db);
   const settings = new SettingsRepo(db);
-  const memory = new MemoryRepo(db);
   const app = new Elysia({ prefix: "/v1" });
-
-  const memoryContext = (request: Request, key: GatewayKey, req: CanonicalRequest) => {
-    const cfg = settings.getJson<{ enabled: boolean; ttlDays: number; maxMessages: number }>("memory") ?? { enabled: false, ttlDays: 30, maxMessages: 40 };
-    const raw = request.headers.get("x-mirais-session-id");
-    if (!cfg.enabled || !raw) return { req, save: (_message: string) => undefined };
-    if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(raw)) throw new GatewayError(400, "invalid_request_error", "Invalid X-Mirais-Session-Id");
-    const mode = request.headers.get("x-mirais-memory-mode") ?? "append";
-    if (mode !== "append" && mode !== "replace") throw new GatewayError(400, "invalid_request_error", "X-Mirais-Memory-Mode must be append or replace");
-    const id = `${key.id}:${raw}`;
-    if (request.headers.get("x-mirais-memory-clear") === "1") memory.remove(id);
-    const prior = mode === "append" ? memory.get(id) : [];
-    const merged = prior.length ? { ...req, messages: [...prior, ...req.messages] } : req;
-    return {
-      req: merged,
-      save: (assistant: string) => memory.set(id, [...merged.messages, { role: "assistant", content: assistant }], cfg.ttlDays, cfg.maxMessages),
-    };
-  };
 
   const tokenSaverConfig = (request: Request): TokenSaverConfig => {
     const configured = settings.getJson<TokenSaverConfig>("token_saver") ?? {
@@ -117,9 +98,6 @@ export function v1Routes(db: Database) {
     if (req.max_completion_tokens && !req.max_tokens) req.max_tokens = req.max_completion_tokens;
 
     authorizeModel(key, req.model);
-    const chatMemory = memoryContext(request, key, req);
-    req = chatMemory.req;
-
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
       set.status = 429;
@@ -156,7 +134,6 @@ export function v1Routes(db: Database) {
         const tap = tapOpenAiStream(result.stream);
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([usage, text]) => {
-            if (text) chatMemory.save(text);
             logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
@@ -169,8 +146,6 @@ export function v1Routes(db: Database) {
       logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
-      const assistantText = result.response.choices[0]?.message.content;
-      if (typeof assistantText === "string") chatMemory.save(assistantText);
       return result.response;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
@@ -194,8 +169,6 @@ export function v1Routes(db: Database) {
     if (!parsed.success) throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
     let req = responsesRequestToCanonical(parsed.data);
     authorizeModel(key, req.model);
-    const responseMemory = memoryContext(request, key, req);
-    req = responseMemory.req;
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
     const saverCfg = tokenSaverConfig(request);
@@ -216,9 +189,8 @@ export function v1Routes(db: Database) {
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
         set.headers["cache-control"] = "no-cache";
         set.headers["x-accel-buffering"] = "no";
-        Promise.all([result.usagePromise, translated.usagePromise, translated.textPromise])
-          .then(([upstreamUsage, translatedUsage, text]) => {
-            if (text) responseMemory.save(text);
+        Promise.all([result.usagePromise, translated.usagePromise])
+          .then(([upstreamUsage, translatedUsage]) => {
             logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, translatedUsage ?? upstreamUsage, saver.tokensSaved, result.attempts, undefined, "request");
           })
@@ -228,8 +200,6 @@ export function v1Routes(db: Database) {
       }
       logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts);
-      const assistantText = result.response.choices[0]?.message.content;
-      if (typeof assistantText === "string") responseMemory.save(assistantText);
       return canonicalResponseToResponses(result.response, req.model);
     } catch (error) {
       const status = error instanceof GatewayError ? error.status : 500;
@@ -264,9 +234,6 @@ export function v1Routes(db: Database) {
     let req = anthropicToOpenaiRequest(anthropicBody);
 
     authorizeModel(key, req.model);
-    const messagesMemory = memoryContext(request, key, req);
-    req = messagesMemory.req;
-
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
       set.status = 429;
@@ -302,7 +269,6 @@ export function v1Routes(db: Database) {
         set.headers["x-accel-buffering"] = "no";
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([, text]) => {
-            if (text) messagesMemory.save(text);
             const u = translator.result().usage;
             logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
@@ -314,8 +280,6 @@ export function v1Routes(db: Database) {
       }
 
       const anthropicResp = openaiToAnthropicResponse(result.response);
-      const assistantText = result.response.choices[0]?.message.content;
-      if (typeof assistantText === "string") messagesMemory.save(assistantText);
       logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);

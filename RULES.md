@@ -1,12 +1,5 @@
 # RULES.md — Coding Rules (Binding)
 
-## Conversation memory privacy
-
-- Conversation memory remains disabled by default and requires an explicit client session header.
-- Stored sessions must be key-scoped, bounded, expiring, and removable by the operator.
-- Never expose stored conversation bodies in health metrics, logs, or dashboard lists.
-- Session metadata and memory administration endpoints are sensitive because the dashboard is passwordless; protect them with a reverse proxy, firewall, VPN, or private network.
-
 Violations of §1 (Hard Rules) block merge. §2 conventions block merge when clearly violated. If a rule conflicts with a requirement, open an issue — don't silently break the rule.
 
 ## 1. Hard Rules

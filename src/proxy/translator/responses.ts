@@ -80,11 +80,9 @@ export function canonicalResponseToResponses(response: CanonicalResponse, reques
   };
 }
 
-export function chatSseToResponses(source: ReadableStream<Uint8Array>, requestedModel: string): { stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null>; textPromise: Promise<string> } {
+export function chatSseToResponses(source: ReadableStream<Uint8Array>, requestedModel: string): { stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> } {
   let resolveUsage: (usage: Usage | null) => void;
   const usagePromise = new Promise<Usage | null>((resolve) => { resolveUsage = resolve; });
-  let resolveText: (text: string) => void;
-  const textPromise = new Promise<string>((resolve) => { resolveText = resolve; });
   const responseId = `resp_${ulid()}`;
   let text = "";
   let usage: Usage | null = null;
@@ -167,7 +165,6 @@ export function chatSseToResponses(source: ReadableStream<Uint8Array>, requested
         controller.error(error);
       } finally {
         resolveUsage!(usage);
-        resolveText!(text);
         activeReader.releaseLock();
         reader = null;
         try { controller.close(); } catch { /* already errored */ }
@@ -175,9 +172,8 @@ export function chatSseToResponses(source: ReadableStream<Uint8Array>, requested
     },
     async cancel(reason) {
       resolveUsage!(usage);
-      resolveText!(text);
       await reader?.cancel(reason);
     },
   });
-  return { stream, usagePromise, textPromise };
+  return { stream, usagePromise };
 }

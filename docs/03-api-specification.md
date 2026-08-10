@@ -51,12 +51,6 @@ Stateless OpenAI Responses compatibility. Supports string/easy-message input, in
 
 Responses/OpenAI endpoints return `x-request-id`. `/v1/messages` accepts either `Authorization: Bearer <gateway-key>` or the Anthropic SDK's `x-api-key: <gateway-key>` and returns `request-id` plus `x-request-id`. Sampling, service-tier, logprob, and strict-schema behavior can remain provider-dependent when a request is translated across API dialects.
 
-Optional memory headers (generation endpoints): `X-Mirais-Session-Id: <opaque-id>` enables a key-scoped session when memory is enabled in settings; `X-Mirais-Memory-Clear: 1` clears that session before processing. `X-Mirais-Memory-Mode: append|replace` controls whether stored history is prepended (`append`, default) or the current request replaces stored history after success (`replace`). Full-history clients should use `replace` to avoid duplicate history. Memory is disabled by default and never inferred from request contents.
-
-Memory administration: `GET /api/admin/memory`, `GET /api/admin/memory/stats`, `DELETE /api/admin/memory/:id`, and `POST /api/admin/memory/clear`. These passwordless dashboard endpoints expose session metadata and must only be reachable through the same trusted-network controls as the dashboard.
-
-`GET /api/health` includes bounded memory counts and process RSS/heap usage. It never includes conversation content.
-
 ### POST `/v1/messages`
 Anthropic Messages shape (`model`, `max_tokens`, `messages`, optional `system`, `tools`, `stream`). Response returned in Anthropic format.
 

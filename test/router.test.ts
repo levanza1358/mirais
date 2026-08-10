@@ -6,7 +6,6 @@ import { AliasesRepo, CombosRepo } from "../src/store/repos/routing";
 import { Router, baseUrlFor, upstreamFormat } from "../src/proxy/router";
 import { GatewayError } from "../src/shared/errors";
 import { clampMaxTokens } from "../src/proxy/executor";
-import { MemoryRepo } from "../src/store/repos/memory";
 
 let db: Database;
 let providers: ProvidersRepo;
@@ -186,29 +185,5 @@ describe("model sync provenance", () => {
     expect(pruned).toBe(1);
     expect(providers.listModels(p.id).map((model) => model.model_id).sort()).toEqual(["kept-model", "manual-model"]);
     expect(providers.getProviderModel(p.id, "manual-model")?.source).toBe("manual");
-  });
-});
-
-describe("session memory", () => {
-  test("stores bounded messages and clears a session", () => {
-    const memory = new MemoryRepo(db);
-    memory.set("key:session", [
-      { role: "user", content: "old" },
-      { role: "assistant", content: "answer" },
-      { role: "user", content: "new" },
-    ], 30, 2);
-    expect(memory.get("key:session").map((message) => message.content)).toEqual(["answer", "new"]);
-    memory.remove("key:session");
-    expect(memory.get("key:session")).toEqual([]);
-  });
-
-  test("lists stats and clears all sessions", () => {
-    const memory = new MemoryRepo(db);
-    memory.set("key:a", [{ role: "user", content: "one" }], 30, 10);
-    memory.set("key:b", [{ role: "user", content: "two" }, { role: "assistant", content: "three" }], 30, 10);
-    expect(memory.stats()).toEqual({ sessions: 2, messages: 3 });
-    expect(memory.list()).toHaveLength(2);
-    expect(memory.clearAll()).toBe(2);
-    expect(memory.stats()).toEqual({ sessions: 0, messages: 0 });
   });
 });

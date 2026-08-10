@@ -18,7 +18,6 @@ import {
   Menu,
   Search,
   X,
-  Brain,
 } from "lucide-react";
 import { health } from "../api";
 import { APP_BUILD } from "../main";
@@ -54,7 +53,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: "/dashboard/logs", label: "Logs", icon: ScrollText },
       { to: "/dashboard/usage", label: "Usage", icon: BarChart3 },
-      { to: "/dashboard/memory", label: "Memory", icon: Brain },
+
       { to: "/dashboard/music", label: "Music", icon: Music },
     ],
   },

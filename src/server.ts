@@ -6,7 +6,7 @@ import { getDb } from "./store/db";
 import { authRoutes } from "./admin/auth";
 import { oauthRoutes } from "./admin/oauth";
 import { providerRoutes } from "./admin/providers";
-import { aliasRoutes, comboRoutes, keyRoutes, memoryRoutes } from "./admin/routes";
+import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, logRoutes, healthRoutes } from "./admin/settings";
 import { proxyRoutes } from "./admin/proxies";
 import { backupRoutes } from "./admin/backups";
@@ -21,7 +21,6 @@ import { baseUrlFor } from "./proxy/router";
 import { codexQuotaDetail, ensureFreshToken, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount } from "./proxy/codex";
 import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/providers";
 import { log, setLogLevel } from "./utils/logger";
-import { MemoryRepo } from "./store/repos/memory";
 
 function classifyWarmupStatus(ok: boolean, status: number, detail?: string | null): "healthy" | "rate_limited" | "failing" {
   if (ok) return "healthy";
@@ -35,15 +34,6 @@ function classifyWarmupStatus(ok: boolean, status: number, detail?: string | nul
 setLogLevel(config.logLevel);
 
 const db = getDb(config.dbPath);
-
-// ── memory purge (hourly) ──
-function purgeExpiredMemory() {
-  const removed = new MemoryRepo(db).purgeExpired();
-  if (removed > 0) log.info("purged expired memory sessions", { removed });
-}
-
-setInterval(purgeExpiredMemory, 60 * 60 * 1000); // every hour
-purgeExpiredMemory(); // run once at startup
 
 // ── retention purge (daily) ──
 function purgeOldLogs() {
@@ -210,7 +200,6 @@ const app = new Elysia()
   .use(aliasRoutes(db))
   .use(comboRoutes(db))
   .use(keyRoutes(db))
-  .use(memoryRoutes(db))
   .use(settingsRoutes(db))
   .use(proxyRoutes(db))
   .use(backupRoutes(db))

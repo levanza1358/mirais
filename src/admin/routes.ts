@@ -2,7 +2,6 @@ import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import { AliasesRepo, CombosRepo } from "../store/repos/routing";
 import { KeysRepo } from "../store/repos/keys";
-import { MemoryRepo } from "../store/repos/memory";
 import { aliasCreateSchema, comboCreateSchema, comboUpdateSchema, keyCreateSchema, keyUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
 import { log } from "../utils/logger";
@@ -74,18 +73,6 @@ export function comboRoutes(db: Database) {
       repo.remove(params.id);
       return { ok: true };
     });
-}
-
-export function memoryRoutes(db: Database) {
-  const repo = new MemoryRepo(db);
-  return new Elysia({ prefix: "/api/admin/memory" })
-    .get("/", () => repo.list())
-    .delete("/:id", ({ params }) => {
-      repo.remove(params.id);
-      return { ok: true };
-    })
-    .post("/clear", () => ({ removed: repo.clearAll() }))
-    .get("/stats", () => repo.stats());
 }
 
 export function keyRoutes(db: Database) {

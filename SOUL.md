@@ -1,9 +1,5 @@
 # SOUL.md — The Spirit of Mirais
 
-## Memory is borrowed trust
-
-Continuity should make an AI more useful without silently turning Mirais into a data archive. Memory is explicit, local, bounded, expiring, transparent to the operator, and easy to erase. Optimization must never hide privacy cost or alter user intent.
-
 ## Name
 
 **Mirais** (未来 / *mirai* = "future") — the gateway you run today that keeps your AI workflow alive no matter what changes upstream.

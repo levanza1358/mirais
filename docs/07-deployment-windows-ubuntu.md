@@ -95,10 +95,6 @@ mirais doctor       # diagnose and repair safe installation issues
 mirais doctor --fix # run the full repair flow
 mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry
 mirais expose off  # switch back to localhost-only; restart required
-mirais gc          # remove expired memory sessions
-mirais memory list
-mirais memory stats
-mirais memory clear [session-id]  # omit id to clear all sessions
 ```
 (Equivalents: `bun run mirais start`, `bun run svc:start|svc:stop|svc:restart|svc:status`.)
 

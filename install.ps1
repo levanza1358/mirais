@@ -1,13 +1,10 @@
-param(
-  [switch]$Elevated
-)
-
 $ErrorActionPreference = 'Stop'
 
 function Test-Administrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  $administratorRole = [Security.Principal.WindowsBuiltInRole]::Administrator
+  return $principal.IsInRole($administratorRole)
 }
 
 if (-not (Test-Administrator)) {
@@ -23,34 +20,33 @@ if (-not (Test-Administrator)) {
     Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $scriptPath
   }
 
-  Write-Host 'Administrator access is required. Opening the Windows UAC prompt...'
+  Write-Output 'Administrator access is required. Opening the Windows UAC prompt...'
   $shell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
   $process = Start-Process -FilePath $shell -Verb RunAs -Wait -PassThru -ArgumentList @(
     '-NoProfile',
     '-ExecutionPolicy', 'Bypass',
-    '-File', "`"$scriptPath`"",
-    '-Elevated'
+    '-File', "`"$scriptPath`""
   )
   if ($process.ExitCode -ne 0) {
     throw "Elevated installer failed with exit code $($process.ExitCode)."
   }
-  Write-Host 'Installation completed by the elevated installer.'
+  Write-Output 'Installation completed by the elevated installer.'
   return
 }
 
 $RepoUrl = if ($env:MIRAIS_REPO_URL) { $env:MIRAIS_REPO_URL } else { 'https://github.com/levanza1358/mirais.git' }
 $InstallDir = if ($env:MIRAIS_INSTALL_DIR) { $env:MIRAIS_INSTALL_DIR } else { 'C:\Mirais' }
 
-function Ensure-Command($name) {
+function Test-ExecutableAvailable($name) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
-Write-Host 'Installation in progress... please wait.'
-if (-not (Ensure-Command git)) {
+Write-Output 'Installation in progress... please wait.'
+if (-not (Test-ExecutableAvailable git)) {
   throw 'Git is required. Install Git for Windows first.'
 }
 
-if (-not (Ensure-Command bun)) {
+if (-not (Test-ExecutableAvailable bun)) {
   powershell -ExecutionPolicy Bypass -c "irm bun.sh/install.ps1 | iex" | Out-Null
   $env:PATH = "$HOME\.bun\bin;$env:PATH"
 }
@@ -91,6 +87,7 @@ try {
   & bun run scripts/extras.ts | Out-Null
 } catch {
   # Optional helpers do not block installation.
+  Write-Verbose "Optional helper installation failed: $($_.Exception.Message)"
 }
 
-Write-Host 'Installation successful. Check dashboard at http://localhost:1463'
+Write-Output 'Installation successful. Check dashboard at http://localhost:1463'
