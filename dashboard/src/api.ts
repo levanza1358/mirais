@@ -59,6 +59,7 @@ export interface ProviderAccount {
   account_id?: string | null;
   notes?: string | null;
   tags?: string | null;
+  session_cookie?: string | null;
   last_warmup_at?: string | null;
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;
@@ -197,6 +198,16 @@ export interface Settings {
   model_sync_mode: "curated" | "all";
   warmup_config?: { enabled: boolean; interval_minutes: number } | null;
   ui: { theme?: string; accent?: string } | null;
+  xai_imap?: {
+    enabled: boolean;
+    gmail_username: string;
+    gmail_app_password: string;
+    email_domain: string;
+    account_password?: string;
+    headless: boolean;
+    otp_check_interval: number;
+    otp_max_retries: number;
+  } | null;
   env: { port: number; host: string; track_payloads: string; upstream_timeout_ms: number };
 }
 
@@ -225,8 +236,10 @@ export const providers = {
     req<{ done: boolean; ok?: boolean; message?: string }>(`/api/oauth/openai/status?state=${encodeURIComponent(state)}`),
   oauthSubmitCallback: (url: string) =>
     req<{ ok: boolean }>("/api/oauth/openai/callback", { method: "POST", body: JSON.stringify({ url }) }),
-  updateAccount: (accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null }>) =>
+  updateAccount: (accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null }>) =>
     req<ProviderAccount>(`/api/providers/accounts/${accId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  checkinAccount: (accId: string) =>
+    req<{ ok: boolean; message: string; quotaTotal: number | null }>(`/api/providers/accounts/${accId}/checkin`, { method: "POST" }),
   removeAccount: (accId: string) => req<{ ok: boolean }>(`/api/providers/accounts/${accId}`, { method: "DELETE" }),
   upsertModel: (id: string, modelId: string, patch?: Partial<{ displayName: string; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>) =>
     req<{ ok: boolean }>(`/api/providers/${id}/models/${encodeURIComponent(modelId)}`, { method: "PUT", body: JSON.stringify(patch ?? {}) }),
@@ -244,6 +257,39 @@ export const providers = {
     req<{ ok: boolean; status: number; latency_ms: number; model: string; detail?: string; preview_text?: string; context_length?: number | null; max_output_tokens?: number | null; capabilities?: string[] }>(
       `/api/providers/${id}/models/${encodeURIComponent(modelId)}/test`, { method: "POST" }),
   sync: (id: string) => req<{ synced: number; models: string[] }>(`/api/providers/${id}/sync`, { method: "POST" }),
+  // ── xAI OAuth Device Flow ──
+  xaiDeviceCode: () =>
+    req<{ deviceCode: string; userCode: string; verificationUrl: string; expiresIn: number; interval: number }>("/api/xai/device-code", { method: "POST" }),
+  xaiPollToken: (deviceCode: string, providerId: string) =>
+    req<{ status: string; accountId: number; email: string }>("/api/xai/poll-token", { method: "POST", body: JSON.stringify({ deviceCode, providerId }) }),
+  xaiFarmCheck: () =>
+    req<{
+      ok: boolean;
+      checks: Array<{
+        key: "imap" | "python" | "packages" | "browser";
+        label: string;
+        ok: boolean;
+        detail: string;
+        required: boolean;
+      }>;
+    }>("/api/xai/farm/check"),
+  xaiFarmInstallBrowser: () =>
+    req<{ success: boolean }>("/api/xai/farm/install-browser", { method: "POST" }),
+  xaiFarm: (providerId: string, count = 1, concurrency = 1) =>
+    req<{
+      ok: boolean;
+      requested: number;
+      concurrency: number;
+      succeeded: number;
+      failed: number;
+      accounts: Array<{ email: string; accountId: string }>;
+      errors: string[];
+    }>("/api/xai/farm", {
+      method: "POST",
+      body: JSON.stringify({ providerId, count, concurrency }),
+    }),
+  xaiModels: (accountId: number) =>
+    req<{ models: string[] }>(`/api/xai/models?accountId=${accountId}`),
 };
 
 export interface CodexQuotaWindow {

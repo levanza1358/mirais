@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   ChevronDown,
   Music,
+  Mail,
   Menu,
   X,
 } from "lucide-react";
@@ -61,6 +62,7 @@ const GROUPS: NavGroup[] = [
     label: "System",
     items: [
       { to: "/dashboard/integrations", label: "Integrations", icon: Plug },
+      { to: "/dashboard/xai-imap", label: "XAI IMAP", icon: Mail },
       { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
     ],
   },
@@ -71,6 +73,7 @@ const MOBILE_NAV: Array<{ to: string; label: string; icon: typeof LayoutDashboar
   { to: "/dashboard/music", label: "Music", icon: Music },
   { to: "/dashboard/providers", label: "Providers", icon: Boxes },
   { to: "/dashboard/logs", label: "Logs", icon: ScrollText },
+  { to: "/dashboard/xai-imap", label: "XAI IMAP", icon: Mail },
   { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];
 

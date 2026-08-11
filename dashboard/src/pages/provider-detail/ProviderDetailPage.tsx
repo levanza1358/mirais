@@ -9,6 +9,7 @@ import { AccountsCard } from "./AccountsCard";
 import { BackLink } from "./BackLink";
 import { ModelsCard } from "./ModelsCard";
 import { ProviderModal } from "./ProviderModal";
+import { XaiFarmCard } from "./XaiFarmCard";
 
 export function ProviderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -124,6 +125,7 @@ export function ProviderDetailPage() {
         </div>
       </div>
       <AccountsCard provider={provider} />
+      {provider.type === "xai" && <XaiFarmCard provider={provider} />}
       <ModelsCard provider={provider} />
       {editing && <ProviderModal provider={provider} onClose={() => setEditing(false)} />}
       <ConfirmModal open={deleting} onClose={() => setDeleting(false)} onConfirm={() => removeProvider.mutate(provider.id)} title="Delete provider" message={`Delete ${provider.name}? Its accounts and model entries will also be removed. This cannot be undone.`} danger loading={removeProvider.isPending} />

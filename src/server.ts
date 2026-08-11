@@ -12,6 +12,7 @@ import { proxyRoutes } from "./admin/proxies";
 import { backupRoutes } from "./admin/backups";
 import { integrationRoutes } from "./admin/integrations";
 import { musicRoutes } from "./admin/musicRoutes";
+import { xaiAdminRoutes } from "./admin/xai-routes";
 import { v1Routes } from "./proxy/routes";
 import { GatewayError, AdminError } from "./shared/errors";
 import { LogsRepo } from "./store/repos/logs";
@@ -205,6 +206,7 @@ const app = new Elysia()
   .use(backupRoutes(db))
   .use(integrationRoutes(db))
   .use(musicRoutes(db))
+  .use(xaiAdminRoutes(db))
   .use(statsRoutes(db))
   .use(logRoutes(db))
   .use(v1Routes(db))

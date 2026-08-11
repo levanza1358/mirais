@@ -36,6 +36,21 @@ function isCodeBuddyToken(account: ProviderAccount): boolean {
   return account.api_key.startsWith("eyJ") && !!account.refresh_token;
 }
 
+/** Headers used by the CodeBuddy CLI for API calls. */
+function codeBuddyHeaders(account: ProviderAccount): Record<string, string> {
+  return {
+    Authorization: `Bearer ${account.api_key}`,
+    "content-type": "application/json",
+    "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
+    "X-Product": "SaaS",
+    "X-IDE-Type": "CLI",
+    "X-IDE-Name": "CLI",
+    "x-requested-with": "XMLHttpRequest",
+    "x-codebuddy-request": "1",
+    accept: "application/json",
+  };
+}
+
 export interface CodeBuddyUsageSnapshot {
   plan: string | null;
   quotas: {
@@ -98,6 +113,100 @@ export async function fetchCodeBuddyUsage(account: ProviderAccount, providerBase
       },
     },
   };
+}
+
+// ── daily check-in ──
+
+export interface CheckinResult {
+  ok: boolean;
+  message: string;
+  quotaTotal: number | null;
+}
+
+/**
+ * Attempt the daily check-in for a CodeBuddy CN account.
+ * The /activity/* area is gated by the APISIX web gateway and normally
+ * requires a browser session cookie. We try the API token first (some
+ * gateways accept it), then the stored session cookie when present.
+ */
+export async function attemptCodeBuddyCheckin(
+  account: ProviderAccount,
+  providerBaseUrl?: string | null,
+): Promise<CheckinResult> {
+  const base = (providerBaseUrl?.trim() || "https://copilot.tencent.com/v2").replace(/\/+$/, "");
+  const url = `${base}/activity/check-in`;
+
+  const safeUsage = async (): Promise<number | null> => {
+    try {
+      const snap = await fetchCodeBuddyUsage(account, base);
+      return snap.quotas?.Credits?.total ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const beforeTotal = await safeUsage();
+
+  const attempts: Record<string, string>[] = [
+    codeBuddyHeaders(account),
+  ];
+  if (account.session_cookie) {
+    attempts.push({
+      ...codeBuddyHeaders(account),
+      cookie: account.session_cookie.includes("=")
+        ? account.session_cookie
+        : `session=${account.session_cookie}`,
+    });
+  }
+
+  let lastStatus = 0;
+  for (const headers of attempts) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: "{}",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      continue;
+    }
+    lastStatus = res.status;
+    const text = await res.text().catch(() => "");
+    if (text.trimStart().startsWith("<")) continue; // APISIX HTML rejection
+    if (!res.ok) continue;
+
+    let parsed: any = null;
+    try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
+    if (parsed && typeof parsed.code === "number" && parsed.code !== 0) {
+      const msg = typeof parsed.msg === "string" ? parsed.msg : "check-in rejected";
+      if (/already|重复|已|signed/i.test(msg)) {
+        return { ok: true, message: "Already checked in today", quotaTotal: beforeTotal };
+      }
+      return { ok: false, message: msg, quotaTotal: beforeTotal };
+    }
+
+    // Verify by re-fetching the quota — a total increase confirms credit.
+    const afterTotal = await safeUsage();
+    if (beforeTotal !== null && afterTotal !== null && afterTotal > beforeTotal) {
+      return { ok: true, message: `Checked in — quota +${afterTotal - beforeTotal} credits`, quotaTotal: afterTotal };
+    }
+    if (parsed) {
+      const msg = typeof parsed.msg === "string" && parsed.msg ? parsed.msg : "check-in response received";
+      return { ok: true, message: /already|重复|已|signed/i.test(msg) ? "Already checked in today" : msg, quotaTotal: afterTotal };
+    }
+    return { ok: true, message: "Check-in request accepted", quotaTotal: afterTotal };
+  }
+
+  if (lastStatus === 401 || lastStatus === 403) {
+    return {
+      ok: false,
+      message: "Check-in needs a web session cookie — paste it in the account's edit dialog (session cookie field), or check in via the CodeBuddy website.",
+      quotaTotal: beforeTotal,
+    };
+  }
+  return { ok: false, message: `Check-in failed (HTTP ${lastStatus || "network error"})`, quotaTotal: beforeTotal };
 }
 
 // ── usage / quota snapshot ──

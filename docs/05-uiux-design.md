@@ -122,7 +122,8 @@ Table: Label, Key (prefix + copy-disabled note), Created, Last used, Limits (rpm
 ### 3.8 Settings (`/settings`)
 Tabbed page (`General · Token Saver · Security · Data · About`):
 
-1. **General** — port/host display (from env, read-only), theme (dark/light/system), accent color picker, session TTL.
+1. **General** — port/host display (from env, read-only), theme (dark/light/system), accent color picker, and session TTL.
+2. **XAI IMAP** — a dedicated System navigation page for the optional xAI farming workflow: Gmail recipient, app password, email domain, headless Camoufox option, and OTP polling controls.
 2. **Token Saver** — master switch; per-rule toggles (git diff, grep, ls/tree, long-output) with live demo panel: paste tool output → shows compressed result + token delta.
 3. **Security** — "Never ask password by default" toggle (pre-checks the login checkbox; remember-me sessions last 30 days, standard sessions `SESSION_TTL_HOURS`); change dashboard password; view active sessions (revoke); note about `DATA_DIR` permissions.
 4. **Data** — DB size, retention days slider, "backup now", export/import config JSON, danger zone: wipe logs / factory reset (type-to-confirm).

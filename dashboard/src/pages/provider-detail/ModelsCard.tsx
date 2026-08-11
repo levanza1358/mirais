@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
 import { type Provider, providers } from "../../api";
@@ -102,16 +102,9 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
     onError: (e) => toast(e.message, "error"),
   });
 
-  const autoFetched = useRef(false);
-  useEffect(() => {
-    if (autoFetched.current) return;
-    const hasAccount = (p.accounts ?? []).some((a) => a.enabled);
-    if (hasAccount && models.length === 0) {
-      autoFetched.current = true;
-      fetchModels.mutate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.id, p.accounts, models.length]);
+  // Fetching models is an explicit user action (the Fetch button). We do not
+  // auto-sync on mount: doing so can wipe manually curated models when a
+  // provider's upstream /models endpoint returns a partial or empty catalog.
 
   const addModel = useMutation({
     mutationFn: (payload: { modelId: string; patch?: Partial<{ contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }> }) =>

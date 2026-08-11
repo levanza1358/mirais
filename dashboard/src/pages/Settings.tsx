@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database } from "lucide-react";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff } from "lucide-react";
 import { settings, backups, healthInfo, type BackupEntry, type TokenSaverSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -450,7 +450,129 @@ function BackupSection() {
   );
 }
 
-// ── about ──
+// ── XAI IMAP settings ──
+
+export function XaiImapSection() {
+  const qc = useQueryClient();
+  const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const [showAppPassword, setShowAppPassword] = useState(false);
+  const [form, setForm] = useState({
+    enabled: false,
+    gmail_username: "",
+    gmail_app_password: "",
+    email_domain: "levanza.my.id",
+    account_password: "",
+    headless: false,
+    otp_check_interval: 5,
+    otp_max_retries: 12,
+  });
+
+  useEffect(() => {
+    if (s.data?.xai_imap) {
+      setForm({
+        enabled: s.data.xai_imap.enabled ?? false,
+        gmail_username: s.data.xai_imap.gmail_username ?? "",
+        gmail_app_password: s.data.xai_imap.gmail_app_password ?? "",
+        email_domain: s.data.xai_imap.email_domain ?? "levanza.my.id",
+        account_password: s.data.xai_imap.account_password ?? "",
+        headless: s.data.xai_imap.headless ?? false,
+        otp_check_interval: s.data.xai_imap.otp_check_interval ?? 5,
+        otp_max_retries: s.data.xai_imap.otp_max_retries ?? 12,
+      });
+    }
+  }, [s.data]);
+
+  const save = useMutation({
+    mutationFn: () => settings.update({
+      xai_imap: {
+        ...form,
+        gmail_app_password: form.gmail_app_password.replace(/[\s-]/g, ""),
+        account_password: form.account_password || undefined,
+      },
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      toast("XAI IMAP settings saved");
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const updateField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  return (
+    <Card>
+      <h3 className="mb-1 text-sm font-medium">XAI IMAP Settings</h3>
+      <p className="mb-4 text-xs text-text-muted">Configure Gmail IMAP for xAI (Grok) account farming. OTP emails are forwarded to this Gmail account.</p>
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs text-text-primary">Enable xAI farming</p>
+            <p className="mt-0.5 text-xs text-text-muted">Allow automated xAI account registration</p>
+          </div>
+          <Switch checked={form.enabled} onChange={(v) => updateField("enabled", v)} />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Gmail address (receives OTP)</label>
+          <Input type="email" value={form.gmail_username} onChange={(e) => updateField("gmail_username", e.target.value)} placeholder="your.email@gmail.com" disabled={!form.enabled} />
+          <p className="mt-1 text-xs text-text-muted">The Gmail account that receives forwarded OTP emails from {form.email_domain}</p>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Gmail App Password</label>
+          <div className="relative">
+            <Input type={showAppPassword ? "text" : "password"} value={form.gmail_app_password} onChange={(e) => updateField("gmail_app_password", e.target.value)} placeholder="abcd efgh ijkl mnop" maxLength={19} disabled={!form.enabled} className="pr-10" />
+            <button type="button" onClick={() => setShowAppPassword((visible) => !visible)} aria-label={showAppPassword ? "Hide Gmail App Password" : "Show Gmail App Password"} title={showAppPassword ? "Hide password" : "Show password"} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-text-muted transition-colors hover:text-text-primary">
+              {showAppPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-text-muted">16-character App Password from Google Account ? Security ? 2-Step Verification ? App passwords. Spaces are accepted and removed automatically.</p>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Email domain for farming</label>
+          <Input type="text" value={form.email_domain} onChange={(e) => updateField("email_domain", e.target.value)} placeholder="levanza.my.id" disabled={!form.enabled} />
+          <p className="mt-1 text-xs text-text-muted">Random emails will be generated as {`<random>`}@{form.email_domain}</p>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Farm account password</label>
+          <Input type="password" value={form.account_password} onChange={(e) => updateField("account_password", e.target.value)} placeholder="Minimum 8 characters (optional)" disabled={!form.enabled} />
+          <p className="mt-1 text-xs text-text-muted">Password used for newly farmed xAI accounts. Leave empty to auto-generate a random password.</p>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs text-text-primary">Headless browser</p>
+            <p className="mt-0.5 text-xs text-text-muted">Run Camoufox in headless mode (no visible browser window)</p>
+          </div>
+          <Switch checked={form.headless} onChange={(v) => updateField("headless", v)} disabled={!form.enabled} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="mb-1 block text-xs text-text-muted">OTP check interval (seconds)</label>
+            <Input type="number" min={1} max={60} value={form.otp_check_interval} onChange={(e) => updateField("otp_check_interval", Number(e.target.value))} disabled={!form.enabled} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-text-muted">Max OTP retries</label>
+            <Input type="number" min={1} max={60} value={form.otp_max_retries} onChange={(e) => updateField("otp_max_retries", Number(e.target.value))} disabled={!form.enabled} />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+          <p className="text-xs text-amber-300"><strong>Note:</strong> Make sure your domain's email routing forwards all emails to the Gmail address above. The farm script will monitor this Gmail inbox for OTP verification codes from x.ai.</p>
+        </div>
+
+        <div className="flex justify-end">
+          <Button type="submit" loading={save.isPending}>Save XAI Settings</Button>
+        </div>
+      </form>
+    </Card>
+  );
+}
 
 function AboutSection() {
   return (

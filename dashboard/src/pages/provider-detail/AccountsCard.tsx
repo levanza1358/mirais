@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, ChevronLeft, ChevronRight, Gauge, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Gauge, Pencil, Plus, Trash2 } from "lucide-react";
 import { type Provider, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, Card, ConfirmModal, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
 import { AccountMetaModal } from "./AccountMetaModal";
@@ -42,11 +42,22 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   });
 
   const updateMeta = useMutation({
-    mutationFn: ({ accountId, notes, tags }: { accountId: string; notes: string; tags: string }) => providers.updateAccount(accountId, { notes: notes || null, tags: tags || null }),
+    mutationFn: ({ accountId, notes, tags, sessionCookie }: { accountId: string; notes: string; tags: string; sessionCookie: string }) =>
+      providers.updateAccount(accountId, { notes: notes || null, tags: tags || null, sessionCookie: sessionCookie || null }),
     onSuccess: () => {
       invalidate();
       setEditingMeta(null);
       toast("Account metadata updated");
+    },
+    onError: (error: Error) => toast(error.message, "error"),
+  });
+
+  const checkin = useMutation({
+    mutationFn: (accountId: string) => providers.checkinAccount(accountId),
+    onSuccess: (result) => {
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ["codex-quota"] });
+      toast(result.message, result.ok ? "success" : "error");
     },
     onError: (error: Error) => toast(error.message, "error"),
   });
@@ -125,6 +136,18 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2 lg:ml-auto">
                   <Button variant="ghost" size="sm" onClick={() => setEditingMeta(account)}><Pencil size={13} /></Button>
+                  {provider.type === "codebuddy-cn" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={checkin.isPending && checkin.variables === account.id}
+                      onClick={() => checkin.mutate(account.id)}
+                      aria-label={`Check in ${account.label}`}
+                      title="Daily check-in (+100 credits). Needs a session cookie saved in the edit dialog if the API token alone is rejected."
+                    >
+                      <CalendarCheck size={13} className={account.session_cookie ? "text-success" : "text-warning"} />
+                    </Button>
+                  )}
                   {(account.auth_kind === "oauth" || provider.type === "codebuddy-global" || provider.type === "codebuddy-cn") && (
                     <Button variant="ghost" size="sm" onClick={() => setQuotaFor(account)} aria-label={`Quota for ${account.label}`} title={quotaTitle(account, true)}><Gauge size={13} className="text-accent" /></Button>
                   )}
@@ -155,7 +178,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
 
       {adding && <AddAccountModal provider={provider} accountCount={accounts.length} onClose={() => setAdding(false)} />}
       {quotaFor && <CodexQuotaModal account={quotaFor} onClose={() => setQuotaFor(null)} />}
-      {editingMeta && <AccountMetaModal account={editingMeta} loading={updateMeta.isPending} onClose={() => setEditingMeta(null)} onSave={(notes, tags) => updateMeta.mutate({ accountId: editingMeta.id, notes, tags })} />}
+      {editingMeta && <AccountMetaModal account={editingMeta} loading={updateMeta.isPending} onClose={() => setEditingMeta(null)} onSave={(notes, tags, sessionCookie) => updateMeta.mutate({ accountId: editingMeta.id, notes, tags, sessionCookie })} />}
 
       <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => removing && removeAccount.mutate(removing.id)} title="Remove account" message={`Remove account "${removing?.label}" from ${provider.name}? Requests will no longer use this key.`} danger loading={removeAccount.isPending} />
     </Card>

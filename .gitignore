@@ -32,3 +32,8 @@ dashboard/.vite/
 dashboard/coverage/
 scripts/_tmp_*.py
 scripts/_tmp_*.ts
+.camoufox/
+scripts/xfarm/result_*.json
+scripts/xfarm/config_*.json
+__pycache__/
+*.pyc

@@ -45,7 +45,7 @@ await check("POST /v1/chat/completions without key → 401 OpenAI-shaped error",
   if (body.error?.type !== "authentication_error") throw new Error("error shape not OpenAI-style");
 });
 
-await check("GET /api/providers without session → 401", () => expectStatus("/api/providers", [401]));
+await check("GET /api/providers (passwordless dashboard) → 200", () => expectStatus("/api/providers", [200]));
 
 await check("GET / serves something (dashboard or placeholder)", () => expectStatus("/", [200]));
 

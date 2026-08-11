@@ -156,6 +156,8 @@ export interface ProviderAccount {
   expires_at?: number | null;
   notes?: string | null;
   tags?: string | null;
+  /** Optional web session cookie for endpoints that reject Bearer auth (e.g. daily check-in). */
+  session_cookie?: string | null;
   last_warmup_at?: string | null;
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;

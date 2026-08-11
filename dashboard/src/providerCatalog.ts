@@ -107,6 +107,16 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://copilot.tencent.com/v2",
   },
   {
+    type: "tokenrouter",
+    name: "tokenrouter",
+    displayName: "TokenRouter",
+    description: "TokenRouter multi-provider gateway (OpenAI-compatible)",
+    textIcon: "TR",
+    color: "#0EA5E9",
+    credentialUrl: "https://tokenrouter.com/",
+    baseUrl: "https://api.tokenrouter.com/v1",
+  },
+  {
     type: "custom",
     name: "custom",
     displayName: "Custom",

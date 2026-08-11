@@ -155,6 +155,7 @@ export const accountUpdateSchema = z.object({
   apiKey: z.string().min(1).optional(),
   priority: z.number().int().optional(),
   enabled: z.boolean().optional(),
+  sessionCookie: z.string().max(8192).nullable().optional(),
 });
 
 export const aliasCreateSchema = z.object({
@@ -257,6 +258,19 @@ export const settingsUpdateSchema = z.object({
   ui: z.object({
     theme: z.enum(["dark", "light"]),
     accent: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  }).optional(),
+  xai_imap: z.object({
+    enabled: z.boolean(),
+    gmail_username: z.string().email(),
+    gmail_app_password: z.preprocess(
+      (value) => typeof value === "string" ? value.replace(/[\s-]/g, "") : value,
+      z.string().length(16, "Gmail App Password must contain exactly 16 characters"),
+    ),
+    email_domain: z.string().min(1),
+    account_password: z.string().min(8).max(128).optional(),
+    headless: z.boolean(),
+    otp_check_interval: z.number().int().min(1).max(60),
+    otp_max_retries: z.number().int().min(1).max(60),
   }).optional(),
 });
 

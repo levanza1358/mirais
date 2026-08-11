@@ -112,6 +112,17 @@ function isCodeBuddyProvider(type: string): boolean {
   return type === "codebuddy-global" || type === "codebuddy-cn";
 }
 
+function xaiHeaders(apiKey: string, accept?: "text/event-stream"): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+    "User-Agent": "xai-grok-cli",
+    "x-grok-client-version": "0.2.103",
+    "x-grok-client-identifier": "grok-shell",
+    ...(accept ? { accept } : {}),
+  };
+}
+
 function withRequiredSystemMessage(req: CanonicalRequest): CanonicalRequest {
   if (req.messages.some((m) => m.role === "system")) return req;
   return {
@@ -343,7 +354,9 @@ async function callUpstream(
 
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
-    headers: { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
+    headers: candidate.provider.type === "xai"
+      ? xaiHeaders(apiKey)
+      : { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify(toOpenAiBody({ ...req, stream: false }, candidate.modelId)),
     signal: combined,
   });
@@ -399,11 +412,13 @@ async function openUpstreamStream(
   } else {
     res = await fetch(`${base}/chat/completions`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        accept: "text/event-stream",
-      },
+      headers: candidate.provider.type === "xai"
+        ? xaiHeaders(apiKey, "text/event-stream")
+        : {
+          "content-type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+          accept: "text/event-stream",
+        },
       body: JSON.stringify(toOpenAiBody({ ...req, stream: true }, candidate.modelId)),
       signal: combined,
     });

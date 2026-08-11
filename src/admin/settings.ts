@@ -38,6 +38,7 @@ export function settingsRoutes(db: Database) {
       model_sync_mode: settings.getJson("model_sync_mode") ?? "curated",
       routing_policy: normalizeRoutingPolicy(settings.getJson("routing_policy")),
       ui: settings.getJson("ui"),
+      xai_imap: settings.getJson("xai_imap"),
       env: {
         port: config.port,
         host: config.host,
@@ -65,6 +66,7 @@ export function settingsRoutes(db: Database) {
         settings.setJson("routing_policy", normalizeRoutingPolicy({ ...current, ...parsed.data.routing_policy }));
       }
       if (parsed.data.ui) settings.setJson("ui", parsed.data.ui);
+      if (parsed.data.xai_imap) settings.setJson("xai_imap", parsed.data.xai_imap);
       log.info("settings updated", { keys: Object.keys(parsed.data) });
       return { ok: true };
     });

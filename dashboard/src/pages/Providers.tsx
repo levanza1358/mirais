@@ -146,7 +146,7 @@ export default function Providers() {
                   preset={presetForType(p.type)}
                   provider={p}
                   extraCount={0}
-                  onOpen={() => navigate(`/providers/${p.id}`)}
+                  onOpen={() => navigate(`/dashboard/providers/${p.id}`)}
                   onToggle={() => toggle.mutate(p)}
                   toggling={toggle.isPending && toggle.variables?.id === p.id}
                 />
@@ -182,7 +182,7 @@ export default function Providers() {
                   preset={presetForType(p.type)}
                   provider={p}
                   extraCount={0}
-                  onOpen={() => navigate(`/providers/${p.id}`)}
+                  onOpen={() => navigate(`/dashboard/providers/${p.id}`)}
                   onToggle={() => toggle.mutate(p)}
                   toggling={toggle.isPending && toggle.variables?.id === p.id}
                   dimmed

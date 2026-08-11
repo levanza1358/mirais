@@ -7,7 +7,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com",
   deepseek: "https://api.deepseek.com/v1",
-  xai: "https://api.x.ai/v1",
+  xai: "https://cli-chat-proxy.grok.com/v1",
   glm: "https://open.bigmodel.cn/api/paas/v4",
   blackbox: "https://api.blackbox.ai/v1",
   "codebuddy-global": "https://www.codebuddy.ai/v2",

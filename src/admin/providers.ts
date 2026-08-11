@@ -7,7 +7,7 @@ import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accoun
 import type { z } from "zod";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
-import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage } from "../proxy/codex";
+import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
 import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
@@ -635,10 +635,18 @@ export function providerRoutes(db: Database) {
           const account = accounts[0]!;
           res = await fetch(`${baseUrlFor(p)}/chat/completions`, {
             method: "POST",
-            headers: {
-              "content-type": "application/json",
-              Authorization: `Bearer ${account.api_key}`,
-            },
+            headers: p.type === "xai"
+              ? {
+                "content-type": "application/json",
+                Authorization: `Bearer ${account.api_key}`,
+                "User-Agent": "xai-grok-cli",
+                "x-grok-client-version": "0.2.103",
+                "x-grok-client-identifier": "grok-shell",
+              }
+              : {
+                "content-type": "application/json",
+                Authorization: `Bearer ${account.api_key}`,
+              },
             body: JSON.stringify({
               model: modelId,
               max_tokens: 48,
