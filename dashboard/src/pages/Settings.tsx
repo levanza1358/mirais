@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff } from "lucide-react";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail } from "lucide-react";
 import { settings, backups, healthInfo, type BackupEntry, type TokenSaverSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -44,21 +44,63 @@ function readStoredAccent(): string {
   return "#7c5cff";
 }
 
+/* ------------------------------------------------------------------ */
+/*  Tab definitions                                                    */
+/* ------------------------------------------------------------------ */
+
+type SettingsTab = "general" | "appearance" | "models" | "tokensaver" | "backup" | "imap" | "about";
+
+const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+  { id: "general",    label: "General",     icon: <SettingsIcon className="w-4 h-4" /> },
+  { id: "appearance", label: "Appearance",  icon: <Palette className="w-4 h-4" /> },
+  { id: "models",     label: "Models",      icon: <Zap className="w-4 h-4" /> },
+  { id: "tokensaver", label: "Token Saver", icon: <Save className="w-4 h-4" /> },
+  { id: "backup",     label: "Backup",      icon: <HardDrive className="w-4 h-4" /> },
+  { id: "imap",       label: "IMAP",        icon: <Mail className="w-4 h-4" /> },
+  { id: "about",      label: "About",       icon: <Info className="w-4 h-4" /> },
+];
+
 export default function Settings() {
+  const [tab, setTab] = useState<SettingsTab>("general");
+
   return (
     <div>
       <PageHeader title="Settings" />
+      {/* Tab bar */}
+      <div className="mb-6 flex flex-wrap gap-1 rounded-xl bg-bg-base/60 p-1 border border-border/70">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium transition-colors ${
+              tab === t.id
+                ? "bg-bg-raised text-text-primary shadow-sm"
+                : "text-text-muted hover:text-text-primary hover:bg-bg-raised/50"
+            }`}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {/* Tab content */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <GatewaySection />
-        <NetworkSection />
-        <AppearanceSection />
-        <ModelSyncSection />
-        <TokenSaverSection />
-        <BackupSection />
-        <div className="lg:col-span-2">
-          <DatabaseSection />
-          <AboutSection />
-        </div>
+        {tab === "general" && (
+          <>
+            <GatewaySection />
+            <NetworkSection />
+            <div className="lg:col-span-2">
+              <DatabaseSection />
+            </div>
+          </>
+        )}
+        {tab === "appearance" && <AppearanceSection />}
+        {tab === "models" && <ModelSyncSection />}
+        {tab === "tokensaver" && <TokenSaverSection />}
+        {tab === "backup" && <BackupSection />}
+        {tab === "imap" && <XaiImapSection />}
+        {tab === "about" && <AboutSection />}
       </div>
     </div>
   );
@@ -432,7 +474,7 @@ function BackupSection() {
   const formatDate = (value: string) => new Date(value).toLocaleString();
 
   return (
-    <Card className="lg:col-span-2">
+    <Card>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium">Backup & restore</h3>
@@ -485,7 +527,7 @@ function BackupSection() {
 
 // ── XAI IMAP settings ──
 
-export function XaiImapSection() {
+function XaiImapSection() {
   const qc = useQueryClient();
   const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
   const [showAppPassword, setShowAppPassword] = useState(false);
@@ -536,7 +578,7 @@ export function XaiImapSection() {
 
   return (
     <Card>
-      <h3 className="mb-1 text-sm font-medium">XAI IMAP Settings</h3>
+      <h3 className="mb-1 text-sm font-medium">XAI IMAP</h3>
       <p className="mb-4 text-xs text-text-muted">Configure Gmail IMAP for xAI (Grok) account farming. OTP emails are forwarded to this Gmail account.</p>
       <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-4">
         <div className="flex items-center justify-between">

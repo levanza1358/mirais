@@ -68,7 +68,7 @@ export function InlineCodexQuota({ data, loading }: { data: CodexQuota | undefin
   );
 }
 
-function isCodeBuddyQuota(data: CodexQuota | undefined, account: ProviderAccount): data is CodexQuota & {
+function isCodeBuddyQuota(data: CodexQuota | undefined, providerType: string): data is CodexQuota & {
   plan?: string | null;
   quotas?: {
     Credits?: {
@@ -80,7 +80,7 @@ function isCodeBuddyQuota(data: CodexQuota | undefined, account: ProviderAccount
     };
   } | null;
 } {
-  return !!data && (account.label.toLowerCase().includes("codebuddy") || "quotas" in data || "plan" in data);
+  return !!data && (providerType === "codebuddy-cn" || providerType === "codebuddy-global" || "quotas" in data || "plan" in data);
 }
 
 function fmtQuotaReset(resetAt: string | null | undefined): string {
@@ -90,10 +90,10 @@ function fmtQuotaReset(resetAt: string | null | undefined): string {
   return d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-export function quotaTitle(account: ProviderAccount, resolved = false): string {
+export function quotaTitle(providerType: string, resolved = false): string {
   if (!resolved) return "Loading quota checker";
-  if (account.provider_type === "codebuddy-cn") return "CodeBuddy China quota";
-  if (account.provider_type === "codebuddy-global") return "CodeBuddy Global quota";
+  if (providerType === "codebuddy-cn") return "CodeBuddy China quota";
+  if (providerType === "codebuddy-global") return "CodeBuddy Global quota";
   return "ChatGPT / Codex quota";
 }
 
@@ -146,7 +146,7 @@ function CodeBuddyQuotaCard({ data }: {
   );
 }
 
-export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount; onClose: () => void }) {
+export function CodexQuotaModal({ account, providerType, onClose }: { account: ProviderAccount; providerType: string; onClose: () => void }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const q = useQuery({
     queryKey: ["codex-quota", account.id],
@@ -162,14 +162,14 @@ export function CodexQuotaModal({ account, onClose }: { account: ProviderAccount
     onError: (error: Error) => toast(error.message, "error"),
   });
   const d: CodexQuota | undefined = q.data;
-  const codeBuddy = isCodeBuddyQuota(d, account);
+  const codeBuddy = isCodeBuddyQuota(d, providerType);
   const canReset = account.auth_kind === "oauth" && !codeBuddy;
   const bankedRemaining = d?.banked_resets?.remaining ?? 0;
   const bankedTotal = d?.banked_resets?.total;
   const bankedLabel = bankedTotal != null ? `${bankedRemaining}/${bankedTotal}` : `${bankedRemaining}`;
 
   return (
-    <Modal open onClose={onClose} title={quotaTitle(account, !!d || q.isError)}>
+    <Modal open onClose={onClose} title={quotaTitle(providerType, !!d || q.isError)}>
       {q.isLoading && <div className="flex items-center gap-2 py-6 text-xs text-text-muted"><Loader2 size={14} className="animate-spin" /> Loading quota checker…</div>}
       {q.isError && <p className="py-4 text-xs text-danger">{(q.error as Error).message}</p>}
       {d && (

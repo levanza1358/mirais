@@ -229,6 +229,9 @@ export const providers = {
   accountUsage: (id: string) =>
     req<Array<{ account: string; requests_today: number; tokens_today: number; requests_total: number; tokens_total: number }>>(
       `/api/providers/${id}/accounts/usage`),
+  quotaSummary: (id: string) =>
+    req<{ total_credits: number | null; unlimited: boolean | null; accounts_with_quota: number; accounts_total: number; accounts_free: number; free_remaining_pct: number | null }>(
+      `/api/providers/${id}/quota`),
   codexQuota: (accId: string) => req<CodexQuota>(`/api/providers/accounts/${accId}/codex-quota`),
   codexQuotaReset: (accId: string) => req<{ ok: boolean; message: string }>(`/api/providers/accounts/${accId}/codex-quota/reset`, { method: "POST" }),
   oauthStart: (providerId: string) =>
@@ -255,6 +258,37 @@ export const providers = {
     req<{ ok: boolean; status: number; latency_ms: number; account: string; detail?: string }>(`/api/providers/${id}/test`, { method: "POST" }),
   warmupAllAccounts: (id: string) =>
     req<{ provider: string; total: number; success: number; failed: number; results: Array<{ account: string; ok: boolean; status: number; latency_ms: number; detail?: string }> }>(`/api/providers/${id}/warmup`, { method: "POST" }),
+  warmupAllAccountsStream: async (
+    id: string,
+    onEvent: (event: string, data: Record<string, unknown>) => void,
+  ) => {
+    const res = await fetch(`/api/providers/${id}/warmup/stream`, { method: "POST", credentials: "same-origin" });
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body.error) message = body.error;
+      } catch { /* retain default */ }
+      throw new ApiError(res.status, message);
+    }
+    if (!res.body) throw new Error("Warmup stream unavailable");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const messages = buffer.split("\n\n");
+      buffer = messages.pop() ?? "";
+      for (const message of messages) {
+        const event = message.match(/^event:\s*(.+)$/m)?.[1];
+        const data = message.match(/^data:\s*(.+)$/m)?.[1];
+        if (event && data) onEvent(event, JSON.parse(data) as Record<string, unknown>);
+      }
+      if (done) break;
+    }
+  },
   testModel: (id: string, modelId: string) =>
     req<{ ok: boolean; status: number; latency_ms: number; model: string; detail?: string; preview_text?: string; context_length?: number | null; max_output_tokens?: number | null; capabilities?: string[] }>(
       `/api/providers/${id}/models/${encodeURIComponent(modelId)}/test`, { method: "POST" }),

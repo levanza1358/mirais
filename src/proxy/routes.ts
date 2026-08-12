@@ -124,7 +124,11 @@ export function v1Routes(db: Database) {
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
-      const result = await executeRequest(req, route.candidates, { signal: request.signal }, providersRepo, routingPolicy);
+      const result = await executeRequest(req, route.candidates, {
+        signal: request.signal,
+        xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
+        xaiRequestId: set.headers["x-request-id"],
+      }, providersRepo, routingPolicy);
 
       if (result.kind === "stream") {
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
@@ -188,7 +192,11 @@ export function v1Routes(db: Database) {
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
-      const result = await executeRequest(req, route.candidates, { signal: request.signal }, providersRepo, routingPolicy);
+      const result = await executeRequest(req, route.candidates, {
+        signal: request.signal,
+        xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
+        xaiRequestId: set.headers["x-request-id"],
+      }, providersRepo, routingPolicy);
       if (result.kind === "stream") {
         const translated = chatSseToResponses(result.stream, req.model);
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
@@ -262,7 +270,11 @@ export function v1Routes(db: Database) {
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
-      const result = await executeRequest(req, route.candidates, { signal: request.signal }, providersRepo, routingPolicy);
+      const result = await executeRequest(req, route.candidates, {
+        signal: request.signal,
+        xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
+        xaiRequestId: requestId,
+      }, providersRepo, routingPolicy);
 
       if (result.kind === "stream") {
         // need Anthropic-shaped SSE back to client

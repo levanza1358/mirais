@@ -41,7 +41,8 @@ describe("combo diagnostic route", () => {
   test("returns ordered resolved candidates without upstream traffic", async () => {
     const providers = new ProvidersRepo(db);
     const p = providers.create({ name: "p", type: "openai" });
-    providers.addAccount(p.id, { label: "main", apiKey: "test" });
+    const account = providers.addAccount(p.id, { label: "main", apiKey: "test" });
+    providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
     providers.upsertModel(p.id, "m");
     const combos = new CombosRepo(db);
     const combo = combos.create("fallback", ["p/m"]);
@@ -50,7 +51,7 @@ describe("combo diagnostic route", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as { requested_model: string; candidates: Array<{ position: number; provider: string; model: string; available_accounts: number; healthy_accounts: number }> };
     expect(body.requested_model).toBe("combo:fallback");
-    expect(body.candidates).toEqual([{ position: 0, provider: "p", model: "m", available_accounts: 1, healthy_accounts: 0 }]);
+    expect(body.candidates).toEqual([{ position: 0, provider: "p", model: "m", available_accounts: 1, healthy_accounts: 1 }]);
   });
 });
 

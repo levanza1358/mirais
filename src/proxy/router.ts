@@ -162,8 +162,6 @@ export class Router {
 
   private pickAccounts(provider: Provider): ProviderAccount[] {
     const healthy: ProviderAccount[] = [];
-    const unknown: ProviderAccount[] = [];
-    const degraded: ProviderAccount[] = [];
 
     const accounts = this.providers
       .listAccounts(provider.id)
@@ -189,10 +187,11 @@ export class Router {
         });
       }
       if (account.last_warmup_status === "healthy") healthy.push(account);
-      else if (!account.last_warmup_status) unknown.push(account);
-      else degraded.push(account);
     }
 
-    return [...healthy, ...unknown, ...degraded];
+    if (!healthy.length) {
+      throw new GatewayError(503, "server_error", `Provider '${provider.name}' has no healthy accounts. Run account warmup and try again.`);
+    }
+    return healthy;
   }
 }

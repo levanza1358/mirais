@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Boxes, ChevronRight, Plus, AlertTriangle, RefreshCw } from "lucide-react";
 import { providers, healthInfo, type Provider } from "../api";
 import { Button, Card, Switch, Badge, EmptyState, Skeleton, toast } from "../components/ui";
@@ -45,6 +45,17 @@ export default function Providers() {
     arr.push(p);
     byType.set(p.type, arr);
   }
+
+  // Fetch quota summaries for all existing providers
+  const quotaQueries = useQueries({
+    queries: existing.map((p) => ({
+      queryKey: ["provider-quota", p.id],
+      queryFn: () => providers.quotaSummary(p.id),
+      staleTime: 60_000,
+      retry: 1,
+    })),
+  });
+  const quotaById = new Map(existing.map((p, i) => [p.id, quotaQueries[i]]));
   // Providers whose type isn't in the preset catalog (legacy/unknown types).
   const knownTypes = new Set(PROVIDER_PRESETS.map((p) => p.type));
   const others = existing.filter((p) => !knownTypes.has(p.type));
@@ -133,6 +144,7 @@ export default function Providers() {
                     key={preset.type}
                     preset={preset}
                     provider={primary}
+                    quota={primary ? quotaById.get(primary.id) : undefined}
                     extraCount={Math.max(0, instances.length - 1)}
                     onOpen={() => openPreset(preset)}
                     onToggle={primary ? () => toggle.mutate(primary) : undefined}
@@ -145,6 +157,7 @@ export default function Providers() {
                   key={p.id}
                   preset={presetForType(p.type)}
                   provider={p}
+                  quota={quotaById.get(p.id)}
                   extraCount={0}
                   onOpen={() => navigate(`/dashboard/providers/${p.id}`)}
                   onToggle={() => toggle.mutate(p)}
@@ -168,6 +181,7 @@ export default function Providers() {
                     key={preset.type}
                     preset={preset}
                     provider={primary}
+                    quota={primary ? quotaById.get(primary.id) : undefined}
                     extraCount={Math.max(0, instances.length - 1)}
                     onOpen={() => openPreset(preset)}
                     onToggle={primary ? () => toggle.mutate(primary) : undefined}
@@ -181,6 +195,7 @@ export default function Providers() {
                   key={p.id}
                   preset={presetForType(p.type)}
                   provider={p}
+                  quota={quotaById.get(p.id)}
                   extraCount={0}
                   onOpen={() => navigate(`/dashboard/providers/${p.id}`)}
                   onToggle={() => toggle.mutate(p)}
@@ -213,6 +228,7 @@ export default function Providers() {
 function ProviderCard({
   preset,
   provider,
+  quota,
   extraCount,
   onOpen,
   onToggle,
@@ -221,6 +237,7 @@ function ProviderCard({
 }: {
   preset: ProviderPreset;
   provider: Provider | undefined;
+  quota?: { data?: { total_credits: number | null; unlimited: boolean | null; accounts_with_quota: number; accounts_total: number; accounts_free: number; free_remaining_pct: number | null }; isLoading: boolean };
   extraCount: number;
   onOpen: () => void;
   onToggle?: () => void;
@@ -231,6 +248,20 @@ function ProviderCard({
   const activeAccounts = provider?.accounts?.filter((a) => a.enabled).length ?? 0;
   const models = provider?.models?.length ?? 0;
   const connected = !!provider && accounts > 0;
+
+  // Account status breakdown
+  const statusBreakdown = provider?.accounts
+    ? {
+        healthy: provider.accounts.filter((a) => a.last_warmup_status === "healthy").length,
+        rateLimited: provider.accounts.filter((a) => a.last_warmup_status === "rate_limited").length,
+        failing: provider.accounts.filter((a) => a.last_warmup_status === "failing").length,
+        unknown: provider.accounts.filter((a) => !a.last_warmup_status).length,
+      }
+    : null;
+
+  const quotaData = quota?.data;
+  const quotaTotal = quotaData?.total_credits;
+  const quotaUnlimited = quotaData?.unlimited;
 
   return (
     <div
@@ -263,15 +294,48 @@ function ProviderCard({
         </div>
 
         <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-          <div className="flex items-center gap-2 text-xs">
-            <span className={`inline-block size-2 rounded-full ${connected ? "bg-success" : "bg-text-muted/30"}`} />
-            {provider ? (
-              <span className="text-text-muted">
-                {activeAccounts}/{accounts} account{accounts === 1 ? "" : "s"} · {models} model{models === 1 ? "" : "s"}
-                {extraCount > 0 && ` · +${extraCount} more`}
-              </span>
-            ) : (
-              <span className="text-text-muted/60">Not configured</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-xs">
+              <span className={`inline-block size-2 shrink-0 rounded-full ${connected ? "bg-success" : "bg-text-muted/30"}`} />
+              {provider ? (
+                <span className="truncate text-text-muted">
+                  {quota?.isLoading ? (
+                    "Loading…"
+                  ) : quotaData && (quotaData.accounts_with_quota > 0 || quotaData.accounts_free > 0) ? (
+                    quotaUnlimited
+                      ? "Unlimited credits"
+                      : quotaTotal != null
+                        ? quotaTotal.toLocaleString() + " credits"
+                        : quotaData.free_remaining_pct != null
+                          ? quotaData.free_remaining_pct + "% available"
+                          : quotaData.accounts_free + " free account" + (quotaData.accounts_free === 1 ? "" : "s")
+                  ) : (
+                    models + " model" + (models === 1 ? "" : "s")
+                  )}
+                  {quotaData && quotaData.accounts_with_quota > 0 && quotaData.accounts_free > 0 && (
+                    " · " + quotaData.accounts_free + " free"
+                  )}
+                  {extraCount > 0 && " · +" + extraCount + " more"}
+                </span>
+              ) : (
+                <span className="text-text-muted/60">Not configured</span>
+              )}
+            </div>
+            {statusBreakdown && accounts > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                {statusBreakdown.healthy > 0 && (
+                  <span className="inline-flex items-center gap-1 text-success"><span className="inline-block size-1.5 rounded-full bg-success" />{statusBreakdown.healthy}</span>
+                )}
+                {statusBreakdown.rateLimited > 0 && (
+                  <span className="inline-flex items-center gap-1 text-warning"><span className="inline-block size-1.5 rounded-full bg-warning" />{statusBreakdown.rateLimited}</span>
+                )}
+                {statusBreakdown.failing > 0 && (
+                  <span className="inline-flex items-center gap-1 text-danger"><span className="inline-block size-1.5 rounded-full bg-danger" />{statusBreakdown.failing}</span>
+                )}
+                {statusBreakdown.unknown > 0 && (
+                  <span className="inline-flex items-center gap-1 text-text-muted"><span className="inline-block size-1.5 rounded-full bg-text-muted" />{statusBreakdown.unknown}</span>
+                )}
+              </div>
             )}
           </div>
           {provider && onToggle ? (

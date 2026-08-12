@@ -9,6 +9,7 @@ import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
 import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
 import { ensureFreshXaiToken, xaiHeaders } from "../proxy/xai";
+import { fetchXaiUsage } from "../proxy/xai-usage";
 import { checkCodexProviderQuota, fetchCodexProviderModels, testCodexProviderModel } from "./codex-provider";
 import { fetchXaiModels, testXaiModel } from "./xai-provider";
 import { resolveModelMeta } from "../proxy/modelMeta";
@@ -131,7 +132,7 @@ export function providerRoutes(db: Database) {
     const provider = p!;
     const acc = account!;
     const started = Date.now();
-    let result: { account: string; ok: boolean; status: number; latency_ms: number; detail?: string };
+    let result: { account_id: string; account: string; ok: boolean; status: number; latency_ms: number; detail?: string };
     try {
       if (isCodeBuddyProviderType(provider.type)) {
         const res = await requestCodeBuddyChat(
@@ -142,6 +143,7 @@ export function providerRoutes(db: Database) {
           16,
         );
         result = {
+          account_id: acc.id,
           ok: res.ok,
           status: res.status,
           latency_ms: Date.now() - started,
@@ -155,6 +157,7 @@ export function providerRoutes(db: Database) {
           signal: AbortSignal.timeout(15_000),
         });
         result = {
+          account_id: acc.id,
           ok: res.ok,
           status: res.status,
           latency_ms: Date.now() - started,
@@ -164,6 +167,7 @@ export function providerRoutes(db: Database) {
       } else if (isOAuthAccount(acc)) {
         const { usage, exhausted: quotaExhausted } = await checkCodexProviderQuota(repo, acc);
         result = {
+          account_id: acc.id,
           ok: !quotaExhausted,
           status: quotaExhausted ? 429 : 200,
           latency_ms: Date.now() - started,
@@ -177,6 +181,7 @@ export function providerRoutes(db: Database) {
           : { Authorization: `Bearer ${acc.api_key}` };
         const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(15_000) });
         result = {
+          account_id: acc.id,
           ok: res.ok,
           status: res.status,
           latency_ms: Date.now() - started,
@@ -186,6 +191,7 @@ export function providerRoutes(db: Database) {
       }
     } catch (err) {
       result = {
+        account_id: acc.id,
         ok: false,
         status: 0,
         latency_ms: Date.now() - started,
@@ -194,9 +200,10 @@ export function providerRoutes(db: Database) {
       };
     }
 
+    const warmupStatus = result.ok ? "healthy" : (result.status === 429 || isRateLimitDetail(result.detail) ? "rate_limited" : "failing");
     repo.updateAccount(acc.id, {
       lastWarmupAt: new Date().toISOString(),
-      lastWarmupStatus: result.ok ? "healthy" : (result.status === 429 || isRateLimitDetail(result.detail) ? "rate_limited" : "failing"),
+      lastWarmupStatus: warmupStatus,
       lastWarmupLatencyMs: result.latency_ms,
       lastWarmupDetail: result.detail ?? null,
     });
@@ -319,11 +326,132 @@ export function providerRoutes(db: Database) {
         results,
       };
     })
+    .post("/:id/warmup/stream", ({ params, set }) => {
+      const p = repo.get(params.id);
+      if (!p) throw new AdminError(404, "Provider not found");
+      const accounts = repo.listAccounts(p.id).filter((account) => account.enabled);
+      if (!accounts.length) throw new AdminError(400, "No enabled accounts to warm up");
+
+      set.headers["content-type"] = "text/event-stream; charset=utf-8";
+      set.headers["cache-control"] = "no-cache";
+      set.headers.connection = "keep-alive";
+
+      const encoder = new TextEncoder();
+      return new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          let success = 0;
+          let failed = 0;
+          send("start", { provider: p.name, total: accounts.length });
+
+          for (let index = 0; index < accounts.length; index += 1) {
+            const account = accounts[index]!;
+            send("account_start", { account_id: account.id, account: account.label, current: index + 1, total: accounts.length });
+            const result = await warmupAccount(p, account);
+            if (result.ok) success += 1;
+            else failed += 1;
+            send("account_result", { ...result, current: index + 1, total: accounts.length });
+          }
+
+          send("complete", { provider: p.name, total: accounts.length, success, failed });
+          controller.close();
+        },
+      });
+    })
     // ── per-account usage (from request logs) ──
     .get("/:id/accounts/usage", ({ params }) => {
       const p = repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
       return logs.usageByAccount(p.name);
+    })
+    // ── provider-level quota summary (aggregated across all accounts) ──
+    .get("/:id/quota", async ({ params }) => {
+      const p = repo.get(params.id);
+      if (!p) throw new AdminError(404, "Provider not found");
+      const accounts = repo.listAccounts(p.id);
+      if (!accounts.length) return { total_credits: null, unlimited: null, accounts_with_quota: 0, accounts_total: 0, accounts_free: 0, free_remaining_pct: null };
+
+      let totalCredits: number | null = null;
+      let hasUnlimited = false;
+      let accountsWithQuota = 0;
+      let accountsFree = 0;
+      let freeRemainingSum = 0;
+
+      for (const account of accounts) {
+        try {
+          // ── CodeBuddy providers: use CodeBuddy-specific usage API ──
+          if (p.type === "codebuddy-global" || p.type === "codebuddy-cn") {
+            const snap = await fetchCodeBuddyUsage(account, baseUrlFor(p));
+            const credits = snap.quotas?.Credits;
+            if (!credits || credits.total <= 0) continue;
+            totalCredits = (totalCredits ?? 0) + credits.remaining;
+            accountsWithQuota += 1;
+            continue;
+          }
+
+          // ── xAI: use Grok CLI billing endpoint ──
+          if (p.type === "xai") {
+            // Only OAuth xAI accounts have a billing endpoint
+            if (account.auth_kind !== "oauth") continue;
+            // Refresh token first if needed
+            const accessToken = await ensureFreshXaiToken(repo, account);
+            const accountWithFreshToken = { ...account, api_key: accessToken };
+            const snap = await fetchXaiUsage(accountWithFreshToken);
+            // Aggregate remaining credits across all quota rows
+            if (snap.quotas && Object.keys(snap.quotas).length > 0) {
+              let accountCredits = 0;
+              for (const row of Object.values(snap.quotas)) {
+                if (row.unlimited) {
+                  hasUnlimited = true;
+                  accountCredits = 0;
+                  break;
+                }
+                accountCredits += row.total - row.used;
+              }
+              if (!hasUnlimited) {
+                totalCredits = (totalCredits ?? 0) + accountCredits;
+              }
+              accountsWithQuota += 1;
+            }
+            continue;
+          }
+
+          // ── Non-OAuth (API-key) providers: no quota endpoint ──
+          if (!isOAuthAccount(account)) continue;
+
+          // ── OpenAI / Codex OAuth: WHAM usage API ──
+          const { usage } = await checkCodexProviderQuota(repo, account);
+          const credits = usage?.credits;
+          if (!credits) continue;
+
+          if (credits.unlimited) {
+            hasUnlimited = true;
+            accountsWithQuota += 1;
+            continue;
+          }
+
+          if (typeof credits.balance === "number") {
+            totalCredits = (totalCredits ?? 0) + credits.balance;
+            accountsWithQuota += 1;
+          } else if (credits.has_credits === false) {
+            // Free plan — track remaining percent from primary window
+            accountsFree += 1;
+            const remaining = usage?.primary?.remaining_percent;
+            if (typeof remaining === "number") freeRemainingSum += remaining;
+          }
+        } catch {
+          // skip accounts that fail quota check
+        }
+      }
+
+      return {
+        total_credits: hasUnlimited ? null : totalCredits,
+        unlimited: hasUnlimited ? true : (accountsWithQuota > 0 ? false : null),
+        accounts_with_quota: accountsWithQuota,
+        accounts_total: accounts.length,
+        accounts_free: accountsFree,
+        free_remaining_pct: accountsFree > 0 ? Math.round(freeRemainingSum / accountsFree) : null,
+      };
     })
     // ── per-account ChatGPT/Codex quota (OAuth accounts only) ──
     .get("/accounts/:accId/codex-quota", async ({ params }) => {
@@ -333,6 +461,11 @@ export function providerRoutes(db: Database) {
       if (!provider) throw new AdminError(404, "Provider not found");
       if (provider.type === "codebuddy-global" || provider.type === "codebuddy-cn") {
         return fetchCodeBuddyUsage(account, baseUrlFor(provider));
+      }
+      if (provider.type === "xai") {
+        if (account.auth_kind !== "oauth") throw new AdminError(400, "Quota is only available for OAuth xAI accounts");
+        const accessToken = await ensureFreshXaiToken(repo, account);
+        return fetchXaiUsage({ ...account, api_key: accessToken });
       }
       if (!isOAuthAccount(account)) throw new AdminError(400, "Quota is only available for OAuth accounts");
       return (await checkCodexProviderQuota(repo, account)).usage;
@@ -368,7 +501,13 @@ export function providerRoutes(db: Database) {
       if (!p) throw new AdminError(404, "Provider not found");
       const accounts = repo.listAccounts(p.id).filter((a) => a.enabled);
       if (!accounts.length) throw new AdminError(400, "No enabled account to test with");
-      const account = accounts[0]!;
+      // Prefer healthy accounts, fall back to untested, skip known-failing
+      const healthyFirst = [...accounts].sort((a, b) => {
+        const aScore = a.last_warmup_status === "healthy" ? 0 : a.last_warmup_status == null ? 1 : 2;
+        const bScore = b.last_warmup_status === "healthy" ? 0 : b.last_warmup_status == null ? 1 : 2;
+        return aScore - bScore;
+      });
+      const account = healthyFirst[0]!;
       const started = Date.now();
       try {
         if (isCodeBuddyProviderType(p.type)) {
@@ -418,8 +557,14 @@ export function providerRoutes(db: Database) {
     .post("/:id/models/:modelId/test", async ({ params }) => {
       const p = repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id).filter((a) => a.enabled);
-      if (!accounts.length) throw new AdminError(400, "No enabled account to test with");
+      const allAccounts = repo.listAccounts(p.id).filter((a) => a.enabled);
+      if (!allAccounts.length) throw new AdminError(400, "No enabled account to test with");
+      // Prefer healthy accounts, fall back to untested, skip known-failing
+      const accounts = [...allAccounts].sort((a, b) => {
+        const aScore = a.last_warmup_status === "healthy" ? 0 : a.last_warmup_status == null ? 1 : 2;
+        const bScore = b.last_warmup_status === "healthy" ? 0 : b.last_warmup_status == null ? 1 : 2;
+        return aScore - bScore;
+      });
       const modelId = decodeURIComponent(params.modelId);
       const started = Date.now();
       const testPrompt = "Reply in one short sentence: say hi, state your model name, and mention your knowledge cutoff date if known.";
@@ -487,7 +632,10 @@ export function providerRoutes(db: Database) {
           for (const account of accounts) {
             usedAccount = account;
             res = await requestCodeBuddyChat(p, account, modelId, testPrompt, 64);
-            if (res.ok || res.status !== 429) break;
+            if (res.ok) break;
+            // Retry with next account on rate-limit or auth/server errors
+            if (res.status === 429 || res.status === 401 || res.status === 403 || res.status >= 500) continue;
+            break;
           }
         } else if (upstreamFormat(p) === "anthropic") {
         const account = accounts[0]!;
@@ -588,8 +736,8 @@ export function providerRoutes(db: Database) {
     .post("/:id/sync", async ({ params }) => {
       const p = repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id).filter((a) => a.enabled);
-      if (!accounts.length) throw new AdminError(400, "No enabled account to sync with");
+      const accounts = repo.listAccounts(p.id).filter((a) => a.enabled && a.last_warmup_status === "healthy");
+      if (!accounts.length) throw new AdminError(400, "No healthy account to sync with. Run account warmup first.");
       const account = accounts[0]!;
 
       if (isCodeBuddyProviderType(p.type)) {

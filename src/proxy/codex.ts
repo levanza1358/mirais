@@ -635,6 +635,8 @@ export class ResponsesToChatStreamTranslator {
   private started = false;
   private usage: Usage | null = null;
   private sawToolCall = false;
+  private nextToolCallIndex = 0;
+  private toolCallIndices = new Map<string, number>();
 
   constructor(requestedModel: string) {
     this.model = requestedModel;
@@ -668,13 +670,17 @@ export class ResponsesToChatStreamTranslator {
         if (item?.type === "function_call") {
           this.sawToolCall = true;
           if (!this.started) out.push(startChunk());
+          const index = this.nextToolCallIndex++;
+          const callId = (item.call_id ?? item.id ?? `call_${ulid()}`) as string;
+          if (typeof item.id === "string") this.toolCallIndices.set(item.id, index);
+          if (typeof item.call_id === "string") this.toolCallIndices.set(item.call_id, index);
           out.push(
             this.chunk(
               {
                 tool_calls: [
                   {
-                    index: 0,
-                    id: (item.call_id ?? item.id ?? `call_${ulid()}`) as string,
+                    index,
+                    id: callId,
                     type: "function",
                     function: { name: (item.name ?? "") as string, arguments: "" },
                   },
@@ -699,7 +705,11 @@ export class ResponsesToChatStreamTranslator {
         const delta = parsed.delta as string | undefined;
         if (delta) {
           if (!this.started) out.push(startChunk());
-          out.push(this.chunk({ tool_calls: [{ index: 0, function: { arguments: delta } }] }, null));
+          const itemId = typeof parsed.item_id === "string" ? parsed.item_id : "";
+          const callId = typeof parsed.call_id === "string" ? parsed.call_id : "";
+          const outputIndex = typeof parsed.output_index === "number" ? parsed.output_index : 0;
+          const index = this.toolCallIndices.get(itemId) ?? this.toolCallIndices.get(callId) ?? outputIndex;
+          out.push(this.chunk({ tool_calls: [{ index, function: { arguments: delta } }] }, null));
         }
         break;
       }

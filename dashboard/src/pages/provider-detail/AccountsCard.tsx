@@ -8,6 +8,15 @@ import { AddAccountModal } from "./AddAccountModal";
 import { CodexQuotaModal, InlineCodexQuota, quotaTitle } from "./quota";
 import { ACCOUNT_PAGE_SIZE_OPTIONS, DEFAULT_ACCOUNTS_PER_PAGE } from "./types";
 
+type AccountStatusTab = "healthy" | "rate_limited" | "failing" | "unknown";
+
+const ACCOUNT_STATUS_TABS: Array<{ id: AccountStatusTab; label: string; activeClassName: string }> = [
+  { id: "healthy", label: "Healthy", activeClassName: "border-success bg-success/10 text-success" },
+  { id: "rate_limited", label: "Rate Limited", activeClassName: "border-warning bg-warning/10 text-warning" },
+  { id: "failing", label: "Failing", activeClassName: "border-danger bg-danger/10 text-danger" },
+  { id: "unknown", label: "Unknown", activeClassName: "border-muted bg-muted/10 text-text-muted" },
+];
+
 export function AccountsCard({ provider }: { provider: Provider }) {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
@@ -18,6 +27,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_ACCOUNTS_PER_PAGE);
   const [editingMeta, setEditingMeta] = useState<ProviderAccount | null>(null);
+  const [statusTab, setStatusTab] = useState<AccountStatusTab>("healthy");
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["providers"] });
 
   const usage = useQuery({
@@ -94,6 +104,15 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   });
 
   const accounts = provider.accounts ?? [];
+  const accountCounts = useMemo(
+    () => Object.fromEntries(ACCOUNT_STATUS_TABS.map(({ id }) => [id, id === "unknown"
+      ? accounts.filter((account) => !account.last_warmup_status).length
+      : accounts.filter((account) => account.last_warmup_status === id).length])) as Record<AccountStatusTab, number>,
+    [accounts],
+  );
+  const filteredAccounts = statusTab === "unknown"
+    ? accounts.filter((account) => !account.last_warmup_status)
+    : accounts.filter((account) => account.last_warmup_status === statusTab);
   const codexAccounts = accounts.filter((account) => account.auth_kind === "oauth" && provider.type === "openai");
   const codexQuotaQueries = useQueries({
     queries: codexAccounts.map((account) => ({
@@ -108,9 +127,9 @@ export function AccountsCard({ provider }: { provider: Provider }) {
     () => new Map(codexAccounts.map((account, index) => [account.id, codexQuotaQueries[index]])),
     [codexAccounts, codexQuotaQueries],
   );
-  const totalPages = Math.max(1, Math.ceil(accounts.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(filteredAccounts.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pageAccounts = accounts.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const pageAccounts = filteredAccounts.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   return (
     <Card>
@@ -118,7 +137,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
         <div className="flex items-center gap-2">
           <Cable size={15} className="text-accent" />
           <h2 className="text-sm font-semibold">Accounts</h2>
-          <span className="text-xs text-text-muted">{accounts.length} account{accounts.length === 1 ? "" : "s"}</span>
+          <span className="text-xs text-text-muted">{filteredAccounts.length} of {accounts.length} accounts</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 text-xs text-text-muted">
@@ -134,7 +153,23 @@ export function AccountsCard({ provider }: { provider: Provider }) {
         </div>
       </div>
 
+      <div className="mb-3 flex flex-wrap gap-2" role="tablist" aria-label="Account status">
+        {ACCOUNT_STATUS_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={statusTab === tab.id}
+            onClick={() => { setStatusTab(tab.id); setPage(1); }}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${statusTab === tab.id ? tab.activeClassName : "border-border text-text-muted hover:bg-bg-base hover:text-text-primary"}`}
+          >
+            {tab.label} <span className="ml-1 opacity-75">{accountCounts[tab.id]}</span>
+          </button>
+        ))}
+      </div>
+
       {accounts.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No accounts yet — add an API key to enable this provider.</p>}
+      {accounts.length > 0 && filteredAccounts.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No {ACCOUNT_STATUS_TABS.find((tab) => tab.id === statusTab)?.label.toLowerCase()} accounts.</p>}
 
       <div className="space-y-2">
         {pageAccounts.map((account) => {
@@ -150,6 +185,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                     {account.last_warmup_status === "healthy" && <Badge tone="success">healthy</Badge>}
                     {account.last_warmup_status === "rate_limited" && <Badge tone="warning">rate limited</Badge>}
                     {account.last_warmup_status === "failing" && <Badge tone="danger">failing</Badge>}
+                    {!account.last_warmup_status && <Badge tone="muted">unknown</Badge>}
                     <span className="break-all font-mono text-text-muted">{account.api_key}</span>
                   </div>
                   <div className="flex flex-col gap-1 text-text-muted sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
@@ -183,7 +219,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                     </Button>
                   )}
                   {(account.auth_kind === "oauth" || provider.type === "codebuddy-global" || provider.type === "codebuddy-cn") && (
-                    <Button variant="ghost" size="sm" onClick={() => setQuotaFor(account)} aria-label={`Quota for ${account.label}`} title={quotaTitle(account, true)}><Gauge size={13} className="text-accent" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => setQuotaFor(account)} aria-label={`Quota for ${account.label}`} title={quotaTitle(provider.type, true)}><Gauge size={13} className="text-accent" /></Button>
                   )}
                   <Switch checked={!!account.enabled} onChange={() => toggleAccount.mutate(account)} aria-label={`Toggle ${account.label}`} />
                   <Button variant="ghost" size="sm" onClick={() => setRemoving(account)} aria-label={`Remove ${account.label}`}><Trash2 size={13} className="text-danger" /></Button>
@@ -201,7 +237,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
 
       {totalPages > 1 && (
         <div className="mt-3 flex items-center justify-between text-xs text-text-muted">
-          <span>{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, accounts.length)} of {accounts.length}</span>
+          <span>{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filteredAccounts.length)} of {filteredAccounts.length}</span>
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}><ChevronLeft size={13} /> Prev</Button>
             <span className="px-2">Page {safePage} / {totalPages}</span>
@@ -211,7 +247,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       )}
 
       {adding && <AddAccountModal provider={provider} accountCount={accounts.length} onClose={() => setAdding(false)} />}
-      {quotaFor && <CodexQuotaModal account={quotaFor} onClose={() => setQuotaFor(null)} />}
+      {quotaFor && <CodexQuotaModal account={quotaFor} providerType={provider.type} onClose={() => setQuotaFor(null)} />}
       {editingMeta && <AccountMetaModal account={editingMeta} loading={updateMeta.isPending} onClose={() => setEditingMeta(null)} onSave={(notes, tags, sessionCookie) => updateMeta.mutate({ accountId: editingMeta.id, notes, tags, sessionCookie })} />}
 
       <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => removing && removeAccount.mutate(removing.id)} title="Remove account" message={`Remove account "${removing?.label}" from ${provider.name}? Requests will no longer use this key.`} danger loading={removeAccount.isPending} />

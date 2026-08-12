@@ -52,23 +52,32 @@ export function ProviderDetailPage() {
 
   const warmupAll = useMutation({
     mutationFn: async (providerId: string) => {
-      const total = (provider?.accounts ?? []).filter((account) => !!account.enabled).length;
-      setWarmupProgress(total > 0 ? { current: 0, total } : null);
-      if (total === 0) return providers.warmupAllAccounts(providerId);
-      const interval = window.setInterval(() => {
-        setWarmupProgress((prev) => {
-          if (!prev) return prev;
-          if (prev.current >= Math.max(prev.total - 1, 0)) return prev;
-          return { ...prev, current: prev.current + 1 };
-        });
-      }, 250);
-      try {
-        const result = await providers.warmupAllAccounts(providerId);
-        setWarmupProgress({ current: total, total });
-        return result;
-      } finally {
-        window.clearInterval(interval);
-      }
+      let complete: { total: number; success: number; failed: number } | null = null;
+      await providers.warmupAllAccountsStream(providerId, (event, data) => {
+        if (event === "start") {
+          setWarmupProgress({ current: 0, total: Number(data.total) });
+          return;
+        }
+        if (event === "account_result") {
+          const accountId = String(data.account_id);
+          const ok = Boolean(data.ok);
+          queryClient.setQueryData<Provider[]>(["providers"], (entries) => entries?.map((entry) => entry.id !== providerId ? entry : {
+            ...entry,
+            accounts: entry.accounts?.map((account) => account.id !== accountId ? account : {
+              ...account,
+              last_warmup_at: new Date().toISOString(),
+              last_warmup_status: ok ? "healthy" : (Number(data.status) === 429 ? "rate_limited" : "failing"),
+              last_warmup_latency_ms: Number(data.latency_ms),
+              last_warmup_detail: typeof data.detail === "string" ? data.detail : null,
+            }),
+          }));
+          setWarmupProgress({ current: Number(data.current), total: Number(data.total) });
+          return;
+        }
+        if (event === "complete") complete = { total: Number(data.total), success: Number(data.success), failed: Number(data.failed) };
+      });
+      if (!complete) throw new Error("Warmup stream ended before completion");
+      return complete;
     },
     onSuccess: (result) => {
       invalidate();

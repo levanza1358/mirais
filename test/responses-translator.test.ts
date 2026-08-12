@@ -1,10 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalResponseToResponses, chatSseToResponses, responsesRequestToCanonical } from "../src/proxy/translator/responses";
 import { responsesCreateSchema } from "../src/shared/schemas";
+import { ResponsesToChatStreamTranslator } from "../src/proxy/codex";
 
 const encoder = new TextEncoder();
 
 describe("Responses compatibility translator", () => {
+  test("keeps distinct indexes for parallel Responses function calls", () => {
+    const translator = new ResponsesToChatStreamTranslator("grok-4.5");
+    const first = translator.handleEvent("response.output_item.added", JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "item_a", call_id: "call_a", name: "one" } })).join("");
+    const second = translator.handleEvent("response.output_item.added", JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "item_b", call_id: "call_b", name: "two" } })).join("");
+    const args = translator.handleEvent("response.function_call_arguments.delta", JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "item_b", delta: "{}" })).join("");
+    expect(first).toContain('"index":0');
+    expect(second).toContain('"index":1');
+    expect(args).toContain('"index":1');
+  });
+
   test("maps string input, instructions, limits and function tools", () => {
     const req = responsesRequestToCanonical({
       model: "combo:smart",

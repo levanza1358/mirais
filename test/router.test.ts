@@ -23,7 +23,8 @@ beforeEach(() => {
 
 function seedProvider(name: string, type: "openai" | "anthropic", models: string[], priority = 100) {
   const p = providers.create({ name, type, priority });
-  providers.addAccount(p.id, { label: "main", apiKey: "sk-test" });
+  const account = providers.addAccount(p.id, { label: "main", apiKey: "sk-test" });
+  providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
   for (const m of models) providers.upsertModel(p.id, m);
   return p;
 }
@@ -145,6 +146,15 @@ describe("Router.resolve", () => {
     const p = providers.create({ name: "noacct", type: "openai" });
     providers.upsertModel(p.id, "m");
     try { router.resolve("noacct/m"); expect.unreachable(); }
+    catch (e) { expect((e as GatewayError).status).toBe(503); }
+  });
+
+  test("provider with no healthy accounts → 503", () => {
+    const p = providers.create({ name: "unhealthy", type: "openai" });
+    const account = providers.addAccount(p.id, { label: "main", apiKey: "sk-test" });
+    providers.updateAccount(account.id, { lastWarmupStatus: "failing" });
+    providers.upsertModel(p.id, "m");
+    try { router.resolve("unhealthy/m"); expect.unreachable(); }
     catch (e) { expect((e as GatewayError).status).toBe(503); }
   });
 
