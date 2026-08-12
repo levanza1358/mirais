@@ -1,11 +1,11 @@
-import type { CanonicalRequest, CanonicalResponse, AttemptRecord, RouteCandidate, Usage, RoutingPolicy } from "../shared/types";
+import type { CanonicalRequest, CanonicalResponse, AttemptRecord, RouteCandidate, Usage, RoutingPolicy, ProviderAccount } from "../shared/types";
 import { GatewayError, isRetriableStatus } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "./router";
 import { openaiToAnthropicRequest } from "./translator/anthropic-to-openai";
 import { anthropicToOpenaiResponse } from "./translator/openai-to-anthropic";
 import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/stream";
 import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
-import { aggregateXaiResponsesStream, ensureFreshXaiToken, xaiHeaders, xaiRequestBody, xaiResponsesStreamToChat, xaiResponsesUrl } from "./xai";
+import { aggregateXaiChatCompletionsStream, aggregateXaiResponsesStream, ensureFreshXaiToken, fetchXaiChatCompletions, fetchXaiResponses, supportsReasoningEffort, xaiChatCompletionsBody, xaiChatCompletionsStreamToChat, xaiHeaders, xaiRequestBody, xaiRequestContext, xaiResponsesStreamToChat } from "./xai";
 import { metaForModel } from "./modelMeta";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { config } from "../config";
@@ -98,6 +98,8 @@ function nextCoolingCandidate(candidates: RouteCandidate[]): { accountLabel: str
 
 export interface ExecutorContext {
   signal?: AbortSignal;
+  xaiSessionId?: string;
+  xaiRequestId?: string;
 }
 
 export interface ExecuteSuccess {
@@ -178,9 +180,11 @@ export async function executeRequest(
     throw new GatewayError(503, "server_error", "All candidates are cooling down. Try again shortly.");
   }
 
-  const preferredPlan = plan.filter(({ account }) => account.last_warmup_status === "healthy");
-  const fallbackPlan = plan.filter(({ account }) => account.last_warmup_status !== "healthy");
-  const orderedPlan = preferredPlan.length ? [...preferredPlan, ...fallbackPlan] : plan;
+  const orderedPlan = plan.filter(({ account }) => account.last_warmup_status === "healthy");
+
+  if (!orderedPlan.length) {
+    throw new GatewayError(503, "server_error", "No healthy accounts are available. Run account warmup and try again.");
+  }
 
   const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, orderedPlan.length);
   for (let attemptNo = 0; attemptNo < maxAttempts; attemptNo++) {
@@ -195,14 +199,21 @@ export async function executeRequest(
       // OAuth accounts require their provider's CLI Responses endpoint; they
       // cannot call the public OpenAI-compatible endpoint with a bearer token.
       const isXaiOAuth = candidate.provider.type === "xai" && account.auth_kind === "oauth";
+      // For Grok-4.5 with reasoning enabled, use Chat Completions endpoint
+      // which supports reasoning_content deltas (Responses API doesn't).
+      const useXaiChat = isXaiOAuth
+        && supportsReasoningEffort(candidate.modelId)
+        && effectiveReq.reasoning?.enabled !== false;
       if (isOAuthAccount(account) || isXaiOAuth) {
         if (!providersRepo) throw new GatewayError(500, "server_error", "OAuth account requires a providers repo in the executor");
         const accessToken = isXaiOAuth
           ? await ensureFreshXaiToken(providersRepo, account)
           : await ensureFreshToken(providersRepo, account);
         if (req.stream) {
-          const result = isXaiOAuth
-            ? await openXaiStream(effectiveReq, candidate, accessToken, ctx.signal)
+          const result = useXaiChat
+            ? await openXaiChatStream(effectiveReq, candidate, accessToken, account, ctx)
+            : isXaiOAuth
+            ? await openXaiStream(effectiveReq, candidate, accessToken, account, ctx)
             : await openCodexStream(effectiveReq, candidate, account, accessToken, ctx.signal);
           markSuccess(cdKey);
           clearAccountRateLimit(providersRepo, account.id);
@@ -216,8 +227,10 @@ export async function executeRequest(
           });
           return { kind: "stream", stream: result.stream, candidate, accountLabel: account.label, attempts, usagePromise: result.usagePromise };
         }
-        const response = isXaiOAuth
-          ? await callXai(effectiveReq, candidate, accessToken, ctx.signal)
+        const response = useXaiChat
+          ? await callXaiChat(effectiveReq, candidate, accessToken, account, ctx)
+          : isXaiOAuth
+          ? await callXai(effectiveReq, candidate, accessToken, account, ctx)
           : await callCodex(effectiveReq, candidate, account, accessToken, ctx.signal);
         markSuccess(cdKey);
         clearAccountRateLimit(providersRepo, account.id);
@@ -605,16 +618,18 @@ async function callXai(
   req: CanonicalRequest,
   candidate: RouteCandidate,
   accessToken: string,
-  signal?: AbortSignal,
+  account: ProviderAccount,
+  context: ExecutorContext,
 ): Promise<CanonicalResponse> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
-  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const res = await fetch(xaiResponsesUrl(), {
+  const combined = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+  const xaiContext = xaiRequestContext({ sessionId: context.xaiSessionId, requestId: context.xaiRequestId }, req, candidate.modelId);
+  const res = await fetchXaiResponses({
     method: "POST",
-    headers: xaiHeaders(accessToken, true),
+    headers: xaiHeaders(accessToken, true, xaiContext, account),
     body: JSON.stringify(xaiRequestBody(req, candidate.modelId)),
     signal: combined,
-  });
+  }, context.signal);
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Grok returned no stream body");
   return aggregateXaiResponsesStream(res.body, req.model);
@@ -624,19 +639,63 @@ async function openXaiStream(
   req: CanonicalRequest,
   candidate: RouteCandidate,
   accessToken: string,
-  signal?: AbortSignal,
+  account: ProviderAccount,
+  context: ExecutorContext,
 ): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
-  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const res = await fetch(xaiResponsesUrl(), {
+  const combined = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+  const xaiContext = xaiRequestContext({ sessionId: context.xaiSessionId, requestId: context.xaiRequestId }, req, candidate.modelId);
+  const res = await fetchXaiResponses({
     method: "POST",
-    headers: xaiHeaders(accessToken, true),
+    headers: xaiHeaders(accessToken, true, xaiContext, account),
     body: JSON.stringify(xaiRequestBody(req, candidate.modelId)),
     signal: combined,
-  });
+  }, context.signal);
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Grok returned no stream body");
   return xaiResponsesStreamToChat(res.body, req.model);
+}
+
+async function callXaiChat(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  accessToken: string,
+  account: ProviderAccount,
+  context: ExecutorContext,
+): Promise<CanonicalResponse> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+  const xaiContext = xaiRequestContext({ sessionId: context.xaiSessionId, requestId: context.xaiRequestId }, req, candidate.modelId);
+  const res = await fetchXaiChatCompletions({
+    method: "POST",
+    headers: xaiHeaders(accessToken, true, xaiContext, account),
+    body: JSON.stringify(xaiChatCompletionsBody(req, candidate.modelId)),
+    signal: combined,
+  }, context.signal);
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Grok Chat Completions returned no stream body");
+  return aggregateXaiChatCompletionsStream(res.body, req.model);
+}
+
+async function openXaiChatStream(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  accessToken: string,
+  account: ProviderAccount,
+  context: ExecutorContext,
+): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+  const xaiContext = xaiRequestContext({ sessionId: context.xaiSessionId, requestId: context.xaiRequestId }, req, candidate.modelId);
+  const res = await fetchXaiChatCompletions({
+    method: "POST",
+    headers: xaiHeaders(accessToken, true, xaiContext, account),
+    body: JSON.stringify(xaiChatCompletionsBody(req, candidate.modelId)),
+    signal: combined,
+  }, context.signal);
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Grok Chat Completions returned no stream body");
+  return xaiChatCompletionsStreamToChat(res.body, req.model);
 }
 
 async function upstreamError(res: Response): Promise<GatewayError> {
