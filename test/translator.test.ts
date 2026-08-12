@@ -7,7 +7,16 @@ import {
   anthropicToOpenaiResponse,
   openaiToAnthropicResponse,
 } from "../src/proxy/translator/openai-to-anthropic";
+import { SseParser } from "../src/proxy/translator/stream";
 import type { CanonicalRequest, CanonicalResponse } from "../src/shared/types";
+
+describe("SseParser", () => {
+  test("flushes a terminal event that lacks a trailing blank line", () => {
+    const parser = new SseParser();
+    expect(parser.feed('data: {"id":"chatcmpl_test"}')).toEqual([]);
+    expect(parser.finish()).toEqual([{ event: "message", data: '{"id":"chatcmpl_test"}' }]);
+  });
+});
 
 // ── OpenAI → Anthropic request ──
 

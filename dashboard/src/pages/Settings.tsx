@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff } from "lucide-react";
 import { settings, backups, healthInfo, type BackupEntry, type TokenSaverSettings } from "../api";
-import { Button, Card, ConfirmModal, Input, Switch, toast } from "../components/ui";
+import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
 const ACCENT_OPTIONS: Array<{ id: string; label: string; value: string }> = [
@@ -394,6 +394,7 @@ function BackupSection() {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [restoreId, setRestoreId] = useState<string | null>(null);
   const list = useQuery({ queryKey: ["backups"], queryFn: backups.list });
 
   const create = useMutation({
@@ -412,8 +413,18 @@ function BackupSection() {
     onError: (e) => toast(e.message, "error"),
   });
   const restore = useMutation({
-    mutationFn: backups.restore,
-    onSuccess: () => toast("Backup restored. Mirais is restarting — reload in a few seconds."),
+    mutationFn: ({ id, mode }: { id: string; mode: "merge" | "overwrite" }) => backups.restore(id, mode),
+    onSuccess: (data) => {
+      setRestoreId(null);
+      if (data.mode === "merge") {
+        const added = Object.entries(data.added ?? {}).filter(([, n]) => n > 0).map(([t, n]) => `${t}: +${n}`).join(", ");
+        const skipped = Object.entries(data.skipped ?? {}).filter(([, n]) => n > 0).map(([t, n]) => `${t}: ${n}`).join(", ");
+        toast(`Merge done. ${added || "Nothing added"}.${skipped ? ` Duplicates skipped (${skipped}).` : ""}`, "success");
+        qc.invalidateQueries({ queryKey: ["backups"] });
+      } else {
+        toast("Backup restored. Mirais is restarting — reload in a few seconds.");
+      }
+    },
     onError: (e) => toast(e.message, "error"),
   });
 
@@ -440,12 +451,34 @@ function BackupSection() {
           <div className="min-w-0"><p className="truncate font-mono text-xs text-text-primary">{backup.filename}</p><p className="mt-1 text-xs text-text-muted">{formatSize(backup.size_bytes)} · {formatDate(backup.created_at)}</p></div>
           <div className="flex gap-1">
             <a className="inline-flex h-9 items-center gap-1 rounded-xl px-3 text-xs text-text-muted hover:bg-bg-raised hover:text-text-primary" href={backups.downloadUrl(backup.id)}><Download size={14} /> Download</a>
-            <Button size="sm" variant="outline" onClick={() => restore.mutate(backup.id)} loading={restore.isPending}><RotateCcw size={14} /> Restore</Button>
+            <Button size="sm" variant="outline" onClick={() => setRestoreId(backup.id)}><RotateCcw size={14} /> Restore</Button>
             <Button size="sm" variant="danger" onClick={() => setConfirmId(backup.id)}><Trash2 size={14} /></Button>
           </div>
         </div>)}
       </div>}
       <ConfirmModal open={!!confirmId} onClose={() => setConfirmId(null)} onConfirm={() => confirmId && remove.mutate(confirmId)} title="Delete backup" message="This backup will be permanently deleted." danger loading={remove.isPending} />
+
+      <Modal open={!!restoreId} onClose={() => setRestoreId(null)} title="Restore backup">
+        <p className="mb-5 text-sm text-text-muted">Choose how to restore this backup:</p>
+        <div className="space-y-3">
+          <button
+            onClick={() => restore.mutate({ id: restoreId!, mode: "merge" })}
+            disabled={restore.isPending}
+            className="w-full rounded-xl border border-border p-4 text-left hover:border-accent/40 hover:bg-bg-raised disabled:opacity-50"
+          >
+            <p className="text-sm font-medium">Merge</p>
+            <p className="mt-1 text-xs text-text-muted">Adds data from the backup into the current database. Rows that already exist (e.g. same provider key) are skipped — no duplicates.</p>
+          </button>
+          <button
+            onClick={() => restore.mutate({ id: restoreId!, mode: "overwrite" })}
+            disabled={restore.isPending}
+            className="w-full rounded-xl border border-destructive/30 p-4 text-left hover:bg-destructive/10 disabled:opacity-50"
+          >
+            <p className="text-sm font-medium text-destructive">Overwrite</p>
+            <p className="mt-1 text-xs text-text-muted">Replaces the entire database with the backup. Current data is lost (a pre-restore fallback backup is created automatically). Mirais restarts.</p>
+          </button>
+        </div>
+      </Modal>
     </Card>
   );
 }

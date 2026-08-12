@@ -20,7 +20,7 @@ import { SettingsRepo } from "./store/repos/settings";
 import { ProvidersRepo } from "./store/repos/providers";
 import { baseUrlFor } from "./proxy/router";
 import { codexQuotaDetail, ensureFreshToken, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount } from "./proxy/codex";
-import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/providers";
+import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/codebuddy-provider";
 import { log, setLogLevel } from "./utils/logger";
 
 function classifyWarmupStatus(ok: boolean, status: number, detail?: string | null): "healthy" | "rate_limited" | "failing" {

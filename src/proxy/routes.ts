@@ -138,7 +138,12 @@ export function v1Routes(db: Database) {
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
           })
-          .catch(() => undefined)
+          .catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+              result.attempts.length, "error", 502, message, started, undefined, saver.tokensSaved, result.attempts,
+              { request: summarizeRequest(req), response: summarizeResponse(null, message) }, kind);
+          })
           .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
         return tap.stream;
       }

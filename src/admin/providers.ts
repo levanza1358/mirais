@@ -8,61 +8,18 @@ import type { z } from "zod";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
 import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
+import { ensureFreshXaiToken, xaiHeaders } from "../proxy/xai";
+import { checkCodexProviderQuota, fetchCodexProviderModels, testCodexProviderModel } from "./codex-provider";
+import { fetchXaiModels, testXaiModel } from "./xai-provider";
 import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
 import { SseParser } from "../proxy/translator/stream";
+import { CODEBUDDY_MODELS, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
   return /(rate limit|quota|429|exhausted|capacity|stream must be set to true|usage limit has been reached|limit has been reached)/i.test(detail);
-}
-
-export const CODEBUDDY_MODELS: Record<string, string[]> = {
-  "codebuddy-global": [
-    "claude-opus-4.7-1m",
-    "claude-opus-4.6",
-    "claude-sonnet-4.6",
-    "claude-haiku-4.5",
-    "glm-5.2",
-    "glm-5.1",
-    "glm-5.0",
-    "glm-5.0-turbo",
-    "glm-5v-turbo",
-    "glm-4.7",
-    "minimax-m3",
-    "minimax-m2.7",
-    "kimi-k2.7",
-    "kimi-k2.6",
-    "kimi-k2.5",
-    "hy3-preview",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "deepseek-v3.2",
-    "deepseek-v3-2-volc",
-  ],
-  "codebuddy-cn": [
-    "kimi-k3",
-    "glm-5.2",
-    "glm-5.1",
-    "glm-5.0",
-    "glm-5.0-turbo",
-    "glm-5v-turbo",
-    "minimax-m3",
-    "minimax-m2.7",
-    "kimi-k2.7",
-    "kimi-k2.6",
-    "kimi-k2.5",
-    "hy3-preview",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "deepseek-v3.2",
-    "deepseek-v3-2-volc",
-  ],
-};
-
-export function isCodeBuddyProviderType(type: string): boolean {
-  return type === "codebuddy-global" || type === "codebuddy-cn";
 }
 
 function mask(key: string): string {
@@ -117,53 +74,6 @@ function inferCapabilitiesFromPreview(preview: string | undefined): string[] {
   if (/json/.test(lower)) caps.add("json");
   if (/vision|image/.test(lower)) caps.add("vision");
   return [...caps];
-}
-
-export function codeBuddyChatUrl(provider: ReturnType<ProvidersRepo["get"]>): string {
-  const base = baseUrlFor(provider!);
-  return base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
-}
-
-async function readCodeBuddyPreviewFromSse(body: ReadableStream<Uint8Array>): Promise<string | undefined> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  const parser = new SseParser();
-  let text = "";
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      for (const ev of parser.feed(decoder.decode(value, { stream: true }))) {
-        if (!ev.data || ev.data === "[DONE]") continue;
-        try {
-          const payload = JSON.parse(ev.data) as {
-            choices?: Array<{ delta?: { content?: string | Array<{ type?: string; text?: string }>; reasoning_content?: string }; message?: { content?: string } }>;
-          };
-          const delta = payload.choices?.[0]?.delta?.content;
-          const reasoning = payload.choices?.[0]?.delta?.reasoning_content;
-          if (typeof reasoning === "string") text += reasoning;
-          if (typeof delta === "string") text += delta;
-          else if (Array.isArray(delta)) {
-            text += delta
-              .filter((part) => part?.type === "text" && typeof part.text === "string")
-              .map((part) => part.text ?? "")
-              .join("");
-          }
-          else if (typeof payload.choices?.[0]?.message?.content === "string") {
-            text += payload.choices?.[0]?.message?.content ?? "";
-          }
-          if (text.trim().length >= 32) break;
-        } catch {
-          // ignore malformed chunks
-        }
-      }
-      if (text.trim().length >= 32) break;
-    }
-  } finally {
-    reader.cancel().catch(() => undefined);
-  }
-  const trimmed = text.trim();
-  return trimmed ? trimmed.slice(0, 220) : undefined;
 }
 
 async function readCodexPreviewFromSse(body: ReadableStream<Uint8Array>): Promise<string | undefined> {
@@ -224,30 +134,13 @@ export function providerRoutes(db: Database) {
     let result: { account: string; ok: boolean; status: number; latency_ms: number; detail?: string };
     try {
       if (isCodeBuddyProviderType(provider.type)) {
-        const res = await fetch(codeBuddyChatUrl(provider), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            Authorization: `Bearer ${acc.api_key}`,
-            "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
-            "X-Product": "SaaS",
-            "X-IDE-Type": "CLI",
-            "X-IDE-Name": "CLI",
-            "x-requested-with": "XMLHttpRequest",
-            "x-codebuddy-request": "1",
-            accept: "text/event-stream",
-          },
-          body: JSON.stringify({
-            model: (CODEBUDDY_MODELS[provider.type] ?? ["glm-5.2"])[0] ?? "glm-5.2",
-            max_tokens: 16,
-            stream: true,
-            messages: [
-              { role: "system", content: "You are a helpful AI assistant." },
-              { role: "user", content: "Reply with exactly: warmup ok" },
-            ],
-          }),
-          signal: AbortSignal.timeout(20_000),
-        });
+        const res = await requestCodeBuddyChat(
+          provider,
+          acc,
+          (CODEBUDDY_MODELS[provider.type] ?? ["glm-5.2"])[0] ?? "glm-5.2",
+          "Reply with exactly: warmup ok",
+          16,
+        );
         result = {
           ok: res.ok,
           status: res.status,
@@ -255,10 +148,21 @@ export function providerRoutes(db: Database) {
           account: acc.label,
           detail: res.ok ? "CodeBuddy chat warmup ok" : `HTTP ${res.status}`,
         };
+      } else if (provider.type === "xai" && acc.auth_kind === "oauth") {
+        const accessToken = await ensureFreshXaiToken(repo, acc);
+        const res = await fetch("https://cli-chat-proxy.grok.com/v1/models", {
+          headers: xaiHeaders(accessToken),
+          signal: AbortSignal.timeout(15_000),
+        });
+        result = {
+          ok: res.ok,
+          status: res.status,
+          latency_ms: Date.now() - started,
+          account: acc.label,
+          detail: res.ok ? "Grok CLI login active" : `HTTP ${res.status}`,
+        };
       } else if (isOAuthAccount(acc)) {
-        const accessToken = await ensureFreshToken(repo, acc);
-        const usage = await fetchCodexUsage(acc, accessToken);
-        const quotaExhausted = isCodexQuotaExhausted(usage);
+        const { usage, exhausted: quotaExhausted } = await checkCodexProviderQuota(repo, acc);
         result = {
           ok: !quotaExhausted,
           status: quotaExhausted ? 429 : 200,
@@ -377,6 +281,13 @@ export function providerRoutes(db: Database) {
       log.info("accounts bulk added", { provider: p.name, added, skipped });
       return { added, skipped };
     })
+    .delete("/:id/accounts", ({ params }) => {
+      const p = repo.get(params.id);
+      if (!p) throw new AdminError(404, "Provider not found");
+      const removed = repo.removeAllAccounts(p.id);
+      log.info("accounts bulk removed", { provider: p.name, removed });
+      return { ok: true, removed };
+    })
     .patch("/accounts/:accId", ({ params, body }) => {
       const parsed = accountUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
@@ -424,8 +335,7 @@ export function providerRoutes(db: Database) {
         return fetchCodeBuddyUsage(account, baseUrlFor(provider));
       }
       if (!isOAuthAccount(account)) throw new AdminError(400, "Quota is only available for OAuth accounts");
-      const accessToken = await ensureFreshToken(repo, account);
-      return fetchCodexUsage(account, accessToken);
+      return (await checkCodexProviderQuota(repo, account)).usage;
     })
     .post("/accounts/:accId/codex-quota/reset", async ({ params }) => {
       const account = repo.getAccount(params.accId);
@@ -462,30 +372,9 @@ export function providerRoutes(db: Database) {
       const started = Date.now();
       try {
         if (isCodeBuddyProviderType(p.type)) {
-          const res = await fetch(codeBuddyChatUrl(p), {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              Authorization: `Bearer ${account.api_key}`,
-              "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
-              "X-Product": "SaaS",
-              "X-IDE-Type": "CLI",
-              "X-IDE-Name": "CLI",
-              "x-requested-with": "XMLHttpRequest",
-              "x-codebuddy-request": "1",
-              accept: "text/event-stream",
-            },
-            body: JSON.stringify({
-              model: (CODEBUDDY_MODELS[p.type] ?? ["glm-5.2"])[0] ?? "glm-5.2",
-              max_tokens: 16,
-              stream: true,
-              messages: [
-                { role: "system", content: "You are a helpful AI assistant." },
-                { role: "user", content: "Reply with exactly: connection ok" },
-              ],
-            }),
-            signal: AbortSignal.timeout(20_000),
-          });
+          const res = await requestCodeBuddyChat(
+            p, account, (CODEBUDDY_MODELS[p.type] ?? ["glm-5.2"])[0] ?? "glm-5.2", "Reply with exactly: connection ok", 16,
+          );
           return {
             ok: res.ok,
             status: res.status,
@@ -498,12 +387,16 @@ export function providerRoutes(db: Database) {
         // successful token refresh proves the connection is alive.
         if (isOAuthAccount(account)) {
           await ensureFreshToken(repo, account);
-          return { ok: true, status: 200, latency_ms: Date.now() - started, account: account.label, detail: "ChatGPT login active" };
+          return {
+            ok: true,
+            status: 200,
+            latency_ms: Date.now() - started,
+            account: account.label,
+            detail: "ChatGPT login active",
+          };
         }
         const base = baseUrlFor(p);
-        const headers: Record<string, string> = p.type === "anthropic"
-          ? { "x-api-key": account.api_key, "anthropic-version": "2023-06-01" }
-          : { Authorization: `Bearer ${account.api_key}` };
+        const headers = { Authorization: `Bearer ${account.api_key}` };
         const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(15_000) });
         return {
           ok: res.ok,
@@ -515,7 +408,6 @@ export function providerRoutes(db: Database) {
       } catch (err) {
         return {
           ok: false,
-          status: 0,
           latency_ms: Date.now() - started,
           account: account.label,
           detail: err instanceof Error ? err.message : String(err),
@@ -556,7 +448,12 @@ export function providerRoutes(db: Database) {
       try {
         let res: Response | null = null;
         let usedAccount = accounts[0]!;
-        if (isOAuthAccount(accounts[0]!)) {
+        let preview_text: string | undefined;
+        if (p.type === "xai" && accounts[0]!.auth_kind === "oauth") {
+          const xaiResult = await testXaiModel(repo, usedAccount, modelId, testPrompt);
+          res = xaiResult.response;
+          preview_text = xaiResult.previewText;
+        } else if (isOAuthAccount(accounts[0]!)) {
           let lastRateLimited: { res: Response; account: typeof usedAccount } | null = null;
           for (const account of accounts) {
             usedAccount = account;
@@ -587,34 +484,11 @@ export function providerRoutes(db: Database) {
             usedAccount = lastRateLimited.account;
           }
         } else if (isCodeBuddyProviderType(p.type)) {
-        for (const account of accounts) {
-          usedAccount = account;
-          res = await fetch(codeBuddyChatUrl(p), {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              Authorization: `Bearer ${account.api_key}`,
-              "User-Agent": "CLI/2.108.1 CodeBuddy/2.108.1",
-              "X-Product": "SaaS",
-              "X-IDE-Type": "CLI",
-              "X-IDE-Name": "CLI",
-              "x-requested-with": "XMLHttpRequest",
-              "x-codebuddy-request": "1",
-              accept: "text/event-stream",
-            },
-            body: JSON.stringify({
-              model: modelId,
-              max_tokens: 64,
-              stream: true,
-              messages: [
-                { role: "system", content: "You are a helpful AI assistant." },
-                { role: "user", content: testPrompt },
-              ],
-            }),
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (res.ok || res.status !== 429) break;
-        }
+          for (const account of accounts) {
+            usedAccount = account;
+            res = await requestCodeBuddyChat(p, account, modelId, testPrompt, 64);
+            if (res.ok || res.status !== 429) break;
+          }
         } else if (upstreamFormat(p) === "anthropic") {
         const account = accounts[0]!;
           res = await fetch(`${baseUrlFor(p)}/v1/messages`, {
@@ -658,7 +532,6 @@ export function providerRoutes(db: Database) {
         if (!res) throw new AdminError(500, "Model test did not produce a response");
         const latency = Date.now() - started;
         let detail: string | undefined;
-        let preview_text: string | undefined;
         let context_length: number | null = null;
         let max_output_tokens: number | null = null;
         let capabilities: string[] | undefined;
@@ -674,6 +547,8 @@ export function providerRoutes(db: Database) {
           try {
             if (isCodeBuddyProviderType(p.type)) {
               preview_text = res.body ? await readCodeBuddyPreviewFromSse(res.body) : undefined;
+            } else if (p.type === "xai" && usedAccount.auth_kind === "oauth") {
+              // The xAI helper already consumed the Grok Responses SSE stream.
             } else if (isOAuthAccount(usedAccount)) {
               preview_text = res.body ? await readCodexPreviewFromSse(res.body) : undefined;
             } else {
@@ -734,6 +609,25 @@ export function providerRoutes(db: Database) {
         const kept = syncedModels.map((model) => model.id);
         log.info("codebuddy models synced", { provider: p.name, count: kept.length, mode });
         return { synced: kept.length, pruned, models: kept, mode };
+      }
+
+      if (p.type === "xai" && account.auth_kind === "oauth") {
+        const byId = new Map<string, Awaited<ReturnType<typeof fetchXaiModels>>[number]>();
+        const failures: string[] = [];
+        for (const xaiAccount of accounts.filter((candidate) => candidate.auth_kind === "oauth")) {
+          try {
+            for (const model of await fetchXaiModels(repo, xaiAccount)) {
+              if (!byId.has(model.id)) byId.set(model.id, model);
+            }
+          } catch (err) {
+            failures.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+        if (!byId.size) throw new AdminError(502, failures[0] ?? "No Grok model catalog available");
+        const models = [...byId.values()];
+        const pruned = repo.replaceSyncedModels(p.id, models);
+        log.info("xai models synced", { provider: p.name, count: models.length, pruned, accounts: accounts.length, failures: failures.length });
+        return { synced: models.length, pruned, models: models.map((model) => model.id) };
       }
 
       // OAuth accounts: fetch the live Codex model catalog (same endpoint the

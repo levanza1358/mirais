@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, ExternalLink, Loader2, Play, Smartphone, XCircle } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bot, CheckCircle2, ExternalLink, Loader2, Play, Smartphone, Square, XCircle } from "lucide-react";
 import { type Provider, providers } from "../../api";
 import { Modal, toast } from "../../components/ui";
 
 type FarmCheck = Awaited<ReturnType<typeof providers.xaiFarmCheck>>;
 type FarmResult = Awaited<ReturnType<typeof providers.xaiFarm>>;
+type FarmStatus = Awaited<ReturnType<typeof providers.xaiFarmStatus>>;
 
 export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: () => void }) {
   const queryClient = useQueryClient();
@@ -16,7 +17,18 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
   const [showFarmSetup, setShowFarmSetup] = useState(false);
   const [farmCheck, setFarmCheck] = useState<FarmCheck | null>(null);
   const [farmCount, setFarmCount] = useState(1);
+  const [farmCountInput, setFarmCountInput] = useState("1");
   const [farmConcurrency, setFarmConcurrency] = useState(1);
+
+  // A farm started in another tab (or before a page refresh) keeps running on
+  // the server. Poll its status so the "Farm in progress" panel survives
+  // reloads instead of showing a fresh empty setup.
+  const farmStatus = useQuery({
+    queryKey: ["xai-farm-status"],
+    queryFn: providers.xaiFarmStatus,
+    refetchInterval: 2_000,
+  });
+  const isFarmRunning = farmStatus.data?.running === true;
 
   const deviceCodeMut = useMutation({
     mutationFn: () => providers.xaiDeviceCode(),
@@ -71,10 +83,26 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
     onError: (e) => toast(e.message, "error"),
   });
 
+  const farmStopMut = useMutation({
+    mutationFn: () => providers.xaiFarmStop(),
+    onSuccess: () => {
+      toast("Stop requested. In-flight account finishes, then the run halts.", "success");
+      queryClient.invalidateQueries({ queryKey: ["xai-farm-logs"] });
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
   const openFarmSetup = () => {
     setShowFarmSetup(true);
+    setFarmCountInput(String(farmCount));
     setFarmCheck(null);
     farmCheckMut.mutate();
+  };
+
+  const commitFarmCount = () => {
+    const nextCount = Math.max(1, Math.floor(Number(farmCountInput) || 1));
+    setFarmCount(nextCount);
+    setFarmCountInput(String(nextCount));
   };
 
   return (
@@ -126,7 +154,7 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
         </div>
         <button
           onClick={openFarmSetup}
-          disabled={farmMut.isPending || farmCheckMut.isPending}
+          disabled={farmMut.isPending || farmCheckMut.isPending || isFarmRunning}
           className="flex items-center gap-2 rounded-md bg-orange-500/10 text-orange-500 border border-orange-500/20 px-3 py-1.5 text-xs font-medium hover:bg-orange-500/20 transition-colors disabled:opacity-50"
         >
           {farmCheckMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
@@ -135,7 +163,36 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
         <p className="mt-2 text-xs text-muted-foreground">Check requirements, choose batch size and concurrency, then start farming.</p>
       </div>
 
-      <Modal open={showFarmSetup} onClose={() => setShowFarmSetup(false)} title="Farm Setup" width="max-w-xl">
+      {isFarmRunning && farmStatus.data && (
+        <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
+              <h3 className="text-sm font-medium text-orange-500">Farm in progress</h3>
+            </div>
+            <span className="text-xs text-text-muted">
+              {farmStatus.data.done}/{farmStatus.data.total} done · {farmStatus.data.succeeded} ok · {farmStatus.data.failed} failed
+            </span>
+          </div>
+          <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-border">
+            <div
+              className="h-full rounded-full bg-orange-500 transition-all"
+              style={{ width: `${Math.min(100, Math.round((farmStatus.data.done / Math.max(1, farmStatus.data.total)) * 100))}%` }}
+            />
+          </div>
+          <p className="text-xs text-text-muted">This run was started earlier (or in another tab) and is still running on the server. Follow its progress in the Farm Logs tab.</p>
+          <button
+            onClick={() => farmStopMut.mutate()}
+            disabled={farmStopMut.isPending}
+            className="mt-3 flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive border border-destructive/30 hover:bg-destructive/20 disabled:opacity-50"
+          >
+            {farmStopMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+            Stop farm
+          </button>
+        </div>
+      )}
+
+      <Modal open={showFarmSetup} onClose={() => setShowFarmSetup(false)} title="Farm Setup" wide>
         <div className="space-y-5">
           <div>
             <div className="mb-2 text-sm font-medium">Requirements</div>
@@ -164,21 +221,39 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium">How many accounts?</span>
-              <input type="number" min={1} max={50} value={farmCount} onChange={(e) => setFarmCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" />
+              <input
+                type="text"
+                inputMode="numeric"
+                value={farmCountInput}
+                onChange={(e) => setFarmCountInput(e.target.value.replace(/[^0-9]/g, ""))}
+                onBlur={commitFarmCount}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              />
             </label>
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium">Concurrent workers</span>
-              <input type="number" min={1} max={10} value={farmConcurrency} onChange={(e) => setFarmConcurrency(Math.max(1, Math.min(10, Number(e.target.value) || 1)))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" />
+              <input type="number" min={1} value={farmConcurrency} onChange={(e) => setFarmConcurrency(Math.max(1, Math.floor(Number(e.target.value) || 1)))} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" />
             </label>
           </div>
 
           <div className="flex justify-end gap-2 border-t border-border pt-4">
-            <button onClick={() => setShowFarmSetup(false)} className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">Close</button>
+            <button onClick={() => setShowFarmSetup(false)} className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">Hide setup</button>
             <button onClick={() => farmMut.mutate()} disabled={!farmCheck?.ok || farmMut.isPending} className="flex items-center gap-2 rounded-md bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
               {farmMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {farmMut.isPending ? `Farming ${farmCount} accounts...` : "Start"}
             </button>
           </div>
+          {farmMut.isPending && <p className="text-center text-xs text-muted-foreground">You may hide this setup. The operation continues and its status appears in the Farm Logs tab.</p>}
+          {farmMut.isPending && (
+            <button
+              onClick={() => farmStopMut.mutate()}
+              disabled={farmStopMut.isPending}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive border border-destructive/30 hover:bg-destructive/20 disabled:opacity-50"
+            >
+              {farmStopMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+              Stop farm
+            </button>
+          )}
         </div>
       </Modal>
 

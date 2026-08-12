@@ -66,11 +66,11 @@ export class ProvidersRepo {
     return this.getAccount(id)!;
   }
 
-  updateAccount(accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null; lastWarmupAt: string | null; lastWarmupStatus: string | null; lastWarmupLatencyMs: number | null; lastWarmupDetail: string | null }>): ProviderAccount | null {
+  updateAccount(accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null; rateLimitedUntil: number | null; lastWarmupAt: string | null; lastWarmupStatus: string | null; lastWarmupLatencyMs: number | null; lastWarmupDetail: string | null }>): ProviderAccount | null {
     const cur = this.getAccount(accId);
     if (!cur) return null;
     this.db
-      .query("UPDATE provider_accounts SET label=?, api_key=?, priority=?, enabled=?, notes=?, tags=?, session_cookie=?, last_warmup_at=?, last_warmup_status=?, last_warmup_latency_ms=?, last_warmup_detail=?, updated_at=? WHERE id=?")
+      .query("UPDATE provider_accounts SET label=?, api_key=?, priority=?, enabled=?, notes=?, tags=?, session_cookie=?, rate_limited_until=?, last_warmup_at=?, last_warmup_status=?, last_warmup_latency_ms=?, last_warmup_detail=?, updated_at=? WHERE id=?")
       .run(
         patch.label ?? cur.label,
         patch.apiKey ?? cur.api_key,
@@ -79,6 +79,7 @@ export class ProvidersRepo {
         patch.notes !== undefined ? patch.notes : (cur.notes ?? null),
         patch.tags !== undefined ? patch.tags : (cur.tags ?? null),
         patch.sessionCookie !== undefined ? patch.sessionCookie : (cur.session_cookie ?? null),
+        patch.rateLimitedUntil !== undefined ? patch.rateLimitedUntil : (cur.rate_limited_until ?? null),
         patch.lastWarmupAt !== undefined ? patch.lastWarmupAt : (cur.last_warmup_at ?? null),
         patch.lastWarmupStatus !== undefined ? patch.lastWarmupStatus : (cur.last_warmup_status ?? null),
         patch.lastWarmupLatencyMs !== undefined ? patch.lastWarmupLatencyMs : (cur.last_warmup_latency_ms ?? null),
@@ -91,6 +92,10 @@ export class ProvidersRepo {
 
   removeAccount(accId: string) {
     this.db.query("DELETE FROM provider_accounts WHERE id = ?").run(accId);
+  }
+
+  removeAllAccounts(providerId: string): number {
+    return this.db.query("DELETE FROM provider_accounts WHERE provider_id = ?").run(providerId).changes;
   }
 
   /** Store OAuth token metadata for an account (ChatGPT login). */

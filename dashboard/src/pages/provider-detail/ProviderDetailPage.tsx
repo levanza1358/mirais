@@ -9,7 +9,9 @@ import { AccountsCard } from "./AccountsCard";
 import { BackLink } from "./BackLink";
 import { ModelsCard } from "./ModelsCard";
 import { ProviderModal } from "./ProviderModal";
+import { XaiAccountTestCard } from "./XaiAccountTestCard";
 import { XaiFarmCard } from "./XaiFarmCard";
+import { XaiFarmLogsCard } from "./XaiFarmLogsCard";
 
 export function ProviderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -17,6 +19,7 @@ export function ProviderDetailPage() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [xaiTab, setXaiTab] = useState<"accounts" | "farm-logs" | "account-test">("accounts");
   const [warmupProgress, setWarmupProgress] = useState<{ current: number; total: number } | null>(null);
 
   const list = useQuery({ queryKey: ["providers"], queryFn: providers.list });
@@ -124,8 +127,28 @@ export function ProviderDetailPage() {
           <Button variant="ghost" size="sm" onClick={() => setDeleting(true)} aria-label="Delete provider"><Trash2 size={14} className="text-danger" /></Button>
         </div>
       </div>
-      <AccountsCard provider={provider} />
-      {provider.type === "xai" && <XaiFarmCard provider={provider} />}
+      {provider.type === "xai" ? (
+        <>
+          <div className="flex w-fit rounded-lg border border-border bg-card p-1" role="tablist" aria-label="xAI provider sections">
+            {([
+              ["accounts", "Accounts"],
+              ["farm-logs", "Farm Logs"],
+              ["account-test", "Account Test"],
+            ] as const).map(([tab, label]) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={xaiTab === tab}
+                onClick={() => setXaiTab(tab)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${xaiTab === tab ? "bg-primary text-primary-foreground" : "text-text-muted hover:bg-muted hover:text-text"}`}
+              >{label}</button>
+            ))}
+          </div>
+          {xaiTab === "accounts" && <><AccountsCard provider={provider} /><XaiFarmCard provider={provider} onDone={invalidate} /></>}
+          {xaiTab === "farm-logs" && <XaiFarmLogsCard />}
+          {xaiTab === "account-test" && <XaiAccountTestCard provider={provider} />}
+        </>
+      ) : <AccountsCard provider={provider} />}
       <ModelsCard provider={provider} />
       {editing && <ProviderModal provider={provider} onClose={() => setEditing(false)} />}
       <ConfirmModal open={deleting} onClose={() => setDeleting(false)} onConfirm={() => removeProvider.mutate(provider.id)} title="Delete provider" message={`Delete ${provider.name}? Its accounts and model entries will also be removed. This cannot be undone.`} danger loading={removeProvider.isPending} />

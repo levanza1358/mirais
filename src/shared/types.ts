@@ -158,6 +158,8 @@ export interface ProviderAccount {
   tags?: string | null;
   /** Optional web session cookie for endpoints that reject Bearer auth (e.g. daily check-in). */
   session_cookie?: string | null;
+  /** Epoch ms until which this account is kept out of rotation after a rate limit / quota exhaustion. */
+  rate_limited_until?: number | null;
   last_warmup_at?: string | null;
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;

@@ -5,6 +5,7 @@ import { openaiToAnthropicRequest } from "./translator/anthropic-to-openai";
 import { anthropicToOpenaiResponse } from "./translator/openai-to-anthropic";
 import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/stream";
 import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
+import { aggregateXaiResponsesStream, ensureFreshXaiToken, xaiHeaders, xaiRequestBody, xaiResponsesStreamToChat, xaiResponsesUrl } from "./xai";
 import { metaForModel } from "./modelMeta";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { config } from "../config";
@@ -62,6 +63,19 @@ export function markSuccess(key: string): void {
   cooldowns.delete(key);
 }
 
+/** Clear a persisted rate-limit window after a successful call. */
+function clearAccountRateLimit(repo: ProvidersRepo | undefined, accountId: string): void {
+  if (!repo) return;
+  try {
+    repo.updateAccount(accountId, {
+      rateLimitedUntil: null,
+      lastWarmupStatus: "healthy",
+      lastWarmupDetail: null,
+      lastWarmupAt: new Date().toISOString(),
+    });
+  } catch { /* best-effort — DB may be mid-restart */ }
+}
+
 export function cooldownSnapshot(): Array<{ key: string; until: number; failures: number }> {
   return [...cooldowns.entries()]
     .filter(([, v]) => v.until > Date.now())
@@ -110,17 +124,6 @@ const MAX_ATTEMPTS = 3;
 
 function isCodeBuddyProvider(type: string): boolean {
   return type === "codebuddy-global" || type === "codebuddy-cn";
-}
-
-function xaiHeaders(apiKey: string, accept?: "text/event-stream"): Record<string, string> {
-  return {
-    "content-type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-    "User-Agent": "xai-grok-cli",
-    "x-grok-client-version": "0.2.103",
-    "x-grok-client-identifier": "grok-shell",
-    ...(accept ? { accept } : {}),
-  };
 }
 
 function withRequiredSystemMessage(req: CanonicalRequest): CanonicalRequest {
@@ -189,14 +192,20 @@ export async function executeRequest(
     const cdKey = cooldownKey(candidate, account.id);
 
     try {
-      // OAuth accounts (ChatGPT login) can't call api.openai.com — their
-      // tokens only work against the ChatGPT Codex backend (Responses API).
-      if (isOAuthAccount(account)) {
+      // OAuth accounts require their provider's CLI Responses endpoint; they
+      // cannot call the public OpenAI-compatible endpoint with a bearer token.
+      const isXaiOAuth = candidate.provider.type === "xai" && account.auth_kind === "oauth";
+      if (isOAuthAccount(account) || isXaiOAuth) {
         if (!providersRepo) throw new GatewayError(500, "server_error", "OAuth account requires a providers repo in the executor");
-        const accessToken = await ensureFreshToken(providersRepo, account);
+        const accessToken = isXaiOAuth
+          ? await ensureFreshXaiToken(providersRepo, account)
+          : await ensureFreshToken(providersRepo, account);
         if (req.stream) {
-          const result = await openCodexStream(effectiveReq, candidate, account, accessToken, ctx.signal);
+          const result = isXaiOAuth
+            ? await openXaiStream(effectiveReq, candidate, accessToken, ctx.signal)
+            : await openCodexStream(effectiveReq, candidate, account, accessToken, ctx.signal);
           markSuccess(cdKey);
+          clearAccountRateLimit(providersRepo, account.id);
           attempts.push({
             provider: candidate.provider.name,
             model: candidate.modelId,
@@ -207,8 +216,11 @@ export async function executeRequest(
           });
           return { kind: "stream", stream: result.stream, candidate, accountLabel: account.label, attempts, usagePromise: result.usagePromise };
         }
-        const response = await callCodex(effectiveReq, candidate, account, accessToken, ctx.signal);
+        const response = isXaiOAuth
+          ? await callXai(effectiveReq, candidate, accessToken, ctx.signal)
+          : await callCodex(effectiveReq, candidate, account, accessToken, ctx.signal);
         markSuccess(cdKey);
+        clearAccountRateLimit(providersRepo, account.id);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -224,6 +236,7 @@ export async function executeRequest(
       if (req.stream) {
         const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
         markSuccess(cdKey);
+        clearAccountRateLimit(providersRepo, account.id);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -245,6 +258,7 @@ export async function executeRequest(
 
       const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
       markSuccess(cdKey);
+      clearAccountRateLimit(providersRepo, account.id);
       attempts.push({
         provider: candidate.provider.name,
         model: candidate.modelId,
@@ -281,7 +295,25 @@ export async function executeRequest(
       });
 
       if (retriable) {
-        markCooldown(cdKey, gErr.status === 429 ? retryAfterMsFrom(gErr) : undefined);
+        const quotaExhausted = gErr.status === 429 && /free-usage-exhausted|usage limit has been reached|limit has been reached|quota/i.test(gErr.message);
+        const cooldownMs = quotaExhausted ? 24 * 60 * 60_000 : gErr.status === 429 ? (retryAfterMsFrom(gErr) ?? 60_000) : undefined;
+        // A "quota exhausted" 429 is not a transient rate limit — the account
+        // stays out of rotation until the window resets (up to ~24h). Treating
+        // it as a short cooldown would make the gateway fail over to other
+        // exhausted accounts and force clients into repeated recovery+retry
+        // loops that replay the same answer.
+        markCooldown(cdKey, cooldownMs);
+        if (cooldownMs && providersRepo) {
+          // Persist the rate-limit window so the account is skipped on the next
+          // request (not just in-memory), and recovers to healthy automatically
+          // once the window passes — no warmup required.
+          providersRepo.updateAccount(account.id, {
+            rateLimitedUntil: Date.now() + cooldownMs,
+            lastWarmupStatus: "rate_limited",
+            lastWarmupDetail: gErr.message.slice(0, 300),
+            lastWarmupAt: new Date().toISOString(),
+          });
+        }
         lastError = gErr;
         log.warn("upstream attempt failed, failing over", {
           provider: candidate.provider.name,
@@ -413,7 +445,7 @@ async function openUpstreamStream(
     res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: candidate.provider.type === "xai"
-        ? xaiHeaders(apiKey, "text/event-stream")
+        ? xaiHeaders(apiKey, true)
         : {
           "content-type": "application/json",
           Authorization: `Bearer ${apiKey}`,
@@ -470,38 +502,52 @@ async function openUpstreamStream(
   const parser = new SseParser();
   let usage: Usage | null = null;
   let resolveUsage: (u: Usage | null) => void;
-  const usagePromise = new Promise<Usage | null>((r) => { resolveUsage = r; });
+  let rejectUsage: (reason?: unknown) => void;
+  const usagePromise = new Promise<Usage | null>((resolve, reject) => {
+    resolveUsage = resolve;
+    rejectUsage = reject;
+  });
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = res.body!.getReader();
+      let sentDone = false;
+      const forwardEvents = (events: Array<{ event: string; data: string }>) => {
+        for (const ev of events) {
+          if (ev.data === "[DONE]") {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            sentDone = true;
+            continue;
+          }
+          try {
+            const obj = JSON.parse(ev.data) as Record<string, unknown>;
+            obj.model = req.model;
+            const u = obj.usage as Usage | undefined;
+            if (u) usage = u;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+          } catch {
+            controller.enqueue(encoder.encode(`data: ${ev.data}\n\n`));
+          }
+        }
+      };
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           const text = decoder.decode(value, { stream: true });
-          for (const ev of parser.feed(text)) {
-            if (ev.data === "[DONE]") {
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              continue;
-            }
-            try {
-              const obj = JSON.parse(ev.data) as Record<string, unknown>;
-              obj.model = req.model;
-              const u = obj.usage as Usage | undefined;
-              if (u) usage = u;
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-            } catch {
-              controller.enqueue(encoder.encode(`data: ${ev.data}\n\n`));
-            }
-          }
+          forwardEvents(parser.feed(text));
         }
-      } catch (err) {
-        void err;
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        forwardEvents(parser.feed(decoder.decode()));
+        forwardEvents(parser.finish());
       } finally {
-        resolveUsage!(usage);
-        controller.close();
+        if (sentDone) {
+          resolveUsage!(usage);
+          controller.close();
+        } else {
+          const error = new Error("Upstream SSE stream ended before [DONE]");
+          rejectUsage!(error);
+          controller.error(error);
+        }
       }
     },
     cancel() {
@@ -553,6 +599,44 @@ async function openCodexStream(
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");
   return responsesStreamToChat(res.body, req.model);
+}
+
+async function callXai(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<CanonicalResponse> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const res = await fetch(xaiResponsesUrl(), {
+    method: "POST",
+    headers: xaiHeaders(accessToken, true),
+    body: JSON.stringify(xaiRequestBody(req, candidate.modelId)),
+    signal: combined,
+  });
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Grok returned no stream body");
+  return aggregateXaiResponsesStream(res.body, req.model);
+}
+
+async function openXaiStream(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
+  const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const res = await fetch(xaiResponsesUrl(), {
+    method: "POST",
+    headers: xaiHeaders(accessToken, true),
+    body: JSON.stringify(xaiRequestBody(req, candidate.modelId)),
+    signal: combined,
+  });
+  if (!res.ok) throw await upstreamError(res);
+  if (!res.body) throw new GatewayError(502, "server_error", "Grok returned no stream body");
+  return xaiResponsesStreamToChat(res.body, req.model);
 }
 
 async function upstreamError(res: Response): Promise<GatewayError> {

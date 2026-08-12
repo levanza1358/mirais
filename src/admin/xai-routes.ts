@@ -17,6 +17,15 @@ import {
   type XaiImapSettings,
 } from "./xai-oauth";
 import { checkXaiFarmDependencies, installXaiFarmBrowser } from "../../scripts/xfarm/index";
+import { readXaiFarmLogs, writeXaiFarmLog, clearXaiFarmLogs } from "./xaiFarmLog";
+
+let farmStopRequested = false;
+let farmActiveCount = 0;
+let farmTotal = 0;
+let farmDone = 0;
+let farmSucceeded = 0;
+let farmFailed = 0;
+let farmStartedAt: number | null = null;
 
 interface XaiAccountToken {
   accessToken?: string;
@@ -66,12 +75,22 @@ export function xaiAdminRoutes(db: Database) {
           const existing = accounts.find((a) => a.api_key === tokens.access_token);
           if (existing) {
             providers.updateAccount(existing.id, { apiKey: tokens.access_token, label: emailResult.email ?? existing.label });
+            providers.updateAccountOAuth(existing.id, {
+              authKind: "oauth",
+              refreshToken: tokens.refresh_token,
+              expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
+            });
             return { status: "updated", accountId: existing.id, email: emailResult.email };
           }
 
           const account = providers.addAccount(providerId, {
             label: emailResult.email ?? `xai-${Date.now()}`,
             apiKey: tokens.access_token,
+          });
+          providers.updateAccountOAuth(account.id, {
+            authKind: "oauth",
+            refreshToken: tokens.refresh_token,
+            expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
           });
           if (providers.listModels(providerId).length === 0) {
             for (const model of XAI_MODELS) providers.upsertModel(providerId, model, { displayName: model });
@@ -93,6 +112,13 @@ export function xaiAdminRoutes(db: Database) {
       return checkXaiFarmDependencies(configured);
     })
 
+    .get("/farm/logs", async () => ({ entries: await readXaiFarmLogs() }))
+
+    .post("/farm/logs/clear", async () => {
+      await clearXaiFarmLogs();
+      return { ok: true };
+    })
+
     .post("/farm/install-browser", async () => {
       const result = await installXaiFarmBrowser();
       if (!result.success) throw new AdminError(400, result.error ?? "Camoufox installation failed");
@@ -102,8 +128,8 @@ export function xaiAdminRoutes(db: Database) {
     .post("/farm", async ({ body }) => {
       const input = body as { providerId?: string; count?: number; concurrency?: number };
       const { providerId } = input;
-      const count = Math.max(1, Math.min(50, Number(input.count ?? 1)));
-      const concurrency = Math.max(1, Math.min(10, Number(input.concurrency ?? 1)));
+      const count = Math.max(1, Math.floor(Number(input.count ?? 1)));
+      const concurrency = Math.max(1, Math.floor(Number(input.concurrency ?? 1)));
       if (!providerId || typeof providerId !== "string") throw new AdminError(400, "providerId is required");
 
       const provider = providers.get(providerId);
@@ -119,14 +145,44 @@ export function xaiAdminRoutes(db: Database) {
       const deps = await checkXaiFarmDependencies(true);
       if (!deps.ok) throw new AdminError(400, `Missing dependencies: ${deps.checks.filter((c) => !c.ok).map((c) => c.label).join(", ")}`);
 
+      farmStopRequested = false;
+      farmActiveCount = count;
+      farmTotal = count;
+      farmDone = 0;
+      farmSucceeded = 0;
+      farmFailed = 0;
+      farmStartedAt = Date.now();
       const runOne = async (): Promise<{ email: string; accountId: string }> => {
+        if (farmStopRequested) throw new Error("stopped");
+        await writeXaiFarmLog({ level: "info", message: "Starting account operation" });
         const result = (await farmXaiAccount(imapSettings)) as XaiAccountToken;
-        if (!result.success) throw new Error(result.error ?? "Farm failed");
-        if (!result.accessToken) throw new Error("Farm completed but no access token returned");
+        farmDone += 1;
+        if (farmStopRequested) {
+          await writeXaiFarmLog({ level: "info", message: "Account operation stopped", email: result.email });
+          farmFailed += 1;
+          throw new Error("stopped");
+        }
+        if (!result.success) {
+          await writeXaiFarmLog({ level: "error", message: result.error ?? "Account operation failed", email: result.email });
+          farmFailed += 1;
+          throw new Error(result.error ?? "Farm failed");
+        }
+        if (!result.accessToken) {
+          await writeXaiFarmLog({ level: "error", message: "Operation completed without an access token", email: result.email });
+          farmFailed += 1;
+          throw new Error("Farm completed but no access token returned");
+        }
         const account = providers.addAccount(providerId, {
           label: result.email ?? `xai-farm-${Date.now()}`,
           apiKey: result.accessToken,
         });
+        providers.updateAccountOAuth(account.id, {
+          authKind: "oauth",
+          refreshToken: result.refreshToken,
+          expiresAt: result.expiresIn ? Date.now() + result.expiresIn * 1000 : null,
+        });
+        await writeXaiFarmLog({ level: "success", message: "Account saved to provider", email: result.email });
+        farmSucceeded += 1;
         return { email: result.email ?? "unknown", accountId: account.id };
       };
 
@@ -134,16 +190,21 @@ export function xaiAdminRoutes(db: Database) {
       const errors: string[] = [];
       let next = 0;
       const worker = async () => {
-        while (next < count) {
+        while (next < count && !farmStopRequested) {
           next += 1;
           try {
             accounts.push(await runOne());
           } catch (error) {
-            errors.push(error instanceof Error ? error.message : String(error));
+            if ((error instanceof Error ? error.message : String(error)) !== "stopped") {
+              errors.push(error instanceof Error ? error.message : String(error));
+            }
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(concurrency, count) }, () => worker()));
+      farmActiveCount = 0;
+      farmStopRequested = false;
+      farmStartedAt = null;
 
       if (providers.listModels(providerId).length === 0) {
         for (const model of XAI_MODELS) providers.upsertModel(providerId, model, { displayName: model });
@@ -151,6 +212,24 @@ export function xaiAdminRoutes(db: Database) {
 
       return { ok: errors.length === 0, requested: count, concurrency, succeeded: accounts.length, failed: errors.length, accounts, errors };
     })
+
+    .post("/farm/stop", async () => {
+      farmStopRequested = true;
+      await writeXaiFarmLog({ level: "info", message: "Stop requested — finishing the in-flight account, then halting" });
+      return { ok: true, active: farmActiveCount };
+    })
+
+    .get("/farm/status", async () => ({
+      active: farmActiveCount,
+      stopRequested: farmStopRequested,
+      total: farmTotal,
+      done: farmDone,
+      succeeded: farmSucceeded,
+      failed: farmFailed,
+      running: farmActiveCount > 0 && !farmStopRequested,
+      stopped: farmActiveCount > 0 && farmStopRequested,
+      startedAt: farmStartedAt,
+    }))
 
     .post("/refresh", async () => {
       throw new AdminError(501, "Token refresh not yet implemented — re-authenticate via device flow");

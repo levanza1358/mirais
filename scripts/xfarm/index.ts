@@ -71,6 +71,10 @@ export async function runXaiFarm(options: XaiFarmOptions = {}): Promise<XaiFarmR
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, ...(options.debug ? { XAI_FARM_DEBUG: "1" } : {}) },
       timeout: options.timeout ?? 300_000,
+      // On Windows, spawn() defaults to opening a console window for the
+      // child process. Farm runs are spawned from the dashboard server — hide
+      // the child console so a Python window doesn't pop up on the desktop.
+      windowsHide: true,
     });
 
     let stderr = "";
@@ -108,7 +112,7 @@ export async function runXaiFarm(options: XaiFarmOptions = {}): Promise<XaiFarmR
 
 function runCommand(command: string, args: string[], timeoutMs: number): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
-    const proc = spawn(command, args, { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const proc = spawn(command, args, { cwd: __dirname, stdio: ["ignore", "pipe", "pipe"], env: process.env, windowsHide: true });
     let output = "";
     proc.stdout.on("data", (chunk) => { output += chunk.toString(); });
     proc.stderr.on("data", (chunk) => { output += chunk.toString(); });

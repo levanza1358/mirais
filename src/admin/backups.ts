@@ -3,11 +3,10 @@ import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { Database as SqliteDatabase } from "bun:sqlite";
+import { Database as SqliteDatabase, type SQLQueryBindings } from "bun:sqlite";
 import { config } from "../config";
 import { log } from "../utils/logger";
 import { closeDb } from "../store/db";
-
 const BACKUP_PREFIX = "mirais-";
 const BACKUP_SUFFIX = ".db";
 
@@ -90,6 +89,67 @@ function resolveBackup(id: string): string {
   return full;
 }
 
+/** Natural key per table, used to deduplicate rows during a merge restore. */
+const TABLE_KEYS: Record<string, string[]> = {
+  providers: ["name"],
+  provider_accounts: ["api_key", "provider_id"],
+  provider_models: ["provider_id", "model_id"],
+  aliases: ["alias"],
+  combos: ["name"],
+  combo_entries: ["combo_id", "position"],
+  gateway_keys: ["key_hash"],
+  settings: ["key"],
+};
+
+/** Merge the backup DB into the live DB, deduplicating by natural key. */
+function mergeBackup(srcPath: string, live: SqliteDatabase): { added: Record<string, number>; skipped: Record<string, number> } {
+  const src = new SqliteDatabase(srcPath, { readonly: true });
+  const added: Record<string, number> = {};
+  const skipped: Record<string, number> = {};
+  try {
+    for (const table of Object.keys(TABLE_KEYS)) {
+      const exists = live.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+      if (!exists) continue;
+      const srcExists = src.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+      if (!srcExists) continue;
+
+      const cols = (live.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name);
+      const srcCols = (src.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name);
+      const common = cols.filter((c) => srcCols.includes(c));
+      if (!common.length) continue;
+      const colList = common.map((c) => `"${c}"`).join(", ");
+      const keys = TABLE_KEYS[table]!.filter((k) => common.includes(k));
+
+      const rows = src.query(`SELECT ${colList} FROM "${table}"`).all() as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        if (keys.length) {
+          const where = keys.map((k) => `"${k}" = ?`).join(" AND ");
+          const params = keys.map((k) => row[k]);
+          const existing = live.query(`SELECT 1 FROM "${table}" WHERE ${where}`).get(...(params as SQLQueryBindings[]));
+          if (existing) {
+            skipped[table] = (skipped[table] ?? 0) + 1;
+            continue;
+          }
+        } else {
+          // No natural key — skip rows whose primary key already exists.
+          const id = row["id"];
+          if (id != null && live.query(`SELECT 1 FROM "${table}" WHERE id = ?`).get(id as SQLQueryBindings)) {
+            skipped[table] = (skipped[table] ?? 0) + 1;
+            continue;
+          }
+        }
+        const placeholders = common.map(() => "?").join(", ");
+        const values = common.map((c) => (row[c] ?? null) as SQLQueryBindings);
+        live.query(`INSERT INTO "${table}" (${colList}) VALUES (${placeholders})`).run(...values);
+        added[table] = (added[table] ?? 0) + 1;
+      }
+    }
+  } finally {
+    src.close();
+  }
+  return { added, skipped };
+}
+
 export function backupRoutes(_db: Database) {
   return new Elysia({ prefix: "/api/backups" })
     .get("/", () => ({ backups: listBackups() }))
@@ -145,7 +205,7 @@ export function backupRoutes(_db: Database) {
         created_at: stat.mtime.toISOString(),
       } satisfies BackupEntry;
     })
-    .post("/:id/restore", ({ params, set }) => {
+    .post("/:id/restore", async ({ params, body, set }) => {
       try {
         const src = resolveBackup(params.id);
         const stat = fs.statSync(src);
@@ -153,6 +213,8 @@ export function backupRoutes(_db: Database) {
           set.status = 400;
           return { error: "Backup file is too small to be a database" };
         }
+        const mode = (body as { mode?: string } | undefined)?.mode === "merge" ? "merge" : "overwrite";
+
         // Close the active DB handle so the file can be replaced on
         // Windows (open files cannot be overwritten).
         try { closeDb(); } catch { /* ignore — best effort */ }
@@ -161,6 +223,22 @@ export function backupRoutes(_db: Database) {
         try {
           fs.copyFileSync(config.dbPath, fallback);
         } catch { /* first run might fail; continue anyway */ }
+
+        if (mode === "merge") {
+          // Merge into a copy of the live DB so the running server's data is
+          // preserved and only missing rows are added.
+          const live = new SqliteDatabase(config.dbPath);
+          try {
+            live.exec("PRAGMA foreign_keys = ON;");
+            live.exec("PRAGMA busy_timeout = 5000;");
+            const result = mergeBackup(src, live);
+            log.warn("backup merged", { id: params.id, ...result });
+            return { ok: true, mode: "merge", added: result.added, skipped: result.skipped };
+          } finally {
+            live.close();
+          }
+        }
+
         fs.copyFileSync(src, config.dbPath);
         log.warn("backup restored; restarting server", { id: params.id, fallback });
         // The dashboard may be running without the CLI supervisor. Start a
@@ -182,7 +260,7 @@ export function backupRoutes(_db: Database) {
             process.exit(0);
           }
         }, 150);
-        return { ok: true, restarting: true, fallback: path.basename(fallback) };
+        return { ok: true, mode: "overwrite", restarting: true, fallback: path.basename(fallback) };
       } catch (err) {
         set.status = 404;
         return { error: err instanceof Error ? err.message : "Restore failed" };

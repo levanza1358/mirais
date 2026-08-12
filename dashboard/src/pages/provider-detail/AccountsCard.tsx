@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Gauge, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Gauge, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { type Provider, type ProviderAccount, providers } from "../../api";
-import { Badge, Button, Card, ConfirmModal, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
+import { Badge, Button, Card, ConfirmModal, Modal, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
 import { AccountMetaModal } from "./AccountMetaModal";
 import { AddAccountModal } from "./AddAccountModal";
 import { CodexQuotaModal, InlineCodexQuota, quotaTitle } from "./quota";
@@ -12,6 +12,8 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ProviderAccount | null>(null);
+  const [removingAll, setRemovingAll] = useState(false);
+  const [bulkDelete, setBulkDelete] = useState<{ total: number; removed: number; failed: number; running: boolean } | null>(null);
   const [quotaFor, setQuotaFor] = useState<ProviderAccount | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_ACCOUNTS_PER_PAGE);
@@ -39,6 +41,35 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       toast("Account removed");
     },
     onError: (error: Error) => toast(error.message, "error"),
+  });
+
+  const removeAllAccounts = useMutation({
+    mutationFn: async (accountIds: string[]) => {
+      let removed = 0;
+      let failed = 0;
+      setBulkDelete({ total: accountIds.length, removed, failed, running: true });
+      for (const accountId of accountIds) {
+        try {
+          await providers.removeAccount(accountId);
+          removed += 1;
+        } catch {
+          failed += 1;
+        }
+        setBulkDelete({ total: accountIds.length, removed, failed, running: true });
+      }
+      return { removed, failed };
+    },
+    onSuccess: ({ removed, failed }) => {
+      invalidate();
+      setRemovingAll(false);
+      setPage(1);
+      setBulkDelete((current) => current ? { ...current, running: false } : current);
+      toast(failed ? `${removed} removed; ${failed} failed` : `${removed} account${removed === 1 ? "" : "s"} removed`, failed ? "error" : "success");
+    },
+    onError: (error: Error) => {
+      setBulkDelete((current) => current ? { ...current, running: false } : current);
+      toast(error.message, "error");
+    },
   });
 
   const updateMeta = useMutation({
@@ -96,7 +127,10 @@ export function AccountsCard({ provider }: { provider: Provider }) {
               {ACCOUNT_PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
           </div>
-          <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add account</Button>
+          <div className="flex items-center gap-2">
+            {accounts.length > 0 && <Button variant="ghost" size="sm" onClick={() => setRemovingAll(true)} aria-label={`Remove all ${accounts.length} accounts`}><Trash2 size={14} className="text-danger" /> Delete all</Button>}
+            <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add account</Button>
+          </div>
         </div>
       </div>
 
@@ -181,6 +215,24 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       {editingMeta && <AccountMetaModal account={editingMeta} loading={updateMeta.isPending} onClose={() => setEditingMeta(null)} onSave={(notes, tags, sessionCookie) => updateMeta.mutate({ accountId: editingMeta.id, notes, tags, sessionCookie })} />}
 
       <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => removing && removeAccount.mutate(removing.id)} title="Remove account" message={`Remove account "${removing?.label}" from ${provider.name}? Requests will no longer use this key.`} danger loading={removeAccount.isPending} />
+      <ConfirmModal open={removingAll} onClose={() => setRemovingAll(false)} onConfirm={() => removeAllAccounts.mutate(accounts.map((account) => account.id))} title="Remove all accounts" message={`Remove all ${accounts.length} accounts from ${provider.name}? This cannot be undone and requests will no longer use this provider.`} danger loading={removeAllAccounts.isPending} />
+      <Modal open={!!bulkDelete} onClose={() => { if (!bulkDelete?.running) setBulkDelete(null); }} title="Deleting accounts">
+        {bulkDelete && (() => {
+          const complete = bulkDelete.removed + bulkDelete.failed;
+          const percent = bulkDelete.total ? Math.round((complete / bulkDelete.total) * 100) : 100;
+          return <div className="space-y-4">
+            <div className="flex items-center gap-2 text-sm text-text-muted">
+              {bulkDelete.running && <Loader2 size={16} className="animate-spin text-danger" />}
+              <span>{bulkDelete.running ? "Removing accounts…" : "Deletion complete"}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-bg-raised" role="progressbar" aria-valuemin={0} aria-valuemax={bulkDelete.total} aria-valuenow={complete} aria-label="Accounts deletion progress">
+              <div className="h-full rounded-full bg-danger transition-[width] duration-200" style={{ width: `${percent}%` }} />
+            </div>
+            <p className="text-sm text-text-primary"><span className="font-semibold">{bulkDelete.removed}</span> of {bulkDelete.total} deleted{bulkDelete.failed ? ` · ${bulkDelete.failed} failed` : ""}</p>
+            {!bulkDelete.running && <div className="flex justify-end"><Button onClick={() => setBulkDelete(null)}>Done</Button></div>}
+          </div>;
+        })()}
+      </Modal>
     </Card>
   );
 }

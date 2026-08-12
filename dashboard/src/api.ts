@@ -60,6 +60,7 @@ export interface ProviderAccount {
   notes?: string | null;
   tags?: string | null;
   session_cookie?: string | null;
+  rate_limited_until?: number | null;
   last_warmup_at?: string | null;
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;
@@ -224,6 +225,7 @@ export const providers = {
     req<ProviderAccount>(`/api/providers/${id}/accounts`, { method: "POST", body: JSON.stringify(input) }),
   addAccountsBulk: (id: string, apiKeys: string[], labelPrefix?: string) =>
     req<{ added: number; skipped: number }>(`/api/providers/${id}/accounts/bulk`, { method: "POST", body: JSON.stringify({ apiKeys, labelPrefix }) }),
+  removeAllAccounts: (id: string) => req<{ ok: boolean; removed: number }>(`/api/providers/${id}/accounts`, { method: "DELETE" }),
   accountUsage: (id: string) =>
     req<Array<{ account: string; requests_today: number; tokens_today: number; requests_total: number; tokens_total: number }>>(
       `/api/providers/${id}/accounts/usage`),
@@ -273,6 +275,9 @@ export const providers = {
         required: boolean;
       }>;
     }>("/api/xai/farm/check"),
+  xaiFarmLogs: () =>
+    req<{ entries: Array<{ ts: string; level: "info" | "success" | "error"; message: string; email?: string }> }>("/api/xai/farm/logs"),
+  xaiFarmLogsClear: () => req<{ ok: boolean }>("/api/xai/farm/logs/clear", { method: "POST" }),
   xaiFarmInstallBrowser: () =>
     req<{ success: boolean }>("/api/xai/farm/install-browser", { method: "POST" }),
   xaiFarm: (providerId: string, count = 1, concurrency = 1) =>
@@ -288,6 +293,19 @@ export const providers = {
       method: "POST",
       body: JSON.stringify({ providerId, count, concurrency }),
     }),
+  xaiFarmStop: () => req<{ ok: boolean; active: number }>("/api/xai/farm/stop", { method: "POST" }),
+  xaiFarmStatus: () =>
+    req<{
+      active: number;
+      stopRequested: boolean;
+      total: number;
+      done: number;
+      succeeded: number;
+      failed: number;
+      running: boolean;
+      stopped: boolean;
+      startedAt: number | null;
+    }>("/api/xai/farm/status"),
   xaiModels: (accountId: number) =>
     req<{ models: string[] }>(`/api/xai/models?accountId=${accountId}`),
 };
@@ -363,7 +381,11 @@ export const backups = {
     }
     return (await res.json()) as BackupEntry;
   },
-  restore: (id: string) => req<{ ok: boolean; restarting?: boolean; fallback?: string }>(`/api/backups/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+  restore: (id: string, mode: "merge" | "overwrite") =>
+    req<{ ok: boolean; restarting?: boolean; fallback?: string; mode?: string; added?: Record<string, number>; skipped?: Record<string, number> }>(
+      `/api/backups/${encodeURIComponent(id)}/restore`,
+      { method: "POST", body: JSON.stringify({ mode }) },
+    ),
 };
 
 // ── stats / logs / settings ──

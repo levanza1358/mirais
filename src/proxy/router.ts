@@ -174,6 +174,20 @@ export class Router {
     }
 
     for (const account of accounts) {
+      const until = account.rate_limited_until;
+      if (until != null && until > Date.now()) {
+        // Still inside the persisted rate-limit window — keep it out of
+        // rotation entirely so only healthy accounts get traffic.
+        continue;
+      }
+      if (until != null && until <= Date.now()) {
+        // Window passed — recover automatically without a warmup ping.
+        this.providers.updateAccount(account.id, {
+          rateLimitedUntil: null,
+          lastWarmupStatus: "healthy",
+          lastWarmupDetail: null,
+        });
+      }
       if (account.last_warmup_status === "healthy") healthy.push(account);
       else if (!account.last_warmup_status) unknown.push(account);
       else degraded.push(account);
