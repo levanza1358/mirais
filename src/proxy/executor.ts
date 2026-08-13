@@ -4,7 +4,7 @@ import { baseUrlFor, upstreamFormat } from "./router";
 import { openaiToAnthropicRequest } from "./translator/anthropic-to-openai";
 import { anthropicToOpenaiResponse } from "./translator/openai-to-anthropic";
 import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/stream";
-import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
+import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
 import { aggregateXaiChatCompletionsStream, aggregateXaiResponsesStream, ensureFreshXaiToken, fetchXaiChatCompletions, fetchXaiResponses, supportsReasoningEffort, xaiChatCompletionsBody, xaiChatCompletionsStreamToChat, xaiHeaders, xaiRequestBody, xaiRequestContext, xaiResponsesStreamToChat } from "./xai";
 import { metaForModel } from "./modelMeta";
 import type { ProvidersRepo } from "../store/repos/providers";
@@ -186,9 +186,27 @@ export async function executeRequest(
     throw new GatewayError(503, "server_error", "No healthy accounts are available. Run account warmup and try again.");
   }
 
-  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, orderedPlan.length);
+  // A paid Codex model must never be sent through a Free or unclassified
+  // ChatGPT OAuth account. Plan tiers are refreshed during warmup/quota
+  // checks; fail closed until known instead of attempting Free first.
+  const paidRequirements = candidates
+    .map((candidate) => codexPlanRequirement(candidate.modelId))
+    .filter((requirement): requirement is "plus" | "pro" => requirement !== null);
+  const planEligible = !paidRequirements.length
+    ? orderedPlan
+    : orderedPlan.filter(({ candidate, account }) =>
+      account.auth_kind !== "oauth"
+      || candidate.provider.type !== "openai"
+      || codexPlanAllowsModel(account.plan_type, candidate.modelId),
+    );
+  if (!planEligible.length) {
+    const label = paidRequirements.includes("pro") ? "ChatGPT Pro" : "ChatGPT Plus or Pro";
+    throw new GatewayError(503, "server_error", `${req.model} requires an eligible ${label} Codex account. Run account warmup to refresh account plan tiers.`);
+  }
+
+  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, planEligible.length);
   for (let attemptNo = 0; attemptNo < maxAttempts; attemptNo++) {
-    const { candidate, account } = orderedPlan[attemptNo]!;
+    const { candidate, account } = planEligible[attemptNo]!;
     const effectiveReq = clampMaxTokens(req, candidate, providersRepo);
     const started = Date.now();
     const format = upstreamFormat(candidate.provider);

@@ -63,6 +63,7 @@ async function runAutoWarmups() {
         let ok = false;
         let status = 0;
         let detail: string | null = null;
+        let planType: string | null | undefined;
         try {
           if (isCodeBuddyProviderType(p.type)) {
             // CodeBuddy has no /models endpoint — warmup via chat completions
@@ -111,6 +112,7 @@ async function runAutoWarmups() {
           } else if (isOAuthAccount(acc)) {
             const accessToken = await ensureFreshToken(providersRepo, acc as never);
             const usage = await fetchCodexUsage(acc as never, accessToken);
+            planType = usage.plan_type;
             if (isCodexQuotaExhausted(usage)) {
               ok = false;
               status = 429;
@@ -137,6 +139,7 @@ async function runAutoWarmups() {
         }
 
         providersRepo.updateAccount(acc.id, {
+          ...(planType !== undefined ? { planType } : {}),
           lastWarmupAt: new Date().toISOString(),
           lastWarmupStatus: classifyWarmupStatus(ok, status, detail),
           lastWarmupLatencyMs: Date.now() - started,

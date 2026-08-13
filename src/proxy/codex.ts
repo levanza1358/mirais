@@ -231,6 +231,25 @@ export interface CodexUsageSnapshot {
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
 }
 
+type CodexPlanRequirement = "plus" | "pro" | null;
+
+/** Minimum ChatGPT plan needed by Codex-only models with paid access gates. */
+export function codexPlanRequirement(modelId: string): CodexPlanRequirement {
+  const id = modelId.toLowerCase();
+  if (/^gpt-5\.3-codex-spark(?:$|-)/.test(id)) return "pro";
+  if (/^gpt-5\.6-sol(?:$|-)/.test(id)) return "plus";
+  return null;
+}
+
+/** Whether a persisted ChatGPT plan satisfies a Codex model's access gate. */
+export function codexPlanAllowsModel(planType: string | null | undefined, modelId: string): boolean {
+  const requirement = codexPlanRequirement(modelId);
+  if (!requirement) return true;
+  const plan = planType?.trim().toLowerCase() ?? "";
+  if (requirement === "plus") return /plus|pro|business|team|enterprise|edu/.test(plan);
+  return /pro|business|team|enterprise|edu/.test(plan);
+}
+
 export interface CodexResetResult {
   ok: boolean;
   message: string;

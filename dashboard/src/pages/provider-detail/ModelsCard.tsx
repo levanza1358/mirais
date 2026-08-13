@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
+import { CheckCircle2, Crown, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
 import { type Provider, providers } from "../../api";
 import { Button, Card, ConfirmModal, Modal, toast } from "../../components/ui";
 // Labels show the full model id (no alias shortening).
@@ -26,6 +26,17 @@ const CAP_STYLE: Record<string, { label: string; className: string }> = {
   tools: { label: "Tools", className: "border-border text-text-muted" },
   json: { label: "JSON", className: "border-border text-text-muted" },
 };
+
+type CodexPlanRequirement = "Plus / Pro" | "Pro";
+
+/** Informational minimum ChatGPT subscription tiers for Codex-only models. */
+function codexPlanRequirement(provider: Provider, modelId: string): CodexPlanRequirement | null {
+  if (provider.type !== "openai") return null;
+  const id = modelId.toLowerCase();
+  if (/^gpt-5\.3-codex-spark(?:$|-)/.test(id)) return "Pro";
+  if (/^gpt-5\.6-sol(?:$|-)/.test(id)) return "Plus / Pro";
+  return null;
+}
 
 export function ModelsCard({ provider: p }: { provider: Provider }) {
   const qc = useQueryClient();
@@ -165,10 +176,12 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
             const r = results[m.model_id];
             const modelLabel = m.model_id;
             const caps = parseCaps(m.capabilities);
+            const planRequirement = codexPlanRequirement(p, m.model_id);
             const meta: string[] = [];
             if (m.context_length) meta.push(`Context: ${m.context_length.toLocaleString()} tokens`);
             if (m.max_output_tokens) meta.push(`Max output: ${m.max_output_tokens.toLocaleString()} tokens`);
             if (caps.length) meta.push(`Supports: ${caps.join(", ")}`);
+            if (planRequirement) meta.push(`ChatGPT plan: ${planRequirement} required`);
             const testLine = r?.testing ? "Testing…" : r ? (r.ok ? `${r.preview_text ?? `Test: OK · ${r.latency_ms}ms`}` : `Test failed: ${r.detail ?? "error"}`) : null;
             const tip = [modelLabel, m.model_id !== modelLabel ? m.model_id : null, ...meta, testLine].filter(Boolean).join("\n");
             return (
@@ -180,6 +193,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
                   const style = CAP_STYLE[c] ?? { label: c, className: "border-border text-text-muted" };
                   return <span key={c} className={`rounded border px-1 text-[9px] leading-3 ${style.className}`}>{style.label}</span>;
                 })}
+                {planRequirement && <span className="inline-flex items-center gap-0.5 rounded border border-warning/40 px-1 text-[9px] leading-3 text-warning" title={`Requires a ChatGPT ${planRequirement} subscription for Codex access`}><Crown size={9} /> {planRequirement}</span>}
                 {r && !r.testing && <span className={r.ok ? "text-success/80" : "text-danger/80"}>{r.ok ? `${r.latency_ms}ms` : "✗"}</span>}
                 <button onClick={() => testOne(m.model_id)} disabled={r?.testing || testingAll} className="text-text-muted/40 hover:text-accent disabled:opacity-40" aria-label={`Test ${m.model_id}`} title="Test this model"><Zap size={11} /></button>
                 <button onClick={() => removeModel.mutate(m.model_id)} className="text-text-muted/40 hover:text-danger" aria-label={`Remove ${m.model_id}`}><Trash2 size={11} /></button>

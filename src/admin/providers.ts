@@ -7,7 +7,7 @@ import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accoun
 import type { z } from "zod";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
-import { codexHeaders, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
+import { codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
 import { ensureFreshXaiToken, xaiHeaders } from "../proxy/xai";
 import { fetchXaiUsage } from "../proxy/xai-usage";
 import { checkCodexProviderQuota, fetchCodexProviderModels, testCodexProviderModel } from "./codex-provider";
@@ -133,6 +133,7 @@ export function providerRoutes(db: Database) {
     const acc = account!;
     const started = Date.now();
     let result: { account_id: string; account: string; ok: boolean; status: number; latency_ms: number; detail?: string };
+    let planType: string | null | undefined;
     try {
       if (isCodeBuddyProviderType(provider.type)) {
         const res = await requestCodeBuddyChat(
@@ -185,6 +186,7 @@ export function providerRoutes(db: Database) {
         }
       } else if (isOAuthAccount(acc)) {
         const { usage, exhausted: quotaExhausted } = await checkCodexProviderQuota(repo, acc);
+        planType = usage.plan_type;
         result = {
           account_id: acc.id,
           ok: !quotaExhausted,
@@ -223,6 +225,7 @@ export function providerRoutes(db: Database) {
 
     const warmupStatus = result.ok ? "healthy" : (result.status === 429 || isRateLimitDetail(result.detail) ? "rate_limited" : "failing");
     repo.updateAccount(acc.id, {
+      ...(planType !== undefined ? { planType } : {}),
       lastWarmupAt: new Date().toISOString(),
       lastWarmupStatus: warmupStatus,
       lastWarmupLatencyMs: result.latency_ms,
@@ -587,6 +590,14 @@ export function providerRoutes(db: Database) {
         return aScore - bScore;
       });
       const modelId = decodeURIComponent(params.modelId);
+      const paidCodexModel = p.type === "openai" && codexPlanRequirement(modelId) !== null;
+      const eligibleAccounts = paidCodexModel
+        ? accounts.filter((account) => !isOAuthAccount(account) || codexPlanAllowsModel(account.plan_type, modelId))
+        : accounts;
+      if (!eligibleAccounts.length) {
+        const label = codexPlanRequirement(modelId) === "pro" ? "ChatGPT Pro" : "ChatGPT Plus or Pro";
+        throw new AdminError(503, `${modelId} requires an eligible ${label} Codex account. Run account warmup to refresh account plan tiers.`);
+      }
       const started = Date.now();
       const testPrompt = "Reply in one short sentence: say hi, state your model name, and mention your knowledge cutoff date if known.";
       const writeTestLog = (result: { ok: boolean; status: number; latency_ms: number; detail?: string; preview_text?: string }) => {
@@ -613,15 +624,15 @@ export function providerRoutes(db: Database) {
       };
       try {
         let res: Response | null = null;
-        let usedAccount = accounts[0]!;
+        let usedAccount = eligibleAccounts[0]!;
         let preview_text: string | undefined;
-        if (p.type === "xai" && accounts[0]!.auth_kind === "oauth") {
+        if (p.type === "xai" && eligibleAccounts[0]!.auth_kind === "oauth") {
           const xaiResult = await testXaiModel(repo, usedAccount, modelId, testPrompt);
           res = xaiResult.response;
           preview_text = xaiResult.previewText;
-        } else if (isOAuthAccount(accounts[0]!)) {
+        } else if (isOAuthAccount(eligibleAccounts[0]!)) {
           let lastRateLimited: { res: Response; account: typeof usedAccount } | null = null;
-          for (const account of accounts) {
+          for (const account of eligibleAccounts) {
             usedAccount = account;
             const accessToken = await ensureFreshToken(repo, account);
             res = await fetch(codexUrl("/responses"), {

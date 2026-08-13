@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { codexQuotaDetail, isCodexQuotaExhausted, type CodexUsageSnapshot } from "../src/proxy/codex";
+import { codexPlanAllowsModel, codexQuotaDetail, isCodexQuotaExhausted, type CodexUsageSnapshot } from "../src/proxy/codex";
 
 function usage(overrides: Partial<CodexUsageSnapshot> = {}): CodexUsageSnapshot {
   return {
@@ -38,5 +38,19 @@ describe("Codex quota exhaustion", () => {
     expect(isCodexQuotaExhausted(usage({
       primary: { used_percent: 99.9, remaining_percent: 0.1, window_seconds: null, resets_in_seconds: null, reset_at: null },
     }))).toBe(false);
+  });
+});
+
+describe("Codex paid model plans", () => {
+  test("never permits free or unknown accounts for Plus/Pro-gated models", () => {
+    expect(codexPlanAllowsModel(null, "gpt-5.6-sol")).toBe(false);
+    expect(codexPlanAllowsModel("free", "gpt-5.6-sol")).toBe(false);
+    expect(codexPlanAllowsModel("free", "gpt-5.3-codex-spark")).toBe(false);
+  });
+
+  test("allows Plus for Sol but requires Pro for Codex Spark", () => {
+    expect(codexPlanAllowsModel("plus", "gpt-5.6-sol")).toBe(true);
+    expect(codexPlanAllowsModel("plus", "gpt-5.3-codex-spark")).toBe(false);
+    expect(codexPlanAllowsModel("pro", "gpt-5.3-codex-spark")).toBe(true);
   });
 });

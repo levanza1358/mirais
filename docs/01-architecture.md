@@ -135,6 +135,7 @@ Accounts added via **ChatGPT login** (`auth_kind = 'oauth'`) cannot call `api.op
 - **Response translation** — Responses API SSE (`response.output_text.delta`, `response.output_item.added`, `response.function_call_arguments.delta`, `response.completed`) → OpenAI `chat.completion.chunk` stream, or a single aggregated chat completion.
 - **Headers** — `Authorization: Bearer <access_token>` + `chatgpt-account-id: <account_id>` + `originator: codex_cli_rs`.
 - **Model catalog** — synced from `GET {codex}/models?client_version=1.0.0` (the same version-gated catalog the Codex CLI uses), with a static fallback list.
+- **Paid-plan routing** — warmup and quota checks persist the Codex usage `plan_type` on each OAuth account. Models marked as requiring Plus/Pro are eligible only for an account with a matching persisted paid tier; Free and unknown tiers are excluded (fail closed) and are never attempted as fallback.
 
 ## 4.3 Model Metadata & Output Limits
 

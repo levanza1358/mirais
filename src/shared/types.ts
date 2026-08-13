@@ -152,6 +152,8 @@ export interface ProviderAccount {
   id_token?: string | null;
   /** ChatGPT account id, sent as the chatgpt-account-id header on Codex backend calls. */
   account_id?: string | null;
+  /** ChatGPT subscription tier returned by the Codex usage endpoint. */
+  plan_type?: string | null;
   /** Epoch ms when the OAuth access token expires. */
   expires_at?: number | null;
   notes?: string | null;

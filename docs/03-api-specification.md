@@ -77,6 +77,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | 429 | Key rate/concurrency/token-budget exceeded, or all upstreams rate-limited |
 | 400 | Bad request payload (validated with zod) |
 | 502 | All upstream candidates failed |
+| 503 | No healthy account is available, or a Plus/Pro-gated Codex model has no eligible paid ChatGPT account |
 
 ---
 
