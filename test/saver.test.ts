@@ -136,4 +136,33 @@ describe("applyTokenSaver", () => {
     expect(result.text).toContain("repeated build lines omitted");
     expect(result.text.length).toBeLessThan(repeated.length);
   });
+
+  test("does NOT compact read_file (content tool) output, even when stale", () => {
+    // A read_file result is the file content the model needs to retain. If it is
+    // truncated/compacted, the model loses it and loops re-reading the same file.
+    const fileContent = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n");
+    const request: CanonicalRequest = {
+      model: "m",
+      messages: [
+        { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "c1", content: fileContent },
+      ],
+    };
+    const result = applyTokenSaver(request, { enabled: true, rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 50, deduplicateToolOutputs: true, keepRecentToolResults: 0 } });
+    expect(result.request.messages[1]!.content).toBe(fileContent);
+    expect(result.tokensSaved).toBe(0);
+  });
+
+  test("still compacts command tool output", () => {
+    const long = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n");
+    const request: CanonicalRequest = {
+      model: "m",
+      messages: [
+        { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "bash", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "c1", content: long },
+      ],
+    };
+    const result = applyTokenSaver(request, { enabled: true, rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 50, deduplicateToolOutputs: true, keepRecentToolResults: 0 } });
+    expect(result.tokensSaved).toBeGreaterThan(0);
+  });
 });

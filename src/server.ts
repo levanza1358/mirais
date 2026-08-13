@@ -29,6 +29,10 @@ function classifyWarmupStatus(ok: boolean, status: number, detail?: string | nul
   if (status === 429 || /quota|credits exhausted|rate limit|rate_limit|too many requests/.test(lower)) {
     return "rate_limited";
   }
+  // 426 is not a failure of the account, it's a version enforcement issue
+  if (status === 426 || /426|version|upgrade|outdated/.test(lower)) {
+    return "failing";
+  }
   return "failing";
 }
 
@@ -89,6 +93,21 @@ async function runAutoWarmups() {
             ok = res.ok;
             status = res.status;
             detail = res.ok ? "CodeBuddy chat warmup ok" : `HTTP ${res.status}`;
+          } else if (p.type === "xai" && acc.auth_kind === "oauth") {
+            // xAI OAuth accounts use Grok CLI endpoint (not api.x.ai)
+            const { ensureFreshXaiToken, xaiHeaders } = await import("./proxy/xai");
+            const accessToken = await ensureFreshXaiToken(providersRepo, acc);
+            const res = await fetch("https://cli-chat-proxy.grok.com/v1/models", {
+              headers: xaiHeaders(accessToken, false, undefined, acc),
+              signal: AbortSignal.timeout(20_000),
+            });
+            ok = res.ok;
+            status = res.status;
+            if (res.status === 426) {
+              detail = "Grok CLI 426: Version enforcement. Use API key instead.";
+            } else {
+              detail = res.ok ? "Grok CLI login active" : `HTTP ${res.status}`;
+            }
           } else if (isOAuthAccount(acc)) {
             const accessToken = await ensureFreshToken(providersRepo, acc as never);
             const usage = await fetchCodexUsage(acc as never, accessToken);

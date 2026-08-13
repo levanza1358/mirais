@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail } from "lucide-react";
-import { settings, backups, healthInfo, type BackupEntry, type TokenSaverSettings } from "../api";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp } from "lucide-react";
+import { settings, backups, healthInfo, providers, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
@@ -348,82 +348,457 @@ function ModelSyncSection() {
   );
 }
 
-// ── token saver ──
+// ── boltToken Saver ──
 
 function TokenSaverSection() {
+  return (
+    <div className="lg:col-span-2 space-y-6">
+      {/* Header */}
+      <div className="rounded-2xl border border-border bg-gradient-to-br from-bg-raised to-bg-base p-6">
+        <div className="flex items-start gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15">
+            <Zap className="h-6 w-6 text-accent" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">boltToken Saver</h2>
+            <p className="mt-1 text-sm text-text-muted max-w-2xl">
+              Four independent techniques to reduce token usage without making Mirais "goblok."
+              Each technique targets a different part of the pipeline — input, context, output, and behavior.
+              Enable only what you need.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Card grid */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <RTKCard />
+        <HeadroomCard />
+        <CavemanCard />
+        <PonytailCard />
+      </div>
+    </div>
+  );
+}
+
+// ── RTK: Tool Output Compression ──
+
+function RTKCard() {
   const qc = useQueryClient();
   const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const providersQ = useQuery({ queryKey: ["providers"], queryFn: providers.list });
   const [ts, setTs] = useState<TokenSaverSettings>({
     enabled: false,
     rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200, maxToolOutputChars: 80000, collapseWhitespace: true, deduplicateToolOutputs: true, keepRecentToolResults: 8, gitStatus: true, findTree: true, buildLogs: true },
   });
+  const [expanded, setExpanded] = useState(false);
+  // `null` = apply to every provider; array = only the listed providers.
+  const [saverProviders, setSaverProviders] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (s.data?.token_saver) setTs(s.data.token_saver);
+    if (s.data?.token_saver_providers !== undefined) setSaverProviders(s.data.token_saver_providers);
   }, [s.data]);
 
   const save = useMutation({
     mutationFn: (next: TokenSaverSettings) => settings.update({ token_saver: next }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Token saver saved"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("RTK saved"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const saveProviders = useMutation({
+    mutationFn: (next: string[] | null) => settings.update({ token_saver_providers: next }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Provider scope saved"); },
     onError: (e) => toast(e.message, "error"),
   });
 
   const setRule = (k: keyof TokenSaverSettings["rules"], v: boolean | number) =>
     setTs({ ...ts, rules: { ...ts.rules, [k]: v } });
 
-  // Master toggle persists immediately so the OFF state can always be saved
-  // (the rules form below is disabled while the saver is off).
   const toggleEnabled = (v: boolean) => {
     const next = { ...ts, enabled: v };
     setTs(next);
     save.mutate(next);
   };
 
+  const allProviders = providersQ.data ?? [];
+  const applyToAll = saverProviders === null;
+  const toggleApplyToAll = (v: boolean) => {
+    const next = v ? null : allProviders.map((p) => p.name);
+    setSaverProviders(next);
+    saveProviders.mutate(next);
+  };
+  const toggleProvider = (name: string, on: boolean) => {
+    const current = saverProviders ?? [];
+    const next = on ? Array.from(new Set([...current, name])) : current.filter((n) => n !== name);
+    setSaverProviders(next);
+    saveProviders.mutate(next);
+  };
+
   return (
-    <Card>
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-medium">Token saver</h3>
-          <p className="mt-0.5 text-xs text-text-muted">Compress tool outputs in requests to reduce upstream token usage.</p>
-        </div>
-        <Switch checked={ts.enabled} onChange={toggleEnabled} disabled={save.isPending} aria-label="Enable token saver" />
+    <Card className="relative overflow-hidden">
+      {/* Badge */}
+      <div className="absolute top-3 right-3">
+        <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noopener noreferrer"
+           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
+          RTK <ExternalLink size={10} />
+        </a>
       </div>
-      <form onSubmit={(e) => { e.preventDefault(); save.mutate(ts); }} className={`space-y-3 ${ts.enabled ? "" : "pointer-events-none opacity-50"}`}>
-        {([
-          ["gitDiff", "Compress git diff output"],
-          ["grep", "Compress grep/search output"],
-          ["ls", "Compress directory listings"],
-          ["collapseWhitespace", "Collapse redundant whitespace"],
-          ["deduplicateToolOutputs", "Omit duplicate tool outputs"],
-          ["gitStatus", "Compress git status/log output"],
-          ["findTree", "Compress find/tree output"],
-          ["buildLogs", "Deduplicate repetitive build logs"],
-        ] as const).map(([k, label]) => (
-          <label key={k} className="flex items-center justify-between text-xs">
-            <span>{label}</span>
-            <Switch checked={ts.rules[k] ?? false} onChange={(v) => setRule(k, v)} />
-          </label>
-        ))}
+
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/15">
+          <FileCode className="h-4.5 w-4.5 text-amber-400" />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Tool Output Compression</h3>
+            <Switch checked={ts.enabled} onChange={toggleEnabled} disabled={save.isPending} aria-label="Enable RTK" />
+          </div>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Compress git/grep/ls/tree/logs — <strong>60-90% fewer input tokens</strong> from tool outputs.
+            Lossless for semantics, lossy for verbosity.
+          </p>
+        </div>
+      </div>
+
+      {/* Provider scope */}
+      <div className={`mb-4 rounded-lg border border-border bg-bg-base/40 p-3 ${ts.enabled ? "" : "pointer-events-none opacity-40"}`}>
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-text-muted">Apply to all providers</span>
+          <Switch checked={applyToAll} onChange={toggleApplyToAll} disabled={saveProviders.isPending} aria-label="Apply to all providers" />
+        </div>
+        {!applyToAll && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {allProviders.length === 0 && (
+              <span className="text-[11px] text-text-muted">No providers configured yet.</span>
+            )}
+            {allProviders.map((p) => {
+              const on = (saverProviders ?? []).includes(p.name);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => toggleProvider(p.name, !on)}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${on ? "border-accent bg-accent/15 text-accent" : "border-border text-text-muted hover:border-text-muted"}`}
+                >
+                  <span className={`h-2 w-2 rounded-full ${on ? "bg-accent" : "bg-border"}`} />
+                  {p.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="mt-2 text-[11px] leading-tight text-text-muted">
+          Untick "all providers" to pick exactly which providers run through the token saver.
+          Providers left unchecked send raw (uncompressed) tool output.
+        </p>
+      </div>
+
+      {/* Expand toggle */}
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className={`mb-3 flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-xs text-text-muted hover:bg-bg-base/50 transition-colors ${ts.enabled ? "" : "pointer-events-none opacity-40"}`}
+      >
+        <span>Configure compression rules</span>
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+
+      {expanded && (
+        <form onSubmit={(e) => { e.preventDefault(); save.mutate(ts); }} className={`space-y-2.5 ${ts.enabled ? "" : "pointer-events-none opacity-50"}`}>
+          {([
+            ["gitDiff", "Compress git diff (drop repeated context lines)"],
+            ["grep", "Compress grep/search output (collapse separators)"],
+            ["ls", "Compress directory listings (strip blanks)"],
+            ["gitStatus", "Compress git status/log (trim boilerplate)"],
+            ["findTree", "Compress find/tree (deduplicate paths)"],
+            ["buildLogs", "Deduplicate repetitive build/test logs"],
+            ["collapseWhitespace", "Collapse redundant whitespace"],
+            ["deduplicateToolOutputs", "Omit duplicate tool outputs (SHA256)"],
+          ] as const).map(([k, label]) => (
+            <label key={k} className="flex items-center justify-between text-[11px] leading-tight">
+              <span className="text-text-muted">{label}</span>
+              <Switch checked={ts.rules[k] ?? false} onChange={(v) => setRule(k, v)} />
+            </label>
+          ))}
+          <div className="grid grid-cols-3 gap-2 pt-1">
+            <div>
+              <label className="mb-0.5 block text-[11px] text-text-muted">Max lines</label>
+              <Input type="number" min={10} max={2000} value={ts.rules.longOutputMaxLines} onChange={(e) => setRule("longOutputMaxLines", Number(e.target.value))} />
+            </div>
+            <div>
+              <label className="mb-0.5 block text-[11px] text-text-muted">Recent kept</label>
+              <Input type="number" min={0} max={100} value={ts.rules.keepRecentToolResults ?? 8} onChange={(e) => setRule("keepRecentToolResults", Number(e.target.value))} />
+            </div>
+            <div>
+              <label className="mb-0.5 block text-[11px] text-text-muted">Max chars</label>
+              <Input type="number" min={1000} max={1000000} value={ts.rules.maxToolOutputChars ?? 80000} onChange={(e) => setRule("maxToolOutputChars", Number(e.target.value))} />
+            </div>
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button type="submit" size="sm" loading={save.isPending}>Save</Button>
+          </div>
+        </form>
+      )}
+    </Card>
+  );
+}
+
+// ── Headroom: Context Compression ──
+
+function HeadroomCard() {
+  const qc = useQueryClient();
+  const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const [cfg, setCfg] = useState<HeadroomSettings>({ enabled: false, keepRecent: 10, summarize: true, maxChars: 100_000 });
+
+  useEffect(() => {
+    if (s.data?.headroom) setCfg(s.data.headroom);
+  }, [s.data]);
+
+  const save = useMutation({
+    mutationFn: (next: HeadroomSettings) => settings.update({ headroom: next }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Headroom saved"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const toggle = (v: boolean) => {
+    const next = { ...cfg, enabled: v };
+    setCfg(next);
+    save.mutate(next);
+  };
+
+  return (
+    <Card className="relative overflow-hidden">
+      <div className="absolute top-3 right-3">
+        <a href="https://github.com/chopratejas/headroom" target="_blank" rel="noopener noreferrer"
+           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
+          Headroom <ExternalLink size={10} />
+        </a>
+      </div>
+
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/15">
+          <Brain className="h-4.5 w-4.5 text-sky-400" />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Context Compression</h3>
+            <Switch checked={cfg.enabled} onChange={toggle} disabled={save.isPending} aria-label="Enable Headroom" />
+          </div>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Summarizes older messages in long conversations. Keeps recent messages intact,
+            compresses the rest into a summary — like a <strong>rolling context window</strong>.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(cfg); }} className={`space-y-3 ${cfg.enabled ? "" : "pointer-events-none opacity-50"}`}>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1 block text-[11px] text-text-muted">Recent messages kept intact</label>
+            <Input type="number" min={2} max={100} value={cfg.keepRecent}
+              onChange={(e) => setCfg({ ...cfg, keepRecent: Number(e.target.value) })} />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-text-muted">Max total characters</label>
+            <Input type="number" min={1000} max={1000000} value={cfg.maxChars}
+              onChange={(e) => setCfg({ ...cfg, maxChars: Number(e.target.value) })} />
+          </div>
+        </div>
+        <label className="flex items-center justify-between text-[11px]">
+          <span className="text-text-muted">Summarize older messages (instead of dropping them)</span>
+          <Switch checked={cfg.summarize} onChange={(v) => setCfg({ ...cfg, summarize: v })} />
+        </label>
+        <div className="flex justify-end">
+          <Button type="submit" size="sm" loading={save.isPending}>Save</Button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+// ── Caveman: Terse Output ──
+
+const CAVEMAN_PRESETS: Record<string, string> = {
+  default: "You are a helpful AI assistant. Be concise. Reply with the answer directly, no fluff, no preambles, no summaries unless asked. Write code, don't explain it unless asked.",
+  extreme: "You are a terse AI. Reply with only the essential information. No greetings, no explanations, no follow-up offers. If code: just the code. If answer: just the answer. One sentence if possible.",
+  coder: "You are a senior engineer. Write minimal, correct code. No comments unless the logic is truly non-obvious. No explanations unless explicitly requested. YAGNI.",
+};
+
+function CavemanCard() {
+  const qc = useQueryClient();
+  const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const [cfg, setCfg] = useState<CavemanSettings>({ enabled: false, prompt: CAVEMAN_PRESETS.default });
+  const [preset, setPreset] = useState("default");
+
+  useEffect(() => {
+    if (s.data?.terse_mode) {
+      setCfg(s.data.terse_mode);
+      // detect preset
+      for (const [k, v] of Object.entries(CAVEMAN_PRESETS)) {
+        if (v === s.data.terse_mode.prompt) { setPreset(k); break; }
+      }
+    }
+  }, [s.data]);
+
+  const save = useMutation({
+    mutationFn: (next: CavemanSettings) => settings.update({ terse_mode: next }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Caveman saved"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const toggle = (v: boolean) => {
+    const next = { ...cfg, enabled: v };
+    setCfg(next);
+    save.mutate(next);
+  };
+
+  const applyPreset = (key: string) => {
+    setPreset(key);
+    const next = { ...cfg, prompt: CAVEMAN_PRESETS[key] };
+    setCfg(next);
+  };
+
+  return (
+    <Card className="relative overflow-hidden">
+      <div className="absolute top-3 right-3">
+        <a href="https://github.com/JuliusBrussee/caveman" target="_blank" rel="noopener noreferrer"
+           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
+          Caveman <ExternalLink size={10} />
+        </a>
+      </div>
+
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/15">
+          <Coffee className="h-4.5 w-4.5 text-emerald-400" />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Terse Output Mode</h3>
+            <Switch checked={cfg.enabled} onChange={toggle} disabled={save.isPending} aria-label="Enable Caveman" />
+          </div>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Terse-style system prompt → <strong>~65% fewer output tokens</strong> (up to 87%).
+            Strips fluff, greetings, and unsolicited explanations.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(cfg); }} className={`space-y-3 ${cfg.enabled ? "" : "pointer-events-none opacity-50"}`}>
         <div>
-          <label className="mb-1 block text-xs text-text-muted">Max lines for long outputs</label>
-          <Input
-            type="number"
-            min={10}
-            max={2000}
-            value={ts.rules.longOutputMaxLines}
-            onChange={(e) => setRule("longOutputMaxLines", Number(e.target.value))}
+          <label className="mb-1 block text-[11px] text-text-muted">Preset</label>
+          <div className="flex gap-1.5 flex-wrap">
+            {Object.keys(CAVEMAN_PRESETS).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => applyPreset(k)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  preset === k
+                    ? "bg-accent text-white"
+                    : "bg-bg-base text-text-muted hover:text-text-primary hover:bg-bg-raised"
+                }`}
+              >
+                {k === "default" ? "Default" : k === "extreme" ? "Extreme" : "Coder"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] text-text-muted">System prompt (editable)</label>
+          <textarea
+            className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 text-xs text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-accent/30 resize-y"
+            rows={3}
+            value={cfg.prompt}
+            onChange={(e) => { setPreset("custom"); setCfg({ ...cfg, prompt: e.target.value }); }}
+            placeholder="Enter terse system prompt..."
           />
         </div>
-        <div>
-          <label className="mb-1 block text-xs text-text-muted">Recent tool results kept in full</label>
-          <Input type="number" min={0} max={100} value={ts.rules.keepRecentToolResults ?? 8} onChange={(e) => setRule("keepRecentToolResults", Number(e.target.value))} />
+        <div className="flex justify-end">
+          <Button type="submit" size="sm" loading={save.isPending}>Save</Button>
         </div>
+      </form>
+    </Card>
+  );
+}
+
+// ── Ponytail: Lazy Senior Dev ──
+
+const PONYTAIL_LABELS: Record<string, string> = {
+  light: "Light — prefer simplicity, fewer lines",
+  moderate: "Moderate — YAGNI, stdlib, delete over comment",
+  extreme: "Extreme — one-liners, no error handling, minimal everything",
+};
+
+function PonytailCard() {
+  const qc = useQueryClient();
+  const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const [cfg, setCfg] = useState<PonytailSettings>({ enabled: false, strength: "moderate" });
+
+  useEffect(() => {
+    if (s.data?.ponytail) setCfg(s.data.ponytail);
+  }, [s.data]);
+
+  const save = useMutation({
+    mutationFn: (next: PonytailSettings) => settings.update({ ponytail: next }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Ponytail saved"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const toggle = (v: boolean) => {
+    const next = { ...cfg, enabled: v };
+    setCfg(next);
+    save.mutate(next);
+  };
+
+  return (
+    <Card className="relative overflow-hidden">
+      <div className="absolute top-3 right-3">
+        <a href="https://github.com/DietrichGebert/ponytail" target="_blank" rel="noopener noreferrer"
+           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
+          Ponytail <ExternalLink size={10} />
+        </a>
+      </div>
+
+      <div className="mb-4 flex items-start gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-500/15">
+          <Coffee className="h-4.5 w-4.5 text-rose-400" />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Lazy Senior Dev Bias</h3>
+            <Switch checked={cfg.enabled} onChange={toggle} disabled={save.isPending} aria-label="Enable Ponytail" />
+          </div>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Biases the model toward minimal code: <strong>YAGNI, reuse stdlib, deletion over addition</strong>.
+            Injects a system prompt — works with any model.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(cfg); }} className={`space-y-3 ${cfg.enabled ? "" : "pointer-events-none opacity-50"}`}>
         <div>
-          <label className="mb-1 block text-xs text-text-muted">Maximum characters per tool result</label>
-          <Input type="number" min={1000} max={1000000} value={ts.rules.maxToolOutputChars ?? 80000} onChange={(e) => setRule("maxToolOutputChars", Number(e.target.value))} />
+          <label className="mb-1 block text-[11px] text-text-muted">Strength</label>
+          <div className="flex gap-1.5 flex-wrap">
+            {(["light", "moderate", "extreme"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setCfg({ ...cfg, strength: k })}
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-left transition-colors ${
+                  cfg.strength === k
+                    ? "bg-accent text-white"
+                    : "bg-bg-base text-text-muted hover:text-text-primary hover:bg-bg-raised"
+                }`}
+              >
+                <div>{k === "light" ? "Light" : k === "moderate" ? "Moderate" : "Extreme"}</div>
+                <div className="text-[10px] opacity-70 mt-0.5">{PONYTAIL_LABELS[k]}</div>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex justify-end">
-          <Button type="submit" loading={save.isPending}>Save</Button>
+          <Button type="submit" size="sm" loading={save.isPending}>Save</Button>
         </div>
       </form>
     </Card>

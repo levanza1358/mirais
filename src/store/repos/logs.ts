@@ -86,9 +86,11 @@ export class LogsRepo {
     const total = (this.db.query(`SELECT COUNT(*) as c FROM request_logs ${whereSql}`).get(...params) as { c: number }).c;
     const items = this.db
       .query(
-        `SELECT id, ts, key_id, endpoint, requested_model, provider, model, attempts, status, http_status, error,
-                input_tokens, output_tokens, credit_usage, latency_ms, tokens_saved, request_body, response_body, account_label, kind
-         FROM request_logs ${whereSql} ORDER BY ts DESC LIMIT ? OFFSET ?`,
+        `SELECT rl.id, rl.ts, rl.ts AS created_at, rl.key_id, gk.label AS key_label, rl.endpoint, rl.requested_model, rl.provider, rl.model, rl.attempts, rl.status, rl.http_status, rl.error,
+                rl.input_tokens, rl.output_tokens, rl.credit_usage, rl.latency_ms, rl.tokens_saved, rl.request_body, rl.response_body, rl.account_label, rl.kind
+         FROM request_logs rl
+         LEFT JOIN gateway_keys gk ON gk.id = rl.key_id
+         ${whereSql} ORDER BY rl.ts DESC LIMIT ? OFFSET ?`,
       )
       .all(...params, filters.limit, (filters.page - 1) * filters.limit) as RequestLog[];
     return { items, total };

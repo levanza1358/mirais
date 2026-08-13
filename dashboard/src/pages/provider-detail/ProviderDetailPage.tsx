@@ -51,7 +51,7 @@ export function ProviderDetailPage() {
   });
 
   const warmupAll = useMutation({
-    mutationFn: async (providerId: string) => {
+    mutationFn: async (providerId: string): Promise<{ total: number; success: number; failed: number }> => {
       let complete: { total: number; success: number; failed: number } | null = null;
       await providers.warmupAllAccountsStream(providerId, (event, data) => {
         if (event === "start") {

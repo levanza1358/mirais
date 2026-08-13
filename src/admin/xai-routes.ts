@@ -231,6 +231,40 @@ export function xaiAdminRoutes(db: Database) {
       startedAt: farmStartedAt,
     }))
 
+    .post("/add-apikey", async ({ body }) => {
+      const { providerId, apiKey, label } = body as { providerId?: string; apiKey?: string; label?: string };
+      if (!providerId || typeof providerId !== "string") throw new AdminError(400, "providerId is required");
+      if (!apiKey || typeof apiKey !== "string") throw new AdminError(400, "apiKey is required");
+      if (!apiKey.startsWith("xai-")) throw new AdminError(400, "Invalid API key format. xAI API keys start with 'xai-'");
+
+      const provider = providers.get(providerId);
+      if (!provider) throw new AdminError(404, "Provider not found");
+      if (provider.type !== "xai") throw new AdminError(400, "Provider is not xAI type");
+
+      // Check if already exists
+      const accounts = providers.listAccounts(providerId);
+      const existing = accounts.find((a) => a.api_key === apiKey);
+      if (existing) {
+        return { status: "exists", accountId: existing.id, label: existing.label };
+      }
+
+      // Add account with API key (NOT OAuth)
+      const account = providers.addAccount(providerId, {
+        label: label ?? `apikey-${apiKey.slice(-6)}`,
+        apiKey,
+      });
+
+      // auth_kind defaults to NULL (API key auth), not 'oauth'
+      // This means it will use https://api.x.ai/v1 endpoint instead of cli-chat-proxy.grok.com
+
+      return {
+        status: "created",
+        accountId: account.id,
+        label: account.label,
+        note: "API key accounts use api.x.ai endpoint (not affected by Grok CLI 426 error)",
+      };
+    })
+
     .post("/refresh", async () => {
       throw new AdminError(501, "Token refresh not yet implemented — re-authenticate via device flow");
     })

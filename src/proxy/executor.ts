@@ -199,11 +199,14 @@ export async function executeRequest(
       // OAuth accounts require their provider's CLI Responses endpoint; they
       // cannot call the public OpenAI-compatible endpoint with a bearer token.
       const isXaiOAuth = candidate.provider.type === "xai" && account.auth_kind === "oauth";
-      // For Grok-4.5 with reasoning enabled, use Chat Completions endpoint
-      // which supports reasoning_content deltas (Responses API doesn't).
+      // Chat Completions exposes Grok-4.5 reasoning deltas for plain chat.
+      // Tool agents must use Responses API: it preserves function-call item
+      // lifecycle events and is the endpoint the Grok CLI uses for tools.
+      const hasTools = (effectiveReq.tools?.length ?? 0) > 0;
       const useXaiChat = isXaiOAuth
         && supportsReasoningEffort(candidate.modelId)
-        && effectiveReq.reasoning?.enabled !== false;
+        && effectiveReq.reasoning?.enabled !== false
+        && !hasTools;
       if (isOAuthAccount(account) || isXaiOAuth) {
         if (!providersRepo) throw new GatewayError(500, "server_error", "OAuth account requires a providers repo in the executor");
         const accessToken = isXaiOAuth
@@ -629,7 +632,7 @@ async function callXai(
     headers: xaiHeaders(accessToken, true, xaiContext, account),
     body: JSON.stringify(xaiRequestBody(req, candidate.modelId)),
     signal: combined,
-  }, context.signal);
+  }, combined);
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Grok returned no stream body");
   return aggregateXaiResponsesStream(res.body, req.model);
@@ -650,10 +653,10 @@ async function openXaiStream(
     headers: xaiHeaders(accessToken, true, xaiContext, account),
     body: JSON.stringify(xaiRequestBody(req, candidate.modelId)),
     signal: combined,
-  }, context.signal);
+  }, combined);
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Grok returned no stream body");
-  return xaiResponsesStreamToChat(res.body, req.model);
+  return xaiResponsesStreamToChat(await requireInitialStreamByte(res.body, "Grok"), req.model);
 }
 
 async function callXaiChat(
@@ -671,7 +674,7 @@ async function callXaiChat(
     headers: xaiHeaders(accessToken, true, xaiContext, account),
     body: JSON.stringify(xaiChatCompletionsBody(req, candidate.modelId)),
     signal: combined,
-  }, context.signal);
+  }, combined);
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Grok Chat Completions returned no stream body");
   return aggregateXaiChatCompletionsStream(res.body, req.model);
@@ -692,10 +695,57 @@ async function openXaiChatStream(
     headers: xaiHeaders(accessToken, true, xaiContext, account),
     body: JSON.stringify(xaiChatCompletionsBody(req, candidate.modelId)),
     signal: combined,
-  }, context.signal);
+  }, combined);
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Grok Chat Completions returned no stream body");
-  return xaiChatCompletionsStreamToChat(res.body, req.model);
+  return xaiChatCompletionsStreamToChat(await requireInitialStreamByte(res.body, "Grok"), req.model);
+}
+
+/**
+ * A successful HTTP response does not prove an SSE connection is usable. xAI
+ * can abort after the 200 response but before sending any body bytes. Reading
+ * one byte here keeps the executor's retry/failover path available. The byte
+ * is replayed into the stream without buffering the rest of the response.
+ *
+ * After the first byte reaches the client the request is never retried, which
+ * prevents duplicate assistant output and duplicate tool calls.
+ */
+export async function requireInitialStreamByte(
+  body: ReadableStream<Uint8Array>,
+  providerName: string,
+): Promise<ReadableStream<Uint8Array>> {
+  const reader = body.getReader();
+  let first: { done: boolean; value?: Uint8Array };
+  try {
+    first = await reader.read();
+  } catch (err) {
+    const detail = err instanceof Error ? err.name : "UnknownError";
+    throw new GatewayError(502, "server_error", `${providerName} SSE stream aborted before first byte (${detail})`);
+  }
+  if (first.done || !first.value?.byteLength) {
+    throw new GatewayError(502, "server_error", `${providerName} SSE stream ended before first byte`);
+  }
+
+  let firstPending = true;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (firstPending) {
+        firstPending = false;
+        controller.enqueue(first.value!);
+        return;
+      }
+      try {
+        const next = await reader.read();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
 }
 
 async function upstreamError(res: Response): Promise<GatewayError> {

@@ -329,12 +329,13 @@ function formatUptime(sec: number): string {
   return `${m}m`;
 }
 
-export function PageHeader({ title, children }: { title: string; children?: ReactNode }) {
+export function PageHeader({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
   return (
     <div className="mb-6 flex flex-wrap items-center justify-between gap-3 anim-fade-in-down md:mb-8">
       <div className="min-w-0">
         <p className="mb-1 text-[10px] uppercase tracking-[0.24em] text-text-muted md:text-xs">Mirais dashboard</p>
         <h1 className="truncate text-xl font-semibold tracking-tight md:text-2xl">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-2xl text-sm text-text-muted">{subtitle}</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">{children}</div>
     </div>

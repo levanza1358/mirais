@@ -9,7 +9,7 @@ import { PROVIDER_PRESETS, presetForType, type ProviderPreset } from "../provide
 export default function Providers() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const list = useQuery({
+  const list = useQuery<Provider[], Error>({
     queryKey: ["providers"],
     queryFn: providers.list,
     retry: 1,
@@ -80,30 +80,6 @@ export default function Providers() {
             <Skeleton key={i} className="h-32 w-full" />
           ))}
         </div>
-      ) : list.isError ? (
-        <Card className="mt-2 border-danger/30 bg-danger/5">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={20} className="mt-0.5 shrink-0 text-danger" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-danger">Couldn't read the provider database.</p>
-              <p className="mt-1 text-xs text-text-muted">
-                {list.error instanceof Error ? list.error.message : "The /api/providers request failed."}
-              </p>
-              <p className="mt-2 text-xs text-text-muted">
-                Database path: <span className="font-mono">{detailedHealth.data?.storage.db_path ?? "loading…"}</span>
-                {detailedHealth.data ? (
-                  <>
-                    {" · "}
-                    {detailedHealth.data.storage.db_exists ? `${(detailedHealth.data.storage.size_bytes / 1024).toFixed(0)} KB` : "missing on disk"}
-                  </>
-                ) : null}
-              </p>
-            </div>
-            <Button size="sm" variant="outline" onClick={() => { invalidate(); detailedHealth.refetch(); }}>
-              <RefreshCw size={13} /> Retry
-            </Button>
-          </div>
-        </Card>
       ) : list.isError ? (
         <Card className="mt-2 border-danger/30 bg-danger/5">
           <div className="flex items-start gap-3">

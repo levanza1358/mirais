@@ -7,6 +7,8 @@ import { normalizeRoutingPolicy, Router } from "./router";
 import { executeRequest, cooldownSnapshot } from "./executor";
 import { applyTokenSaver } from "./saver/rules";
 import type { TokenSaverConfig } from "./saver/compress";
+import type { HeadroomConfig } from "./saver/headroom";
+import type { PonytailConfig } from "./saver/ponytail";
 import { chatCompletionsSchema, anthropicMessagesSchema, responsesCreateSchema } from "../shared/schemas";
 import { anthropicToOpenaiRequest } from "./translator/anthropic-to-openai";
 import { openaiToAnthropicResponse } from "./translator/openai-to-anthropic";
@@ -29,12 +31,28 @@ export function v1Routes(db: Database) {
   const settings = new SettingsRepo(db);
   const app = new Elysia({ prefix: "/v1" });
 
-  const tokenSaverConfig = (request: Request): TokenSaverConfig => {
+  const tokenSaverConfig = (request: Request, providerName?: string): TokenSaverConfig => {
     const configured = settings.getJson<TokenSaverConfig>("token_saver") ?? {
       enabled: config.tokenSaverDefault,
       rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
     };
-    return request.headers.get("x-mirais-token-saver") === "off" ? { ...configured, enabled: false } : configured;
+    const allowlist = settings.getJson<string[] | null>("token_saver_providers") ?? null;
+    // Per-provider opt-out: when an allowlist is set, only providers in the list
+    // get token saver; everything else runs raw. `null` = apply to all providers.
+    const providerEnabled = allowlist === null || (providerName != null && allowlist.includes(providerName));
+    const enabled = configured.enabled && providerEnabled;
+    const final: TokenSaverConfig = request.headers.get("x-mirais-token-saver") === "off"
+      ? { ...configured, enabled: false }
+      : { ...configured, enabled };
+    return final;
+  };
+
+  const headroomConfig = (): HeadroomConfig => {
+    return settings.getJson<HeadroomConfig>("headroom") ?? { enabled: false, keepRecent: 10, summarize: true, maxChars: 100_000 };
+  };
+
+  const ponytailConfig = (): PonytailConfig => {
+    return settings.getJson<PonytailConfig>("ponytail") ?? { enabled: false, strength: "moderate" };
   };
 
   app.get("/models", ({ request }) => {
@@ -106,21 +124,24 @@ export function v1Routes(db: Database) {
       return new GatewayError(429, "rate_limit_error", "Rate limit exceeded").toJSON();
     }
 
-    // token saver
-    const saverCfg = tokenSaverConfig(request);
-    const saver = applyTokenSaver(req, saverCfg);
+    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
+      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = router.resolveWithPolicy(req.model, routingPolicy);
+
+    // token saver (RTK + Headroom + Ponytail) — scoped to the resolved provider
+    const saverCfg = tokenSaverConfig(request, route.candidates[0]?.provider.name);
+    const hCfg = headroomConfig();
+    const pCfg = ponytailConfig();
+    const saver = applyTokenSaver(req, saverCfg, hCfg, pCfg);
     req = saver.request;
 
-    // terse mode
+    // terse mode (Caveman)
     const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
     if (terse?.enabled) {
       req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     }
 
-    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
-      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
-      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
-    const route = router.resolveWithPolicy(req.model, routingPolicy);
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
@@ -140,7 +161,7 @@ export function v1Routes(db: Database) {
           .then(([usage, text]) => {
             logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
-              { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
+              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind);
           })
           .catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
@@ -180,15 +201,17 @@ export function v1Routes(db: Database) {
     authorizeModel(key, req.model);
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
-    const saverCfg = tokenSaverConfig(request);
-    const saver = applyTokenSaver(req, saverCfg);
-    req = saver.request;
-    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
-    if (terse?.enabled) req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
       ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
       : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
     const route = router.resolveWithPolicy(req.model, routingPolicy);
+    const saverCfg = tokenSaverConfig(request, route.candidates[0]?.provider.name);
+    const hCfg = headroomConfig();
+    const pCfg = ponytailConfig();
+    const saver = applyTokenSaver(req, saverCfg, hCfg, pCfg);
+    req = saver.request;
+    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    if (terse?.enabled) req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
@@ -254,7 +277,11 @@ export function v1Routes(db: Database) {
       return { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } };
     }
 
-    const saverCfg = tokenSaverConfig(request);
+    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
+      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = router.resolveWithPolicy(req.model, routingPolicy);
+    const saverCfg = tokenSaverConfig(request, route.candidates[0]?.provider.name);
     const saver = applyTokenSaver(req, saverCfg);
     req = saver.request;
 
@@ -263,10 +290,6 @@ export function v1Routes(db: Database) {
       req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     }
 
-    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
-      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
-      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
-    const route = router.resolveWithPolicy(req.model, routingPolicy);
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
     try {
@@ -289,7 +312,7 @@ export function v1Routes(db: Database) {
             const u = translator.result().usage;
             logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
-              { request: summarizeRequest(req), response: text || "[streamed]" }, kind);
+              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind);
           })
           .catch(() => undefined)
           .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
@@ -473,55 +496,70 @@ export function v1Routes(db: Database) {
 
 /**
  * Tee an OpenAI chat.completion.chunk SSE stream: the client receives the
- * untouched stream while we accumulate the assistant's text deltas so the
- * request log can show the actual reply instead of "[streamed]".
+ * untouched stream while we accumulate the assistant's text deltas. When a
+ * provider emits only non-text events, retain a bounded SSE transcript so the
+ * request log remains useful for troubleshooting.
  */
-function tapOpenAiStream(stream: ReadableStream<Uint8Array>): { stream: ReadableStream<Uint8Array>; textPromise: Promise<string> } {
+export function tapOpenAiStream(stream: ReadableStream<Uint8Array>): { stream: ReadableStream<Uint8Array>; textPromise: Promise<string> } {
   const [clientBranch, tapBranch] = stream.tee();
   const textPromise = (async () => {
     const reader = tapBranch.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
+    const events: string[] = [];
+    let eventBytes = 0;
+    const MAX = 12_000;
     const toolCalls = new Map<number, { name: string; arguments: string }>();
+    const processEvent = (raw: string) => {
+      const dataLine = raw.split(/\r?\n/).find((line) => line.startsWith("data:"));
+      if (!dataLine) return;
+      const data = dataLine.slice(5).trim();
+      if (!data || data === "[DONE]") return;
+      if (eventBytes < MAX) {
+        const remaining = MAX - eventBytes;
+        const captured = data.length > remaining ? `${data.slice(0, Math.max(0, remaining - 14))}…[truncated]` : data;
+        events.push(captured);
+        eventBytes += captured.length;
+      }
+      try {
+        const chunk = JSON.parse(data) as {
+          choices?: Array<{
+            delta?: {
+              content?: string | null;
+              reasoning_content?: string | null;
+              tool_calls?: Array<{ index?: number; function?: { name?: string; arguments?: string } }>;
+            };
+          }>;
+        };
+        const choice = chunk.choices?.[0];
+        const contentDelta = choice?.delta?.content;
+        const reasoningDelta = choice?.delta?.reasoning_content;
+        if (typeof reasoningDelta === "string") text += reasoningDelta;
+        if (typeof contentDelta === "string") text += contentDelta;
+        for (const tc of choice?.delta?.tool_calls ?? []) {
+          const idx = tc.index ?? 0;
+          const current = toolCalls.get(idx) ?? { name: "", arguments: "" };
+          if (tc.function?.name) current.name = tc.function.name;
+          if (tc.function?.arguments) current.arguments += tc.function.arguments;
+          toolCalls.set(idx, current);
+        }
+      } catch { /* ignore non-JSON keep-alives */ }
+    };
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buffer.indexOf("\n\n")) !== -1) {
-          const raw = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const dataLine = raw.split("\n").find((l) => l.startsWith("data:"));
-          if (!dataLine) continue;
-          const data = dataLine.slice(5).trim();
-          if (!data || data === "[DONE]") continue;
-          try {
-            const chunk = JSON.parse(data) as {
-              choices?: Array<{
-                delta?: {
-                  content?: string | null;
-                  reasoning_content?: string | null;
-                  tool_calls?: Array<{ index?: number; function?: { name?: string; arguments?: string } }>;
-                };
-              }>;
-            };
-            const choice = chunk.choices?.[0];
-            const contentDelta = choice?.delta?.content;
-            const reasoningDelta = choice?.delta?.reasoning_content;
-            if (typeof reasoningDelta === "string") text += reasoningDelta;
-            if (typeof contentDelta === "string") text += contentDelta;
-            for (const tc of choice?.delta?.tool_calls ?? []) {
-              const idx = tc.index ?? 0;
-              const current = toolCalls.get(idx) ?? { name: "", arguments: "" };
-              if (tc.function?.name) current.name = tc.function.name;
-              if (tc.function?.arguments) current.arguments += tc.function.arguments;
-              toolCalls.set(idx, current);
-            }
-          } catch { /* ignore non-JSON keep-alives */ }
+        const separator = /\r?\n\r?\n/;
+        let match: RegExpExecArray | null;
+        while ((match = separator.exec(buffer)) !== null) {
+          processEvent(buffer.slice(0, match.index));
+          buffer = buffer.slice(match.index + match[0].length);
         }
       }
+      buffer += decoder.decode();
+      if (buffer.trim()) processEvent(buffer);
     } catch { /* client disconnected mid-stream — keep what we have */ }
     const parts: string[] = [];
     if (text) parts.push(text);
@@ -533,8 +571,8 @@ function tapOpenAiStream(stream: ReadableStream<Uint8Array>): { stream: Readable
       }
     }
     const out = parts.join("\n").trim();
-    const MAX = 12000;
-    return out.length > MAX ? out.slice(0, MAX) + "\n…[truncated]" : out;
+    if (out) return out.length > MAX ? out.slice(0, MAX) + "\n…[truncated]" : out;
+    return events.length ? `SSE events (no text delta):\n${events.join("\n")}` : "";
   })();
   return { stream: clientBranch, textPromise };
 }

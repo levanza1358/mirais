@@ -509,12 +509,12 @@ function InlinePlayer({
   const lastSyncedVideoTime = useRef<number | null>(null);
   const effectiveDuration = duration || track?.duration_sec || 0;
 
-  const sendVideoCommand = useCallback((func: "playVideo" | "pauseVideo" | "seekTo", args: number[] = []) => {
+  const sendVideoCommand = useCallback((func: "playVideo" | "pauseVideo" | "seekTo", args: (number | boolean)[] = []) => {
     const video = videoFrame.current;
     if (!video) return;
     if (func === "playVideo") void video.play().catch(() => undefined);
     if (func === "pauseVideo") video.pause();
-    if (func === "seekTo" && args[0] !== undefined && Math.abs(video.currentTime - args[0]) >= 0.5) video.currentTime = args[0];
+    if (func === "seekTo" && args[0] !== undefined && Math.abs(video.currentTime - Number(args[0])) >= 0.5) video.currentTime = Number(args[0]);
   }, []);
 
   useEffect(() => {

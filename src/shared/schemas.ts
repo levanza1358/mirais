@@ -236,9 +236,23 @@ export const settingsUpdateSchema = z.object({
       buildLogs: z.boolean().optional(),
     }),
   }).optional(),
+  // Provider names whose requests should run through the token saver.
+  // `null`/omitted = token saver applies to every provider (legacy default).
+  // An array = token saver only applies to the listed providers.
+  token_saver_providers: z.array(z.string().min(1).max(128)).nullable().optional(),
   terse_mode: z.object({
     enabled: z.boolean(),
     prompt: z.string().max(500),
+  }).optional(),
+  headroom: z.object({
+    enabled: z.boolean(),
+    keepRecent: z.number().int().min(2).max(100),
+    summarize: z.boolean(),
+    maxChars: z.number().int().min(1000).max(1_000_000),
+  }).optional(),
+  ponytail: z.object({
+    enabled: z.boolean(),
+    strength: z.enum(["light", "moderate", "extreme"]),
   }).optional(),
   log_retention_days: z.number().int().min(1).max(365).optional(),
   session_remember_default: z.boolean().optional(),

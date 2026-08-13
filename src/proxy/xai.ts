@@ -43,6 +43,15 @@ const HOSTED_TOOL_TYPES = new Set(["web_search", "x_search", "web_search_preview
 
 /** Reasoning effort levels recognized by Grok CLI. */
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh"];
+const VERIFIED_TOOL_WORKFLOW = [
+  "For tool-based work, follow a careful, verified engineering workflow.",
+  "First inspect the relevant files, constraints, and current state; do not guess or overwrite blindly.",
+  "Form a short plan, use only necessary tools, and make the smallest safe change that satisfies the request.",
+  "Preserve existing behavior unless the request explicitly changes it.",
+  "After every change, run an appropriate verification and inspect its result before reporting completion.",
+  "If verification fails or is not possible, state the blocker clearly and do not claim success.",
+  "Reply in the user's language; use Bahasa Indonesia when the user writes in Indonesian.",
+].join(" ");
 
 /** Only grok-4.5 supports reasoning.effort; grok-build rejects it. */
 export function supportsReasoningEffort(model: string): boolean {
@@ -185,6 +194,10 @@ export function xaiRequestBody(req: CanonicalRequest, modelId: string): Record<s
   const instructions: string[] = [];
   const input: Array<Record<string, unknown>> = [];
   const functionCallIds = new Set<string>();
+  // `store: false` rejects server-generated call IDs. When a previous Grok
+  // response is sent back with its tool result, rewrite both sides of that
+  // pair consistently for this request.
+  const normalizedFunctionCallIds = new Map<string, string>();
 
   for (const message of req.messages) {
     if (message.role === "system") {
@@ -195,8 +208,9 @@ export function xaiRequestBody(req: CanonicalRequest, modelId: string): Record<s
     if (message.role === "tool") {
       // A result without its call id cannot be associated safely by Grok.
       // Also skip results with server-generated call ids (store=false can't resolve them).
-      if (message.tool_call_id && functionCallIds.has(message.tool_call_id)) {
-        input.push({ type: "function_call_output", call_id: message.tool_call_id, output: textOf(message.content) });
+      const callId = message.tool_call_id && (normalizedFunctionCallIds.get(message.tool_call_id) ?? message.tool_call_id);
+      if (callId && functionCallIds.has(callId)) {
+        input.push({ type: "function_call_output", call_id: callId, output: textOf(message.content) });
       }
       continue;
     }
@@ -222,6 +236,7 @@ export function xaiRequestBody(req: CanonicalRequest, modelId: string): Record<s
         if (call.id && call.function.name) {
           // Strip server-generated call ids — store=false can't resolve them.
           const callId = isServerGeneratedId(call.id) ? crypto.randomUUID() : call.id;
+          normalizedFunctionCallIds.set(call.id, callId);
           functionCallIds.add(callId);
           input.push({ type: "function_call", call_id: callId, name: call.function.name, arguments: normalizeToolArguments(call.function.arguments) });
         }
@@ -245,6 +260,7 @@ export function xaiRequestBody(req: CanonicalRequest, modelId: string): Record<s
   });
 
   const body: Record<string, unknown> = { model: modelId, input: finalInput, store: false, stream: true };
+  if (req.tools?.length && supportsReasoningEffort(modelId)) instructions.push(VERIFIED_TOOL_WORKFLOW);
   if (instructions.length) body.instructions = instructions.join("\n\n");
 
   // Tools: flatten Chat Completions shape, keep hosted tools passthrough.
@@ -287,11 +303,9 @@ export function xaiRequestBody(req: CanonicalRequest, modelId: string): Record<s
   // grok-build rejects reasoningEffort but still accepts summary + encrypted_content.
   if (req.reasoning?.enabled !== false) {
     const reasoning: Record<string, unknown> = { summary: "concise" };
-    if (supportsReasoningEffort(modelId)) {
-      reasoning.effort = normalizeEffort(
-        (req.reasoning?.effort as string | undefined),
-      );
-    }
+    // Grok-4.5 supports low/medium/high. Always use its maximum effective
+    // effort so coding and tool requests receive enough planning budget.
+    if (supportsReasoningEffort(modelId)) reasoning.effort = "high";
     body.reasoning = reasoning;
     // Encrypted reasoning for multi-turn continuity (official CLI always requests this).
     const include: string[] = ["reasoning.encrypted_content"];
@@ -339,17 +353,19 @@ export async function fetchXaiResponses(
   init: RequestInit,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const abortSignal = signal ?? init.signal ?? undefined;
   let response = await fetch(xaiResponsesUrl(), init);
-  if (!RETRIABLE_XAI_STATUSES.has(response.status) || signal?.aborted) return response;
+  if (!RETRIABLE_XAI_STATUSES.has(response.status) || abortSignal?.aborted) return response;
   const retryAfter = Number(response.headers.get("retry-after"));
   const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1_000, 2_000) : 250;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, waitMs);
-    signal?.addEventListener("abort", () => {
+    abortSignal?.addEventListener("abort", () => {
       clearTimeout(timer);
-      reject(signal.reason);
+      reject(abortSignal.reason);
     }, { once: true });
   });
+  await response.body?.cancel();
   return fetch(xaiResponsesUrl(), init);
 }
 
@@ -358,17 +374,19 @@ export async function fetchXaiChatCompletions(
   init: RequestInit,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const abortSignal = signal ?? init.signal ?? undefined;
   let response = await fetch(xaiChatCompletionsUrl(), init);
-  if (!RETRIABLE_XAI_STATUSES.has(response.status) || signal?.aborted) return response;
+  if (!RETRIABLE_XAI_STATUSES.has(response.status) || abortSignal?.aborted) return response;
   const retryAfter = Number(response.headers.get("retry-after"));
   const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1_000, 2_000) : 250;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, waitMs);
-    signal?.addEventListener("abort", () => {
+    abortSignal?.addEventListener("abort", () => {
       clearTimeout(timer);
-      reject(signal.reason);
+      reject(abortSignal.reason);
     }, { once: true });
   });
+  await response.body?.cancel();
   return fetch(xaiChatCompletionsUrl(), init);
 }
 
@@ -399,7 +417,7 @@ export async function ensureFreshXaiToken(repo: ProvidersRepo, account: Provider
 // events before visible output. This translator handles those events
 // explicitly so clients see progress during the reasoning phase.
 
-class XaiStreamTranslator {
+export class XaiStreamTranslator {
   private id = `chatcmpl-${ulid()}`;
   private created = Math.floor(Date.now() / 1000);
   private model: string;
@@ -408,6 +426,8 @@ class XaiStreamTranslator {
   private sawToolCall = false;
   private nextToolCallIndex = 0;
   private toolCallIndices = new Map<string, number>();
+  private toolCallArguments = new Map<number, string>();
+  private outputToolCallIndices = new Map<number, number>();
 
   constructor(model: string) {
     this.model = model;
@@ -444,6 +464,8 @@ class XaiStreamTranslator {
           const callId = (item.call_id ?? item.id ?? `call_${ulid()}`) as string;
           if (typeof item.id === "string") this.toolCallIndices.set(item.id, index);
           if (typeof item.call_id === "string") this.toolCallIndices.set(item.call_id, index);
+          if (typeof parsed.output_index === "number") this.outputToolCallIndices.set(parsed.output_index, index);
+          this.toolCallArguments.set(index, "");
           out.push(
             this.chunk(
               {
@@ -480,11 +502,21 @@ class XaiStreamTranslator {
         break;
       }
       // ── Grok-4.5 reasoning events ──
-      case "response.reasoning_text.delta":
+      case "response.reasoning_text.delta": {
+        const delta = parsed.delta as string | undefined;
+        if (delta) {
+          if (!this.started) out.push(startChunk());
+          out.push(this.chunk({ reasoning_content: delta }, null));
+        }
+        break;
+      }
       case "response.reasoning_summary_text.delta": {
         const delta = parsed.delta as string | undefined;
         if (delta) {
           if (!this.started) out.push(startChunk());
+          // xAI explicitly labels this as a summary. Keep it in the dedicated
+          // reasoning channel so it is visible to reasoning-aware clients but
+          // never contaminates the answer or tool-call protocol.
           out.push(this.chunk({ reasoning_content: delta }, null));
         }
         break;
@@ -494,6 +526,20 @@ class XaiStreamTranslator {
       case "response.output_text.done":
       case "response.content_part.done":
       case "response.output_item.done": {
+        const item = parsed.item as Record<string, unknown> | undefined;
+        if (item?.type === "function_call") {
+          const itemId = typeof item.id === "string" ? item.id : "";
+          const callId = typeof item.call_id === "string" ? item.call_id : "";
+          const outputIndex = typeof parsed.output_index === "number" ? parsed.output_index : 0;
+          const index = this.toolCallIndices.get(itemId) ?? this.toolCallIndices.get(callId) ?? this.outputToolCallIndices.get(outputIndex) ?? outputIndex;
+          const argumentsValue = typeof item.arguments === "string" ? item.arguments : "";
+          const emitted = this.toolCallArguments.get(index) ?? "";
+          if (argumentsValue.startsWith(emitted) && argumentsValue.length > emitted.length) {
+            const remaining = argumentsValue.slice(emitted.length);
+            this.toolCallArguments.set(index, argumentsValue);
+            out.push(this.chunk({ tool_calls: [{ index, function: { arguments: remaining } }] }, null));
+          }
+        }
         // Terminal events for sub-parts — keep stream alive.
         if (!this.started) out.push(startChunk());
         break;
@@ -506,14 +552,14 @@ class XaiStreamTranslator {
           const itemId = typeof parsed.item_id === "string" ? parsed.item_id : "";
           const callId = typeof parsed.call_id === "string" ? parsed.call_id : "";
           const outputIndex = typeof parsed.output_index === "number" ? parsed.output_index : 0;
-          const index = this.toolCallIndices.get(itemId) ?? this.toolCallIndices.get(callId) ?? outputIndex;
+          const index = this.toolCallIndices.get(itemId) ?? this.toolCallIndices.get(callId) ?? this.outputToolCallIndices.get(outputIndex) ?? outputIndex;
+          this.toolCallArguments.set(index, (this.toolCallArguments.get(index) ?? "") + delta);
           out.push(this.chunk({ tool_calls: [{ index, function: { arguments: delta } }] }, null));
         }
         break;
       }
       case "response.completed":
-      case "response.incomplete":
-      case "response.failed": {
+      case "response.incomplete": {
         const r = parsed.response as ResponsesApiResponse | undefined;
         if (r?.usage) {
           this.usage = {
@@ -524,6 +570,21 @@ class XaiStreamTranslator {
         }
         if (!this.started) out.push(startChunk());
         out.push(this.chunk({}, this.sawToolCall ? "tool_calls" : "stop"));
+        out.push("data: [DONE]\n\n");
+        break;
+      }
+      case "response.failed": {
+        const r = parsed.response as ResponsesApiResponse | undefined;
+        if (r?.usage) {
+          this.usage = {
+            prompt_tokens: r.usage.input_tokens ?? 0,
+            completion_tokens: r.usage.output_tokens ?? 0,
+            total_tokens: r.usage.total_tokens ?? (r.usage.input_tokens ?? 0) + (r.usage.output_tokens ?? 0),
+          };
+        }
+        const error = r?.error as Record<string, unknown> | undefined;
+        const message = typeof error?.message === "string" ? error.message : "Grok response failed";
+        out.push(`data: ${JSON.stringify({ error: { message, type: "server_error" } })}\n\n`);
         out.push("data: [DONE]\n\n");
         break;
       }
@@ -771,6 +832,22 @@ export function xaiChatCompletionsStreamToChat(
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
           }
         }
+        for (const ev of parser.finish()) {
+          if (ev.data === "[DONE]") {
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            continue;
+          }
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(ev.data) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          parsed.id = chatId;
+          parsed.model = requestedModel;
+          if (parsed.usage) usage = parsed.usage as Usage;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+        }
       } finally {
         reader.releaseLock();
         resolveUsage(usage);
@@ -812,9 +889,15 @@ export function xaiResponsesStreamToChat(
             }
           }
         }
+        for (const ev of parser.finish()) {
+          if (ev.data === "[DONE]") continue;
+          for (const line of translator.handleEvent(ev.event, ev.data)) {
+            controller.enqueue(encoder.encode(line));
+          }
+        }
       } catch (err) {
-        void err;
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: "upstream stream error", type: "server_error" } })}\n\n`));
+        const detail = err instanceof Error ? err.name : "UnknownError";
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: `upstream stream error (${detail})`, type: "server_error" } })}\n\n`));
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } finally {
         reader.releaseLock();

@@ -16,7 +16,7 @@ export async function fetchXaiModels(
 ): Promise<XaiModelCatalogEntry[]> {
   const accessToken = await ensureFreshXaiToken(repo, account);
   const response = await fetch("https://cli-chat-proxy.grok.com/v1/models", {
-    headers: xaiHeaders(accessToken),
+    headers: xaiHeaders(accessToken, false, undefined, account),
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`Grok model catalog returned HTTP ${response.status}`);

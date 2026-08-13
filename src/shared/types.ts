@@ -219,6 +219,8 @@ export interface RequestLog {
   id: string;
   ts: string;
   key_id: string | null;
+  /** Label of the gateway key (joined from gateway_keys). */
+  key_label?: string | null;
   endpoint: string;
   requested_model: string;
   provider: string | null;

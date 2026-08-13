@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Copy,
   Download,
   Flame,
   ScrollText,
@@ -285,7 +286,7 @@ export default function Logs() {
       ) : list.isError ? (
         <Card>
           <EmptyState
-            icon={Icon}
+            icon={<Icon size={32} />}
             title="Failed to load logs"
             hint={(list.error as Error)?.message ?? "Something went wrong. Try again."}
           />
@@ -413,6 +414,9 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             <Detail k="Latency" v={fmtMs(l.latency_ms)} />
             {l.error && <Detail k="Error" v={l.error} />}
           </div>
+          <Payload title="Request body" value={l.request_body} />
+          <Payload title="Response body" value={l.response_body} />
+          {!l.request_body && !l.response_body && <p className="mt-4 text-xs text-text-muted">Payload capture is disabled. Set <code>TRACK_PAYLOADS=full</code> and restart Mirais to record new request and response bodies.</p>}
         </div>
       ) : null}
     </>
@@ -425,6 +429,28 @@ function Detail({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
       <p className="text-[10px] uppercase tracking-[0.16em] text-text-muted">{k}</p>
       <p className={`break-all ${mono ? "font-mono" : ""}`}>{v}</p>
     </div>
+  );
+}
+
+function Payload({ title, value }: { title: string; value: string | null | undefined }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  const copy = async () => {
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+    toast("Payload copied");
+    window.setTimeout(() => setCopied(false), 1_500);
+  };
+  return (
+    <section className="mt-4 overflow-hidden rounded-lg border border-border bg-bg-base/60">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">{title}</span>
+        <button type="button" onClick={() => void copy()} className="inline-flex items-center gap-1 text-xs text-text-muted transition hover:text-text-primary" title={`Copy ${title}`}>
+          <Copy size={13} /> {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5 text-text-primary">{value}</pre>
+    </section>
   );
 }
 

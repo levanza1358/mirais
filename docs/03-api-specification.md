@@ -6,6 +6,10 @@ Two API surfaces:
 - **Client API** (`/v1/*`) — used by AI tools; authenticated with gateway API keys (`Authorization: Bearer mirais-…`).
 - **Admin API** (`/api/*`) — used by the dashboard; intentionally passwordless, with external access controlled by a reverse proxy, firewall, VPN, or private network.
 
+### Payload logging
+
+Set `TRACK_PAYLOADS=full` in `.env` to retain request and response payloads for new gateway requests. The dashboard **Logs** detail view displays captured bodies and provides copy controls. This mode can contain user prompts, tool outputs, and model responses; use it only on a trusted machine and switch back to `meta` when troubleshooting is complete. Authorization headers and provider credentials are never recorded by request logging.
+
 ---
 
 ## A. Client API (`/v1`)
@@ -171,6 +175,13 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, tokens, latency, cost, error) |
 | GET | `/api/logs/:id` | Detail incl. payloads if `TRACK_PAYLOADS=full` |
 | DELETE | `/api/logs` | Purge (body: `{ before: "ISO-date" }`) |
+
+### Grok-4.5 reasoning and tool work
+
+- Mirais requests xAI's concise reasoning summary for Grok-4.5 and streams it in the OpenAI-compatible `reasoning_content` channel. Clients that support reasoning views can display it without mixing it into the final answer.
+- Raw internal chain-of-thought is never requested, logged, or exposed.
+- Grok-4.5 uses `reasoning.effort: "high"`, its maximum effective effort level. Requests with tools receive a verified-workflow instruction: inspect first, make minimal changes, preserve existing behavior, and verify before reporting completion.
+- Mirais waits for xAI's first SSE byte before committing a streaming response. If a connection aborts before any bytes arrive, the normal retry/failover policy can select another eligible account. Once a byte is forwarded, Mirais never replays the request, preventing duplicate tool calls. Every translated xAI stream failure is closed with `data: [DONE]` so clients do not wait indefinitely.
 
 ### Settings
 

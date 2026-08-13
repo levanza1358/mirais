@@ -152,18 +152,37 @@ export function providerRoutes(db: Database) {
         };
       } else if (provider.type === "xai" && acc.auth_kind === "oauth") {
         const accessToken = await ensureFreshXaiToken(repo, acc);
+        // This endpoint requires the same account-specific identity headers as a
+        // proxied Grok CLI request (not merely an OAuth bearer token).
         const res = await fetch("https://cli-chat-proxy.grok.com/v1/models", {
-          headers: xaiHeaders(accessToken),
-          signal: AbortSignal.timeout(15_000),
+          headers: xaiHeaders(accessToken, false, undefined, acc),
+          signal: AbortSignal.timeout(20_000),
         });
-        result = {
-          account_id: acc.id,
-          ok: res.ok,
-          status: res.status,
-          latency_ms: Date.now() - started,
-          account: acc.label,
-          detail: res.ok ? "Grok CLI login active" : `HTTP ${res.status}`,
-        };
+
+        // Handle 426 Upgrade Required (Grok CLI version enforcement)
+        if (res.status === 426) {
+          const errorText = await res.text().catch(() => "");
+          const isVersionError = errorText.includes("version") || errorText.includes("upgrade") || errorText.includes("outdated");
+          result = {
+            account_id: acc.id,
+            ok: false,
+            status: 426,
+            latency_ms: Date.now() - started,
+            account: acc.label,
+            detail: isVersionError
+              ? "Grok CLI 426: Version enforcement active. OAuth endpoint blocked. Use API key instead."
+              : `HTTP 426: ${errorText.slice(0, 200)}`,
+          };
+        } else {
+          result = {
+            account_id: acc.id,
+            ok: res.ok,
+            status: res.status,
+            latency_ms: Date.now() - started,
+            account: acc.label,
+            detail: res.ok ? "Grok CLI login active" : `HTTP ${res.status}`,
+          };
+        }
       } else if (isOAuthAccount(acc)) {
         const { usage, exhausted: quotaExhausted } = await checkCodexProviderQuota(repo, acc);
         result = {
@@ -196,7 +215,9 @@ export function providerRoutes(db: Database) {
         status: 0,
         latency_ms: Date.now() - started,
         account: acc.label,
-        detail: err instanceof Error ? err.message : String(err),
+        detail: err instanceof Error
+          ? `${err.message}${err.cause instanceof Error && err.cause.message ? `: ${err.cause.message}` : ""}`
+          : String(err),
       };
     }
 

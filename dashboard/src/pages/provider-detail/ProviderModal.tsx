@@ -71,7 +71,7 @@ export function NewProviderModal({ onClose }: { onClose: () => void }) {
         </div>
         <div>
           <label className="mb-1 block text-xs text-text-muted">Type</label>
-          <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+          <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as typeof TYPES[number] })}>
             {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </Select>
         </div>

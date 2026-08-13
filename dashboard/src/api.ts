@@ -124,7 +124,9 @@ export interface GatewayKey {
 export interface RequestLog {
   id: string;
   ts: string;
+  created_at?: string;
   key_id: string | null;
+  key_label?: string | null;
   endpoint: string;
   requested_model: string;
   provider: string | null;
@@ -178,6 +180,23 @@ export interface TokenSaverSettings {
   rules: { gitDiff: boolean; grep: boolean; ls: boolean; longOutputMaxLines: number; maxToolOutputChars?: number; collapseWhitespace?: boolean; deduplicateToolOutputs?: boolean; keepRecentToolResults?: number; gitStatus?: boolean; findTree?: boolean; buildLogs?: boolean };
 }
 
+export interface HeadroomSettings {
+  enabled: boolean;
+  keepRecent: number;
+  summarize: boolean;
+  maxChars: number;
+}
+
+export interface PonytailSettings {
+  enabled: boolean;
+  strength: "light" | "moderate" | "extreme";
+}
+
+export interface CavemanSettings {
+  enabled: boolean;
+  prompt: string;
+}
+
 export const healthInfo = {
   detailed: () => req<HealthInfo>("/api/health"),
 };
@@ -192,7 +211,10 @@ export interface HealthInfo {
 
 export interface Settings {
   token_saver: TokenSaverSettings | null;
-  terse_mode: unknown;
+  token_saver_providers: string[] | null;
+  terse_mode: CavemanSettings | null;
+  headroom: HeadroomSettings | null;
+  ponytail: PonytailSettings | null;
   log_retention_days: number;
   session_remember_default: boolean;
   network_binding?: { exposed: boolean; host: "0.0.0.0" | "127.0.0.1" };
@@ -342,6 +364,11 @@ export const providers = {
     }>("/api/xai/farm/status"),
   xaiModels: (accountId: number) =>
     req<{ models: string[] }>(`/api/xai/models?accountId=${accountId}`),
+  xaiAddApiKey: (providerId: string, apiKey: string, label?: string) =>
+    req<{ status: string; accountId: string; label: string; note?: string }>("/api/xai/add-apikey", {
+      method: "POST",
+      body: JSON.stringify({ providerId, apiKey, label }),
+    }),
 };
 
 export interface CodexQuotaWindow {
@@ -431,7 +458,7 @@ export const stats = {
 };
 
 export const logs = {
-  list: (params: { page?: number; limit?: number; status?: string; model?: string; provider?: string; kind?: string }) => {
+  list: (params: { page?: number; limit?: number; status?: string; model?: string; provider?: string; kind?: string; from?: string; to?: string }) => {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") q.set(k, String(v));
     return req<{ items: RequestLog[]; total: number }>(`/api/logs?${q}`);

@@ -207,12 +207,13 @@ export function Skeleton({ className = "" }: { className?: string }) {
 }
 
 // ── CopyButton ──
-export function CopyButton({ text, className = "" }: { text: string; className?: string }) {
+export function CopyButton({ text, className = "", disabled = false }: { text: string; className?: string; disabled?: boolean }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   return (
     <button
       type="button"
+      disabled={disabled}
       className={`text-xs text-text-muted hover:text-text-primary ${className}`}
       onClick={() => {
         navigator.clipboard.writeText(text);

@@ -379,7 +379,7 @@ function plainClone(value: unknown): unknown {
             queue: Array.isArray(snapshot.queue) ? snapshot.queue : [],
             history: Array.isArray(snapshot.history) ? snapshot.history : [],
             currentTime: typeof snapshot.currentTime === "number" ? snapshot.currentTime : 0,
-            duration: typeof snapshot.duration === "number" ? snapshot.duration : snapshot.current.duration_sec ?? 0,
+            duration: typeof snapshot.duration === "number" ? snapshot.duration : snapshot.current?.duration_sec ?? 0,
             isPlaying: !!snapshot.isPlaying,
             isBuffering: !!snapshot.isPlaying,
             presentation: snapshot.presentation ?? "player",

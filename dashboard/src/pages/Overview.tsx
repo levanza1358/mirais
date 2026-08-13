@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, XCircle, Send, Globe, KeyRound, Eye, EyeOff, RefreshCw } from "lucide-react";
-import { stats, logs, keys, providers } from "../api";
+import { stats, logs, keys, providers, type Provider } from "../api";
 import { rememberKey, storedKeyFor, forgetKey } from "../keyStore";
 import { Card, Skeleton, Badge, EmptyState, CopyButton, Button, toast, fmtNum, fmtMs, fmtTime } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -208,7 +208,7 @@ function ConnectCard() {
   );
 }
 
-function WarmupSummaryCard({ providers, loading }: { providers: Awaited<ReturnType<typeof providers.list>>; loading: boolean }) {
+function WarmupSummaryCard({ providers, loading }: { providers: Provider[]; loading: boolean }) {
   const accounts = providers.flatMap((p) => p.accounts ?? []);
   const healthy = accounts.filter((a) => a.last_warmup_status === "healthy").length;
   const rateLimited = accounts.filter((a) => a.last_warmup_status === "rate_limited").length;

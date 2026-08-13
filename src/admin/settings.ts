@@ -31,7 +31,10 @@ export function settingsRoutes(db: Database) {
   return new Elysia({ prefix: "/api/settings" })
     .get("/", () => ({
       token_saver: settings.getJson("token_saver"),
+      token_saver_providers: settings.getJson("token_saver_providers") ?? null,
       terse_mode: settings.getJson("terse_mode"),
+      headroom: settings.getJson("headroom"),
+      ponytail: settings.getJson("ponytail"),
       log_retention_days: Number(settings.get("log_retention_days") ?? 30),
       session_remember_default: settings.get("session_remember_default") === "1",
       network_binding: currentNetworkBinding(),
@@ -50,7 +53,12 @@ export function settingsRoutes(db: Database) {
       const parsed = settingsUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       if (parsed.data.token_saver) settings.setJson("token_saver", parsed.data.token_saver);
+      if (parsed.data.token_saver_providers !== undefined) {
+        settings.setJson("token_saver_providers", parsed.data.token_saver_providers);
+      }
       if (parsed.data.terse_mode) settings.setJson("terse_mode", parsed.data.terse_mode);
+      if (parsed.data.headroom) settings.setJson("headroom", parsed.data.headroom);
+      if (parsed.data.ponytail) settings.setJson("ponytail", parsed.data.ponytail);
       if (parsed.data.log_retention_days !== undefined) {
         settings.set("log_retention_days", String(parsed.data.log_retention_days));
       }
