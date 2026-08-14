@@ -98,10 +98,25 @@ async function runAutoWarmups() {
             // xAI OAuth accounts use Grok CLI endpoint (not api.x.ai)
             const { ensureFreshXaiToken, xaiHeaders } = await import("./proxy/xai");
             const accessToken = await ensureFreshXaiToken(providersRepo, acc);
-            const res = await fetch("https://cli-chat-proxy.grok.com/v1/models", {
-              headers: xaiHeaders(accessToken, false, undefined, acc),
-              signal: AbortSignal.timeout(20_000),
-            });
+            // Retry once on transient connect failures (network burst after a
+            // proxy scrape can briefly make the Grok endpoint unreachable).
+            const GROK_MODELS_URL = "https://cli-chat-proxy.grok.com/v1/models";
+            let res: Response | null = null;
+            let lastErr: unknown = null;
+            for (let attempt = 0; attempt < 2 && !res; attempt += 1) {
+              if (attempt > 0) await Bun.sleep(500 * attempt);
+              try {
+                res = await fetch(GROK_MODELS_URL, {
+                  headers: xaiHeaders(accessToken, false, undefined, acc),
+                  signal: AbortSignal.timeout(20_000),
+                });
+              } catch (err) {
+                lastErr = err;
+              }
+            }
+            if (!res) {
+              throw lastErr instanceof Error ? lastErr : new Error("Unable to connect to Grok endpoint");
+            }
             ok = res.ok;
             status = res.status;
             if (res.status === 426) {
@@ -109,6 +124,24 @@ async function runAutoWarmups() {
             } else {
               detail = res.ok ? "Grok CLI login active" : `HTTP ${res.status}`;
             }
+          } else if (p.type === "blackbox") {
+            // Blackbox has no /models endpoint — warmup via a tiny chat completion.
+            const res = await fetch(`${baseUrlFor(p)}/chat/completions`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                Authorization: `Bearer ${acc.api_key}`,
+              },
+              body: JSON.stringify({
+                model: "blackboxai/openai/gpt-5.5",
+                max_tokens: 8,
+                messages: [{ role: "user", content: "Reply with exactly: warmup ok" }],
+              }),
+              signal: AbortSignal.timeout(20_000),
+            });
+            ok = res.ok;
+            status = res.status;
+            detail = res.ok ? "Blackbox chat warmup ok" : `HTTP ${res.status}`;
           } else if (isOAuthAccount(acc)) {
             const accessToken = await ensureFreshToken(providersRepo, acc as never);
             const usage = await fetchCodexUsage(acc as never, accessToken);

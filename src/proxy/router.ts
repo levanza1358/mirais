@@ -9,7 +9,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   deepseek: "https://api.deepseek.com/v1",
   xai: "https://cli-chat-proxy.grok.com/v1",
   glm: "https://open.bigmodel.cn/api/paas/v4",
-  blackbox: "https://api.blackbox.ai/v1",
+  blackbox: "https://enterprise.blackbox.ai",
   "codebuddy-global": "https://www.codebuddy.ai/v2",
   "codebuddy-cn": "https://copilot.tencent.com/v2",
 };

@@ -155,10 +155,25 @@ export function providerRoutes(db: Database) {
         const accessToken = await ensureFreshXaiToken(repo, acc);
         // This endpoint requires the same account-specific identity headers as a
         // proxied Grok CLI request (not merely an OAuth bearer token).
-        const res = await fetch("https://cli-chat-proxy.grok.com/v1/models", {
-          headers: xaiHeaders(accessToken, false, undefined, acc),
-          signal: AbortSignal.timeout(20_000),
-        });
+        // Retry transient connect failures (DNS hiccups, burst throttle after a
+        // proxy scrape) once before declaring the account failing.
+        const GROK_MODELS_URL = "https://cli-chat-proxy.grok.com/v1/models";
+        let res: Response | null = null;
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < 2 && !res; attempt += 1) {
+          if (attempt > 0) await Bun.sleep(500 * attempt);
+          try {
+            res = await fetch(GROK_MODELS_URL, {
+              headers: xaiHeaders(accessToken, false, undefined, acc),
+              signal: AbortSignal.timeout(20_000),
+            });
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        if (!res) {
+          throw lastErr instanceof Error ? lastErr : new Error("Unable to connect to Grok endpoint");
+        }
 
         // Handle 426 Upgrade Required (Grok CLI version enforcement)
         if (res.status === 426) {
@@ -184,6 +199,29 @@ export function providerRoutes(db: Database) {
             detail: res.ok ? "Grok CLI login active" : `HTTP ${res.status}`,
           };
         }
+      } else if (provider.type === "blackbox") {
+        // Blackbox has no /models endpoint — warmup via a tiny chat completion.
+        const res = await fetch(`${baseUrlFor(provider)}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Authorization: `Bearer ${acc.api_key}`,
+          },
+          body: JSON.stringify({
+            model: "blackboxai/openai/gpt-5.5",
+            max_tokens: 8,
+            messages: [{ role: "user", content: "Reply with exactly: warmup ok" }],
+          }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        result = {
+          account_id: acc.id,
+          ok: res.ok,
+          status: res.status,
+          latency_ms: Date.now() - started,
+          account: acc.label,
+          detail: res.ok ? "Blackbox chat warmup ok" : `HTTP ${res.status}`,
+        };
       } else if (isOAuthAccount(acc)) {
         const { usage, exhausted: quotaExhausted } = await checkCodexProviderQuota(repo, acc);
         planType = usage.plan_type;

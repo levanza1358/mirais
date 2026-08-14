@@ -135,7 +135,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | PATCH | `/api/providers/:id/accounts/:accId` | Update key/priority/enabled |
 | DELETE | `/api/providers/:id/accounts/:accId` | Remove account |
 | POST | `/api/providers/:id/accounts/:accId/test` | Live test → `{ ok, latencyMs, error? }` |
-| POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, health, upstream status, latency, and detail. |
+| POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, health, upstream status, latency, and detail. xAI OAuth warmup retries one transient connection failure; Blackbox warmup uses a minimal chat completion because its upstream does not expose `/models`. |
 | POST | `/api/providers/:id/test` | Connectivity test against the upstream `/models` endpoint → `{ ok, status, latency_ms, account }`. For OAuth accounts: a token refresh stands in for the test (Codex backend has no `/models`) |
 | POST | `/api/providers/:id/sync` | Fetch full model list from upstream `/models` and register all → `{ synced, models }`. For OAuth accounts: syncs the live Codex catalog (`{codex}/models?client_version=1.0.0`) |
 | POST | `/api/providers/:id/models/:modelId/test` | Per-model test: tiny chat completion (`max_tokens: 16`) against the upstream → `{ ok, status, latency_ms, model, detail? }`. For OAuth accounts: a streaming Codex `/responses` call (backend requires `stream: true`) |
