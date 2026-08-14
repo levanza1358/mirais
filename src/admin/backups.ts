@@ -97,7 +97,7 @@ const TABLE_KEYS: Record<string, string[]> = {
   aliases: ["alias"],
   combos: ["name"],
   combo_entries: ["combo_id", "position"],
-  gateway_keys: ["key_hash"],
+  gateway_keys: ["key_plain", "key_hash"],
   settings: ["key"],
 };
 

@@ -71,7 +71,7 @@ Centered card on a subtle aurora-gradient background: logo mark, "Mirais" wordma
 └──────────────────────────────────────────────────────────────┘
 ```
 - Range switcher persists in localStorage. Empty state: friendly illustration + "Send your first request" with copyable curl.
-- **Connect your app card:** copyable gateway Base URL (`http://localhost:1463/v1`) + the single default API key, always visible with a copy button (optional eye toggle to mask). If no key exists, one `default` key is auto-created. The server stores keys hashed only; the plaintext is kept in the browser's `localStorage` (local, password-protected dashboard) so it stays copyable across sessions. Keys created on the API keys page are remembered the same way and forgotten on delete.
+- **Connect your app card:** copyable gateway Base URL (`http://localhost:1463/v1`) + the single default API key, always visible with a copy button (optional eye toggle to mask). If no key exists, one `default` key is auto-created. The server stores the key plaintext (recoverable, single-user local install); the plaintext is also mirrored in the browser's `localStorage` so it stays copyable across sessions. Keys created on the API keys page are remembered the same way and forgotten on delete.
 
 ### 3.3 Providers (`/providers`)
 Card grid of **provider presets** (1-col → 4-col on xl), driven by a static catalog (`dashboard/src/providerCatalog.ts`): OpenAI (Codex), Anthropic, BlackBoxAI, Antigravity, Gemini, OpenRouter, DeepSeek, Groq, xAI, GLM, Custom. Each card:

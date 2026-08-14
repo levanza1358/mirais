@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Eye, EyeOff, KeyRound, Pencil, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
+import { AlertTriangle, Check, Copy, KeyRound, Pencil, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
 import { keys, type GatewayKey } from "../api";
 import { forgetKey, rememberKey, storedKeyFor } from "../keyStore";
 import { Button, Card, CopyButton, EmptyState, Input, Modal, Skeleton, Switch, fmtTime, toast } from "../components/ui";
@@ -28,11 +28,11 @@ export default function Keys() {
   const [editing, setEditing] = useState<GatewayKey | null>(null);
   const [rotatedKey, setRotatedKey] = useState<{ label: string; key: string } | null>(null);
   const [copied, setCopied] = useState(false);
-  const [showSecret, setShowSecret] = useState(true);
 
   const list = useQuery({ queryKey: ["keys"], queryFn: keys.list });
   const primaryKey = useMemo(() => (list.data ?? [])[0] ?? null, [list.data]);
-  const remembered = primaryKey ? storedKeyFor(primaryKey.key_prefix) : null;
+  // Key is persisted plaintext server-side — always visible and copyable.
+  const remembered = primaryKey ? (primaryKey.key ?? storedKeyFor(primaryKey.key_prefix) ?? null) : null;
   const invalidate = () => qc.invalidateQueries({ queryKey: ["keys"] });
 
   const toggle = useMutation({
@@ -44,10 +44,9 @@ export default function Keys() {
   const createFirst = useMutation({
     mutationFn: () => keys.create({ label: "default" }),
     onSuccess: (k) => {
-      rememberKey(k.key_prefix, k.plaintext);
+      rememberKey(k.key_prefix, k.key ?? k.plaintext);
       invalidate();
-      setRotatedKey({ label: k.label, key: k.plaintext });
-      setShowSecret(true);
+      setRotatedKey({ label: k.label, key: k.key ?? k.plaintext });
       toast("Global API key generated");
     },
     onError: (e) => toast(e.message, "error"),
@@ -58,10 +57,9 @@ export default function Keys() {
     onSuccess: (k) => {
       const previousPrefix = rotate.variables?.key_prefix;
       if (previousPrefix) forgetKey(previousPrefix);
-      rememberKey(k.key_prefix, k.plaintext);
+      rememberKey(k.key_prefix, k.key ?? k.plaintext);
       invalidate();
-      setRotatedKey({ label: k.label, key: k.plaintext });
-      setShowSecret(true);
+      setRotatedKey({ label: k.label, key: k.key ?? k.plaintext });
       toast("API key rotated");
     },
     onError: (e) => toast(e.message, "error"),
@@ -132,18 +130,9 @@ export default function Keys() {
                   </div>
                   <div className="flex items-center gap-2">
                     <code className="min-w-0 flex-1 truncate rounded-xl border border-white/10 bg-bg-base/80 px-3 py-2 font-mono text-xs text-accent">
-                      {showSecret ? (remembered ?? `${primaryKey.key_prefix}••••••••••••••••`) : `${primaryKey.key_prefix}${"•".repeat(18)}`}
+                      {remembered ?? `${primaryKey.key_prefix}••••••••••••••••`}
                     </code>
-                    <button
-                      type="button"
-                      onClick={() => setShowSecret((v) => !v)}
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-bg-base/80 text-text-muted hover:bg-white/10 hover:text-text-primary"
-                      aria-label={showSecret ? "Hide key" : "Show key"}
-                      title={showSecret ? "Hide key" : "Show key"}
-                    >
-                      {showSecret ? <EyeOff size={15} /> : <Eye size={15} />}
-                    </button>
-                    {remembered ? <CopyButton text={remembered} /> : <span className="text-[10px] text-text-muted">generate to copy</span>}
+                    <CopyButton text={remembered ?? ""} />
                   </div>
                 </div>
               </div>

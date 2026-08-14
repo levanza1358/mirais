@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, XCircle, Send, Globe, KeyRound, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { CheckCircle2, XCircle, Send, Globe, KeyRound, RefreshCw } from "lucide-react";
 import { stats, logs, keys, providers, type Provider } from "../api";
 import { rememberKey, storedKeyFor, forgetKey } from "../keyStore";
 import { Card, Skeleton, Badge, EmptyState, CopyButton, Button, toast, fmtNum, fmtMs, fmtTime } from "../components/ui";
@@ -116,7 +116,6 @@ function ConnectCard() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["keys"], queryFn: keys.list });
   const [revealed, setRevealed] = useState<string | null>(null);
-  const [show, setShow] = useState(true);
 
   const baseUrl = `${window.location.origin}/v1`;
   const firstKey = (list.data ?? [])[0];
@@ -124,9 +123,8 @@ function ConnectCard() {
   const createFirst = useMutation({
     mutationFn: () => keys.create({ label: "default" }),
     onSuccess: (k) => {
-      rememberKey(k.key_prefix, k.plaintext);
-      setRevealed(k.plaintext);
-      setShow(true);
+      rememberKey(k.key_prefix, k.key ?? k.plaintext);
+      setRevealed(k.key ?? k.plaintext);
       qc.invalidateQueries({ queryKey: ["keys"] });
       toast("Global API key generated");
     },
@@ -137,9 +135,8 @@ function ConnectCard() {
     mutationFn: (keyId: string) => keys.rotate(keyId),
     onSuccess: (k) => {
       if (firstKey) forgetKey(firstKey.key_prefix);
-      rememberKey(k.key_prefix, k.plaintext);
-      setRevealed(k.plaintext);
-      setShow(true);
+      rememberKey(k.key_prefix, k.key ?? k.plaintext);
+      setRevealed(k.key ?? k.plaintext);
       qc.invalidateQueries({ queryKey: ["keys"] });
       toast("API key rotated");
     },
@@ -147,10 +144,11 @@ function ConnectCard() {
   });
 
   useEffect(() => {
-    if (firstKey && !revealed) setRevealed(storedKeyFor(firstKey.key_prefix));
+    if (firstKey && !revealed) setRevealed(firstKey.key ?? storedKeyFor(firstKey.key_prefix));
   }, [firstKey, revealed]);
 
-  const keyDisplay = revealed ?? (firstKey ? `${firstKey.key_prefix}••••••••••••••••` : "");
+  // Key is persisted plaintext server-side — always visible and copyable.
+  const keyDisplay = revealed ?? firstKey?.key ?? `${firstKey?.key_prefix ?? ""}••••••••••••••••`;
 
   return (
     <Card className="mb-0 border-accent/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))]">
@@ -180,19 +178,8 @@ function ConnectCard() {
             <Skeleton className="h-4 w-48" />
           ) : firstKey ? (
             <>
-              <code className="flex-1 truncate font-mono text-xs text-accent">
-                {show ? keyDisplay : "••••••••••••••••••••"}
-              </code>
-              <button onClick={() => setShow(!show)} className="shrink-0 text-text-muted hover:text-text-primary" aria-label={show ? "Hide key" : "Show key"}>
-                {show ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-              {revealed ? (
-                <CopyButton text={revealed} />
-              ) : (
-                <span className="shrink-0 text-[10px] text-text-muted" title="This key was created elsewhere and isn't remembered by this browser. Generate a new key to get a fresh copyable key.">
-                  not copyable
-                </span>
-              )}
+              <code className="flex-1 truncate font-mono text-xs text-accent">{keyDisplay}</code>
+              <CopyButton text={keyDisplay} />
               <Button size="sm" variant="outline" onClick={() => rotate.mutate(firstKey.id)} loading={rotate.isPending}>
                 <RefreshCw size={13} /> Generate new key
               </Button>

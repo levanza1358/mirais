@@ -8,7 +8,7 @@ export class KeysRepo {
   list(): Array<Omit<GatewayKey, "key_hash">> {
     return this.db
       .query(
-        `SELECT id, label, key_prefix, enabled, allowed_models, rate_limit_rpm, concurrency,
+        `SELECT id, label, key_prefix, key_plain, enabled, allowed_models, rate_limit_rpm, concurrency,
                 daily_token_budget, expires_at, created_at, last_used_at
          FROM gateway_keys ORDER BY created_at DESC`,
       )
@@ -20,6 +20,10 @@ export class KeysRepo {
   }
 
   getByPlaintextKey(key: string): GatewayKey | null {
+    // Primary lookup: plaintext column. Legacy fallback: sha256 hash for
+    // databases that predate the 0021 migration.
+    const byPlain = this.db.query("SELECT * FROM gateway_keys WHERE key_plain = ?").get(key) as GatewayKey | null;
+    if (byPlain) return byPlain;
     const hash = sha256Hex(key);
     return (this.db.query("SELECT * FROM gateway_keys WHERE key_hash = ?").get(hash) as GatewayKey) ?? null;
   }
@@ -40,13 +44,14 @@ export class KeysRepo {
     const id = ulid();
     this.db
       .query(
-        `INSERT INTO gateway_keys (id, label, key_hash, key_prefix, allowed_models, rate_limit_rpm, concurrency, daily_token_budget, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO gateway_keys (id, label, key_hash, key_plain, key_prefix, allowed_models, rate_limit_rpm, concurrency, daily_token_budget, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         input.label,
         sha256Hex(plaintext),
+        plaintext,
         plaintext.slice(0, 12),
         input.allowedModels ? JSON.stringify(input.allowedModels) : null,
         input.rateLimitRpm ?? null,
@@ -62,8 +67,8 @@ export class KeysRepo {
     if (!cur) return null;
     const plaintext = randomApiKey();
     this.db
-      .query("UPDATE gateway_keys SET key_hash = ?, key_prefix = ? WHERE id = ?")
-      .run(sha256Hex(plaintext), plaintext.slice(0, 12), id);
+      .query("UPDATE gateway_keys SET key_hash = ?, key_plain = ?, key_prefix = ? WHERE id = ?")
+      .run(sha256Hex(plaintext), plaintext, plaintext.slice(0, 12), id);
     return { record: this.get(id)!, plaintext };
   }
 

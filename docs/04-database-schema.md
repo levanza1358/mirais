@@ -91,11 +91,12 @@ CREATE TABLE combo_entries (
   UNIQUE(combo_id, position)
 );
 
--- ── Gateway API keys (hashed) ─────────────────────────────
+-- ── Gateway API keys (plaintext, local install) ──────────
 CREATE TABLE gateway_keys (
   id                 TEXT PRIMARY KEY,
   label              TEXT NOT NULL,
-  key_hash           TEXT NOT NULL UNIQUE,   -- sha256 hex of "mirais-…" key
+  key_hash           TEXT NOT NULL UNIQUE,   -- sha256 hex (legacy lookup fallback)
+  key_plain          TEXT,                   -- plaintext key (0021+); local single-user install
   key_prefix         TEXT NOT NULL,          -- "mirais-a1b2" for display
   enabled            INTEGER NOT NULL DEFAULT 1,
   allowed_models     TEXT,                   -- JSON array; null = all
@@ -158,7 +159,7 @@ CREATE TABLE settings (
 
 **Backups** — SQLite online backup: `bun run scripts/backup.ts` copies `mirais.db` via the `VACUUM INTO` command to `DATA_DIR/backups/mirais-<ts>.db` (keep last 7).
 
-**Secrets at rest** — `provider_accounts.api_key` is plaintext by design (needed to call upstreams). `DATA_DIR` must be `chmod 700` on Ubuntu and ACL-restricted on Windows. Gateway keys are hashed and never recoverable — only re-issuable.
+**Secrets at rest** — `provider_accounts.api_key` is plaintext by design (needed to call upstreams). `DATA_DIR` must be `chmod 700` on Ubuntu and ACL-restricted on Windows. Gateway keys are stored plaintext (migration 0021+) so operators can recover them; the legacy `key_hash` column remains for lookup fallback on pre-0021 databases.
 
 **Settings keys**
 

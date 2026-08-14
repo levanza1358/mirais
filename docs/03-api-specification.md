@@ -163,8 +163,8 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/keys` | List (never returns plaintext; shows prefix, limits, usage) |
-| POST | `/api/keys` | `{ label, allowedModels?: [], rateLimitRpm?, concurrency?, dailyTokenBudget?, expiresAt? }` → returns the key record plus a `plaintext` field — **shown once, never stored** |
+| GET | `/api/keys` | List (includes plaintext `key` field; also shows prefix, limits, usage) |
+| POST | `/api/keys` | `{ label, allowedModels?: [], rateLimitRpm?, concurrency?, dailyTokenBudget?, expiresAt? }` → returns the key record plus a `plaintext` field; the plaintext is **persisted** (recoverable) |
 | PATCH | `/api/keys/:id` | Update limits, enable/disable |
 | DELETE | `/api/keys/:id` | Revoke |
 | GET | `/api/keys/:id/usage?range=…` | Per-key stats |

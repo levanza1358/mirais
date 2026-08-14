@@ -26,7 +26,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 - [x] `accounts/pool.ts`: round-robin + enabled filter
 - [x] `routing/cooldown.ts` + `failover.ts`: retriable classification, backoff, attempt loop
 - [x] `http/clientRoutes.ts`: `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health`
-- [x] Gateway-key auth middleware (hash lookup, enabled, expiry)
+- [x] Gateway-key auth middleware (plaintext/hash lookup, enabled, expiry)
 - ✅ tests: translation fixtures pass; failover test with mock upstreams (429 → next account → success); curl smoke against a real provider via env key
 
 ## Phase 3 — Token Saver & Usage (1½ days) — DONE

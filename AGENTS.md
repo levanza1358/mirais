@@ -46,7 +46,7 @@ bun run smoke          # post-deploy verification
 4. **Every DB change = new migration** in `src/store/migrations/` (never edit applied migrations).
 5. **Errors follow the spec.** Client API → OpenAI-shaped errors (doc 03). Admin API → `{ "error": "…" }`.
 6. **Streaming is first-class.** Never buffer full SSE responses in the proxy path.
-7. **Security invariants (never break):** gateway keys stored hashed only. The Mirais dashboard has no application-level password or login; control external access with a reverse proxy, firewall, VPN, or private network.
+7. **Security invariants (never break):** the gateway key is a plaintext credential stored in the local DB (single-user install, recoverable — see RULES.md R1.2). The Mirais dashboard has no application-level password or login; control external access with a reverse proxy, firewall, VPN, or private network.
 8. **Cross-platform always.** No hardcoded path separators, no OS-specific APIs; if it can't run on both Windows and Ubuntu, it doesn't merge.
 9. **Tests:** translators and token saver require golden-fixture unit tests; new endpoints require integration tests. See doc 02 §6.
 10. **Update docs in the same PR** when behavior, API, schema, or UI changes.
@@ -57,7 +57,6 @@ bun run smoke          # post-deploy verification
 
 - Do not add a dependency without checking doc 02 §1 first (most needs are covered by Bun built-ins).
 - Do not log request/response bodies unless `TRACK_PAYLOADS=full` is set.
-- Do not store plaintext gateway keys — only SHA-256 hash + display prefix.
 - Do not introduce `any` types, `// @ts-ignore`, or console.log debugging in committed code.
 - Do not break the exit criteria of the current phase (doc 06) — work phase by phase.
 - **Never rotate, regenerate, revoke, or disable the global gateway API key, run a one-off key creation, or touch `gateway_keys` rows in any way, without explicit confirmation from the user.** The user owns the key and rotates it manually from the dashboard's "Generate new key" button (or the `mirais rotate` CLI command). If a task seems to require touching the key — pause and ask. This rule is independent of any other permission; it overrides general workflow guidance.

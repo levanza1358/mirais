@@ -47,7 +47,7 @@ mirais/
 │   │   ├── authRoutes.ts      # /api/auth/login|logout|me
 │   │   └── static.ts          # serve dashboard build + landing redirect
 │   ├── auth/
-│   │   ├── gatewayKeys.ts     # verify client API keys (hash lookup, ACL, budgets, rate limit)
+│   │   ├── gatewayKeys.ts     # verify client API keys (plaintext/hash lookup, ACL, budgets, rate limit)
 │   │   └── session.ts         # admin password login, signed cookie
 │   ├── translate/
 │   │   ├── canonical.ts       # canonical request/response types (OpenAI-based)

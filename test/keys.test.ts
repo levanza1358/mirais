@@ -15,21 +15,27 @@ beforeEach(() => {
 });
 
 describe("KeysRepo", () => {
-  test("create returns plaintext once, stores only hash + prefix", () => {
+  test("create returns plaintext once, stores plaintext + prefix", () => {
     const { record, plaintext } = repo.create({ label: "dev" });
     expect(plaintext.startsWith("mirais-")).toBe(true);
     expect(record.key_prefix).toBe(plaintext.slice(0, 12));
-    expect(record.key_hash).not.toBe(plaintext);
+    expect(record.key_plain).toBe(plaintext);
+    // legacy hash column still populated for backward compatibility
     expect(record.key_hash).toMatch(/^[0-9a-f]{64}$/);
-    // list() never exposes the hash
+    // list() exposes the plaintext column
     const listed = repo.list();
-    expect(listed[0]).not.toHaveProperty("key_hash");
+    expect(listed[0]?.key_plain).toBe(plaintext);
   });
 
-  test("getByPlaintextKey finds by hash", () => {
+  test("getByPlaintextKey finds by plaintext (and legacy hash)", () => {
     const { plaintext } = repo.create({ label: "a" });
     expect(repo.getByPlaintextKey(plaintext)?.label).toBe("a");
     expect(repo.getByPlaintextKey("mirais-wrong")).toBeNull();
+    // Legacy hash-only DBs still authenticate: clear the plaintext column,
+    // lookup must fall back to the sha256 hash.
+    const db2 = (repo as unknown as { db: import("bun:sqlite").Database }).db;
+    db2.query("UPDATE gateway_keys SET key_plain = NULL").run();
+    expect(repo.getByPlaintextKey(plaintext)?.label).toBe("a");
   });
 
   test("update patches fields", () => {

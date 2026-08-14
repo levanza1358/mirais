@@ -206,6 +206,8 @@ export interface GatewayKey {
   id: string;
   label: string;
   key_hash: string;
+  /** Plaintext key — persisted so operators can recover it (local, single-user install). */
+  key_plain?: string | null;
   key_prefix: string;
   enabled: number;
   allowed_models: string | null;

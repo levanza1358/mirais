@@ -78,7 +78,7 @@ export function comboRoutes(db: Database) {
 export function keyRoutes(db: Database) {
   const repo = new KeysRepo(db);
   return new Elysia({ prefix: "/api/keys" })
-    .get("/", () => repo.list())
+    .get("/", () => repo.list().map((k) => ({ ...k, key: k.key_plain ?? null })))
     .post("/", ({ body, set }) => {
       const parsed = keyCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
@@ -93,7 +93,7 @@ export function keyRoutes(db: Database) {
       set.status = 201;
       const { key_hash, ...rest } = record;
       void key_hash;
-      return { ...rest, plaintext };
+      return { ...rest, key: record.key_plain ?? plaintext, plaintext };
     })
     .patch("/:id", ({ params, body }) => {
       const parsed = keyUpdateSchema.safeParse(body);
@@ -102,7 +102,7 @@ export function keyRoutes(db: Database) {
       if (!record) throw new AdminError(404, "Key not found");
       const { key_hash, ...rest } = record;
       void key_hash;
-      return rest;
+      return { ...rest, key: record.key_plain };
     })
     .post("/:id/rotate", ({ params }) => {
       const rotated = repo.rotate(params.id);
@@ -110,6 +110,6 @@ export function keyRoutes(db: Database) {
       log.info("gateway key rotated", { label: rotated.record.label });
       const { key_hash, ...rest } = rotated.record;
       void key_hash;
-      return { ...rest, plaintext: rotated.plaintext };
+      return { ...rest, key: rotated.record.key_plain ?? rotated.plaintext, plaintext: rotated.plaintext };
     });
 }

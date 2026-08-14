@@ -177,7 +177,7 @@ Admin API errors: `{ "error": "message" }` with proper HTTP status.
 ## 8. Security Notes
 
 - Dashboard behind password → session cookie (`HttpOnly`, `SameSite=Lax`, `Secure` when behind HTTPS).
-- Gateway API keys stored **hashed** (SHA-256 of key) — plaintext shown only once at creation.
+- Gateway API keys stored **plaintext** (single-user local install, recoverable) — legacy `key_hash` column kept for lookup fallback.
 - Constant-time key comparison.
 - Rate limiting per key (requests/min, concurrency, token budget/day).
 - Bind `127.0.0.1` by default; `HOST=0.0.0.0` only when explicitly exposing.

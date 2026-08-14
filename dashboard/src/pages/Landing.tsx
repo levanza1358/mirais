@@ -41,8 +41,7 @@ export default function Landing() {
   );
 
   const primaryKey = keysQ.data?.[0];
-  const remembered = primaryKey ? storedKeyFor(primaryKey.key_prefix) : null;
-  const visibleKey = remembered ?? (primaryKey ? `${primaryKey.key_prefix}${"•".repeat(18)}` : "mirais-••••••••••••••••");
+  const visibleKey = primaryKey?.key ?? storedKeyFor(primaryKey?.key_prefix ?? "") ?? (primaryKey ? `${primaryKey.key_prefix}${"•".repeat(18)}` : "mirais-••••••••••••••••");
 
   const baseUrl = typeof window !== "undefined"
     ? `${window.location.protocol}//${window.location.host}/v1`
@@ -85,7 +84,7 @@ export default function Landing() {
             </div>
             <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-bg-base/70 px-3 py-2.5">
               <code className="flex-1 truncate font-mono text-xs text-accent">{visibleKey}</code>
-              {remembered ? <CopyButton text={remembered} /> : <CopyButton text="no-key-yet" disabled />}
+              {primaryKey?.key ? <CopyButton text={primaryKey.key} /> : <CopyButton text="no-key-yet" disabled />}
             </div>
           </Card>
         </section>

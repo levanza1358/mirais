@@ -111,6 +111,8 @@ export interface GatewayKey {
   id: string;
   label: string;
   key_prefix: string;
+  /** Plaintext key, returned by list/create/rotate. */
+  key?: string | null;
   enabled: number;
   allowed_models: string | null;
   rate_limit_rpm: number | null;

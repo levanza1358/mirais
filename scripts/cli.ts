@@ -198,13 +198,27 @@ async function restart(): Promise<void> {
 async function autostart(mode: "on" | "off"): Promise<void> {
   ensureEnvFile();
   if (process.platform === "win32") {
-    const taskName = "Mirais";
+    // Use the per-user Startup folder instead of Task Scheduler: creating a
+    // scheduled task requires admin elevation, but dropping a launcher into
+    // the Startup folder does not. Runs after login in the user's session so
+    // bun resolves from PATH.
+    const startupDir = path.join(
+      process.env.APPDATA ?? path.join(process.env.USERPROFILE ?? "", "AppData", "Roaming"),
+      "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+    );
+    const launcher = path.join(startupDir, "Mirais.cmd");
     if (mode === "on") {
-      const command = `PowerShell -NoProfile -ExecutionPolicy Bypass -Command \"Set-Location '${repoRoot.replace(/'/g, "''")}'; bun run scripts/cli.ts start\"`;
-      await shell("schtasks", ["/Create", "/F", "/SC", "ONSTART", "/RL", "HIGHEST", "/TN", taskName, "/TR", command]);
-      console.log("mirais autostart enabled (Task Scheduler)");
+      try { fs.mkdirSync(startupDir, { recursive: true }); } catch { /* already exists */ }
+      // `start` already redirects its own output to the log file, so the
+      // launcher needs no redirect — keeping the cmd /c string free of
+      // nested quotes (which would break when repoRoot contains spaces).
+      fs.writeFileSync(
+        launcher,
+        `@echo off\r\ncd /d "${repoRoot}"\r\nstart "" /min cmd /c "bun run scripts\\cli.ts start"\r\n`,
+      );
+      console.log(`mirais autostart enabled (Startup folder: ${launcher})`);
     } else {
-      await shell("schtasks", ["/Delete", "/F", "/TN", taskName]);
+      try { fs.unlinkSync(launcher); } catch { /* already gone */ }
       console.log("mirais autostart disabled");
     }
     return;
