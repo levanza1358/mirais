@@ -41,6 +41,8 @@ curl http://localhost:1463/v1/chat/completions \
 - `X-Mirais-No-Fallback: 1` — fail on first upstream error instead of trying the chain.
 - `X-Mirais-Session-Id: <opaque-id>` — optional stable conversation ID. For xAI Grok CLI OAuth routes, Mirais maps this to the Grok CLI session/conversation and tracks the turn index in memory. `X-Grok-Session-Id` is accepted as a compatibility alias.
 
+**Tool calling:** When a tools-enabled upstream emits DeepSeek DSML markup in text deltas, Mirais converts it incrementally to OpenAI `delta.tool_calls` events. DSML markup is never forwarded as `delta.content`; valid calls finish with `finish_reason: "tool_calls"`. Malformed DSML terminates the SSE stream with an OpenAI-shaped `dsml_parse_error` event followed by `[DONE]`.
+
 **Universal reasoning/thinking block:**
 Clients can control reasoning/thinking without speaking provider-specific dialect:
 ```json

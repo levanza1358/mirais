@@ -13,6 +13,7 @@ import { chatCompletionsSchema, anthropicMessagesSchema, responsesCreateSchema }
 import { anthropicToOpenaiRequest } from "./translator/anthropic-to-openai";
 import { openaiToAnthropicResponse } from "./translator/openai-to-anthropic";
 import { OpenAIToAnthropicStreamTranslator } from "./translator/stream";
+import { dsmlToOpenAiStream } from "./translator/dsml";
 import { GatewayError } from "../shared/errors";
 import { ProvidersRepo } from "../store/repos/providers";
 import { AliasesRepo, CombosRepo } from "../store/repos/routing";
@@ -156,7 +157,7 @@ export function v1Routes(db: Database) {
         set.headers["cache-control"] = "no-cache";
         set.headers["connection"] = "keep-alive";
         set.headers["x-accel-buffering"] = "no";
-        const tap = tapOpenAiStream(result.stream);
+        const tap = tapOpenAiStream(req.tools?.length ? dsmlToOpenAiStream(result.stream) : result.stream);
         Promise.all([result.usagePromise, tap.textPromise])
           .then(([usage, text]) => {
             logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
