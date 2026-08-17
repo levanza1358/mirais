@@ -13,6 +13,7 @@
 | State/data (dashboard) | **TanStack Query** | Server-state caching for admin REST API. |
 | Token counting | `js-tiktoken` (OpenAI) + heuristic estimator (Anthropic) | Good-enough usage stats without native deps. |
 | Logging | tiny structured JSON logger (pino-style, hand-rolled) | No native deps; write to stdout + optional file. |
+| xAI Farm | Python 3 `.venv` + Camoufox | Optional automation dependencies remain isolated under the Mirais install root. |
 | Packaging | Bun build → static dashboard embedded; optional Docker | `bun build --compile` produces a single binary per OS (win-x64, linux-x64) for v2; v1 ships source + Docker. |
 
 **Explicitly avoided:** Next.js (too heavy for a localhost gateway), native npm modules like `better-sqlite3` (cross-compiling pain on Windows), Redis (in-memory state is enough), ORMs (raw SQL + thin repos are simpler and auditable).

@@ -428,6 +428,12 @@ export class XaiStreamTranslator {
   private toolCallIndices = new Map<string, number>();
   private toolCallArguments = new Map<number, string>();
   private outputToolCallIndices = new Map<number, number>();
+  // Grok 4.6 (and some builds) emit tool calls as plain text of the form
+  // "tool_calls:\n- <name>\n<json args>" inside output_text.delta instead of
+  // structured function_call items. Buffer content and convert that pattern
+  // into delta.tool_calls so clients never see the raw marker.
+  private textBuffer = "";
+  private grokToolBuffer: string | null = null;
 
   constructor(model: string) {
     this.model = model;
@@ -497,7 +503,7 @@ export class XaiStreamTranslator {
         const delta = parsed.delta as string | undefined;
         if (delta) {
           if (!this.started) out.push(startChunk());
-          out.push(this.chunk({ content: delta }, null));
+          this.processTextDelta(delta, out);
         }
         break;
       }
@@ -569,6 +575,7 @@ export class XaiStreamTranslator {
           };
         }
         if (!this.started) out.push(startChunk());
+        this.flushPendingText(out);
         out.push(this.chunk({}, this.sawToolCall ? "tool_calls" : "stop"));
         out.push("data: [DONE]\n\n");
         break;
@@ -602,6 +609,119 @@ export class XaiStreamTranslator {
 
   result(): { usage: Usage | null } {
     return { usage: this.usage };
+  }
+
+  /** Flush any buffered text/tool-call content at the end of the stream. */
+  finish(): string[] {
+    const out: string[] = [];
+    this.flushPendingText(out);
+    return out;
+  }
+
+  /**
+   * Grok 4.6 emits tool calls as plain text of the form:
+   *
+   *   tool_calls:
+   *   - run_command
+   *   {"command":"...","timeout_ms":20000.0}
+   *
+   * This method buffers content deltas and, when that pattern is detected,
+   * emits delta.tool_calls instead of forwarding the raw marker text.
+   */
+  private processTextDelta(text: string, out: string[]): void {
+    if (this.grokToolBuffer !== null) {
+      this.grokToolBuffer += text;
+      this.flushGrokToolBuffer(out);
+      return;
+    }
+    this.textBuffer += text;
+    const markerIndex = this.textBuffer.search(/tool_calls\s*:/i);
+    if (markerIndex === -1) {
+      const keep = Math.min(this.textBuffer.length, 64);
+      const emitText = this.textBuffer.slice(0, -keep);
+      if (emitText) out.push(this.chunk({ content: emitText }, null));
+      this.textBuffer = this.textBuffer.slice(-keep);
+      return;
+    }
+    const before = this.textBuffer.slice(0, markerIndex);
+    if (before) out.push(this.chunk({ content: before }, null));
+    this.grokToolBuffer = this.textBuffer.slice(markerIndex);
+    this.textBuffer = "";
+    this.flushGrokToolBuffer(out);
+  }
+
+  private flushGrokToolBuffer(out: string[]): void {
+    const buffer = this.grokToolBuffer;
+    if (buffer === null) return;
+    const nameMatch = buffer.match(/tool_calls\s*:\s*[\r\n]+\s*-\s*([A-Za-z_][\w.-]*)[\r\n]+/);
+    if (!nameMatch) {
+      if (buffer.length > 512) {
+        out.push(this.chunk({ content: buffer }, null));
+        this.grokToolBuffer = null;
+      }
+      return;
+    }
+    const jsonStart = nameMatch.index! + nameMatch[0].length;
+    if (buffer[jsonStart] !== "{") {
+      if (buffer.length > 512) {
+        out.push(this.chunk({ content: buffer }, null));
+        this.grokToolBuffer = null;
+      }
+      return;
+    }
+    const end = this.findJsonEnd(buffer, jsonStart);
+    if (end === -1) return; // wait for the rest of the JSON
+
+    const name = nameMatch[1];
+    const args = buffer.slice(jsonStart, end);
+    const index = this.nextToolCallIndex++;
+    const callId = `call_${ulid()}`;
+    this.toolCallIndices.set(callId, index);
+    this.toolCallArguments.set(index, args);
+    this.sawToolCall = true;
+    out.push(this.chunk({
+      tool_calls: [{ index, id: callId, type: "function", function: { name, arguments: "" } }],
+    }, null));
+    out.push(this.chunk({ tool_calls: [{ index, function: { arguments: args } }] }, null));
+
+    const tail = buffer.slice(end);
+    this.grokToolBuffer = tail.length > 512 ? null : tail;
+    if (tail) out.push(this.chunk({ content: tail }, null));
+  }
+
+  /** Return the index just past the balanced JSON object starting at `start`, or -1. */
+  private findJsonEnd(buffer: string, start: number): number {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < buffer.length; i++) {
+      const ch = buffer[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) return i + 1;
+      }
+    }
+    return -1;
+  }
+
+  private flushPendingText(out: string[]): void {
+    if (this.grokToolBuffer !== null) {
+      // A dangling tool_calls marker with no completed block — emit as text.
+      if (this.grokToolBuffer) out.push(this.chunk({ content: this.grokToolBuffer }, null));
+      this.grokToolBuffer = null;
+    }
+    if (this.textBuffer) {
+      out.push(this.chunk({ content: this.textBuffer }, null));
+      this.textBuffer = "";
+    }
   }
 
   private chunk(delta: Record<string, unknown>, finishReason: string | null): string {
@@ -894,6 +1014,9 @@ export function xaiResponsesStreamToChat(
           for (const line of translator.handleEvent(ev.event, ev.data)) {
             controller.enqueue(encoder.encode(line));
           }
+        }
+        for (const line of translator.finish()) {
+          controller.enqueue(encoder.encode(line));
         }
       } catch (err) {
         const detail = err instanceof Error ? err.name : "UnknownError";

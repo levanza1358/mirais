@@ -37,8 +37,8 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 # ============================================================
 # CONFIG
 # ============================================================
-# Camoufox cache directory (project-local)
-CAMOUFOX_CACHE = Path(__file__).parent.parent.parent / ".camoufox"
+# Camoufox cache directory (installation-local)
+CAMOUFOX_CACHE = Path(os.environ.get("CAMOUFOX_CACHE_DIR", Path(__file__).parent.parent.parent / ".camoufox"))
 CAMOUFOX_CACHE.mkdir(exist_ok=True)
 os.environ["CAMOUFOX_CACHE_DIR"] = str(CAMOUFOX_CACHE)
 
@@ -349,17 +349,160 @@ class XaiFarmBot:
 
         return result
 
+    def _check_required_consents(self, page) -> None:
+        """Tick any visible, unchecked consent/terms checkboxes on the page.
+
+        xAI's sign-up form gates the submit button behind agreeing to its
+        terms, and the checkbox can be a styled div or a native checkbox input.
+        """
+        selectors = [
+            'input[type="checkbox"]',
+            'input[role="checkbox"]',
+            '[role="checkbox"]',
+            'button[role="checkbox"]',
+        ]
+        for selector in selectors:
+            try:
+                boxes = page.locator(selector).all()
+            except Exception:
+                continue
+            for box in boxes:
+                try:
+                    if not box.is_visible():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    if box.is_checked():
+                        continue
+                except Exception:
+                    pass
+                try:
+                    box.click(timeout=2000)
+                    time.sleep(0.3)
+                except Exception:
+                    # Styled checkbox: click the nearest label/parent.
+                    try:
+                        box.evaluate("el => el.click()")
+                        time.sleep(0.3)
+                    except Exception:
+                        pass
+
+    def _click_positive_auth_button(self, page) -> None:
+        """Click the device-authorization confirmation (Allow) button.
+
+        xAI's consent page has changed label/element over time, so this tries a
+        broad set of positive labels across button, submit, and link controls.
+        """
+        patterns = [
+            re.compile(r"^Allow$", re.IGNORECASE),
+            re.compile(r"^Allow access$", re.IGNORECASE),
+            re.compile(r"^Authorize$", re.IGNORECASE),
+            re.compile(r"^Authorize app$", re.IGNORECASE),
+            re.compile(r"^Approve$", re.IGNORECASE),
+            re.compile(r"^Approve access$", re.IGNORECASE),
+            re.compile(r"^Yes, allow$", re.IGNORECASE),
+            re.compile(r"^Grant access$", re.IGNORECASE),
+            re.compile(r"^Confirm$", re.IGNORECASE),
+        ]
+        for pattern in patterns:
+            controls = [
+                page.get_by_role("button", name=pattern),
+                page.get_by_role("link", name=pattern),
+            ]
+            for label in ("allow", "authorize", "approve", "grant", "confirm"):
+                controls.append(page.locator(f'input[type="submit"][value*="{label}" i]'))
+            for control in controls:
+                try:
+                    control.first.wait_for(state="visible", timeout=4000)
+                    control.first.click(timeout=4000)
+                    return
+                except Exception:
+                    continue
+        # Fallback: click any visible button whose accessible name contains a
+        # positive keyword, avoiding deny actions.
+        deny_keywords = ("deny", "cancel", "reject", "no", "not allow", "decline")
+        try:
+            buttons = page.locator("button, input[type=submit], a[role=button]").all()
+        except Exception:
+            raise RuntimeError("Browser closed before the device authorization confirmation")
+        for btn in buttons:
+            try:
+                name = (btn.inner_text() or btn.get_attribute("value") or btn.get_attribute("aria-label") or "").strip()
+            except Exception:
+                continue
+            if not name:
+                continue
+            lower = name.lower()
+            if any(k in lower for k in deny_keywords):
+                continue
+            if any(k in lower for k in ("allow", "authorize", "approve", "grant", "confirm", "continue")):
+                try:
+                    btn.click(timeout=4000)
+                    return
+                except Exception:
+                    continue
+        raise RuntimeError("Could not find the positive device authorization confirmation button")
+
+    def _ensure_logged_in(self, page, force: bool = False) -> None:
+        """Ensure the browser session is authenticated, signing in if necessary.
+
+        The xAI sign-up flow sometimes persists a session and sometimes not.
+        We first probe /account: if the session is already authenticated we
+        keep it (re-login can actually break a valid session). Only when the
+        probe bounces to sign-in — or `force` is set — do we re-authenticate.
+        """
+        if not force:
+            page.goto("https://accounts.x.ai/account", wait_until="networkidle", timeout=30000)
+            time.sleep(2)
+            if "sign-in" not in page.url and "login" not in page.url.lower():
+                print("[BROWSER] Session is logged in.")
+                return
+
+        print("[BROWSER] Signing in with email...")
+        page.goto("https://accounts.x.ai/sign-in", wait_until="networkidle", timeout=30000)
+        time.sleep(2)
+        email_login = page.locator('button:has-text("Login with email"), button:has-text("Continue with email"), button:has-text("Email")').first
+        if email_login.is_visible(timeout=5000):
+            email_login.click()
+            time.sleep(2)
+        login_email = page.locator('input[type="email"], input[name="email"], input[autocomplete="email"]').first
+        login_email.wait_for(state="visible", timeout=15000)
+        login_email.fill(self.email)
+        page.locator('button[type="submit"], button:has-text("Continue"), button:has-text("Next")').first.click()
+        time.sleep(2)
+        login_password = page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]').first
+        login_password.wait_for(state="visible", timeout=15000)
+        login_password.fill(self.password)
+        page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Continue"), button:has-text("Log in")').first.click()
+        time.sleep(4)
+
+        # Verify the session actually stuck; retry once if it bounced to sign-in.
+        if "sign-in" in page.url or "login" in page.url.lower():
+            print("[BROWSER] Sign-in may not have persisted; retrying once...")
+            page.goto("https://accounts.x.ai/account", wait_until="networkidle", timeout=30000)
+            time.sleep(2)
+
+    def _open_device_authorization(self, page, verification_url: str) -> None:
+        """Navigate to the device consent page, signing in if bounced to login."""
+        page.goto(verification_url, wait_until="networkidle", timeout=30000)
+        time.sleep(2)
+        if "sign-in" in page.url or "login" in page.url.lower():
+            self._ensure_logged_in(page)
+            page.goto(verification_url, wait_until="networkidle", timeout=30000)
+            time.sleep(2)
+
     def _run_browser_flow(self, verification_url: str):
         """Run Camoufox browser automation."""
         try:
+            import camoufox.pkgman
+
+            camoufox.pkgman.INSTALL_DIR = CAMOUFOX_CACHE
             from camoufox.sync_api import Camoufox
         except ImportError:
             print("[WARN] Camoufox not installed, falling back to Playwright")
             self._run_playwright_flow(verification_url)
             return
-
-        # Set Camoufox cache to project directory
-        os.environ["CAMOUFOX_CACHE_DIR"] = str(CAMOUFOX_CACHE)
 
         with Camoufox(headless=self.config["headless"]) as browser:
             page = browser.new_page()
@@ -402,6 +545,9 @@ class XaiFarmBot:
             email_input.fill(self.email)
             time.sleep(1)
 
+            # Tick any consent/terms checkbox before continuing.
+            self._check_required_consents(page)
+
             # Continue after email to reach the OTP screen
             continue_btn = page.locator('button[type="submit"], button:has-text("Continue"), button:has-text("Next")').first
             if continue_btn.is_visible(timeout=5000):
@@ -412,7 +558,27 @@ class XaiFarmBot:
             # Check for OTP input
             print(f"[BROWSER] Waiting for OTP input...")
             otp_input = page.locator('input[data-input-otp="true"], input[name="code"], input[autocomplete="one-time-code"], input[name="otp"], input[placeholder*="code" i], input[placeholder*="otp" i]').first
-            otp_input.wait_for(state="visible", timeout=30000)
+            try:
+                otp_input.wait_for(state="visible", timeout=30000)
+            except Exception as error:
+                # Dump the page state so we can see what xAI actually showed
+                # instead of the OTP form (e.g. captcha, "already registered").
+                dump_path = Path(__file__).parent.parent.parent / "data" / "xfarm-otp-debug.json"
+                dump_path.parent.mkdir(parents=True, exist_ok=True)
+                body_text = page.locator("body").inner_text(timeout=3000)[:2000]
+                controls = page.locator("input, button").evaluate_all(
+                    """elements => elements.map(element => ({
+                        tag: element.tagName,
+                        type: element.getAttribute('type'),
+                        name: element.getAttribute('name'),
+                        placeholder: element.getAttribute('placeholder'),
+                        text: (element.innerText || element.value || '').trim(),
+                        testid: element.getAttribute('data-testid'),
+                    }))"""
+                )
+                dump_path.write_text(json.dumps({"url": page.url, "body": body_text, "controls": controls}, indent=2))
+                print(f"[BROWSER] Saved OTP-page debug to: {dump_path}")
+                raise RuntimeError(f"OTP input did not appear. Page: {page.url}") from error
 
             # Get OTP from email
             print(f"[BROWSER] OTP input detected, fetching from email...")
@@ -445,18 +611,20 @@ class XaiFarmBot:
             profile_password = page.locator('input[data-testid="password"], input[name="password"], input[type="password"]').first
             profile_password.fill(self.password)
             time.sleep(1)
+
+            # Tick any consent/terms checkbox before submitting the sign-up.
+            self._check_required_consents(page)
+
             page.locator('button[type="submit"], button:has-text("Continue"), button:has-text("Sign up"), button:has-text("Create account")').first.click()
             time.sleep(3)
 
-            # Open the account page after registration before authorizing the device.
-            print("[BROWSER] Opening xAI account page...")
-            page.goto("https://accounts.x.ai/account", wait_until="networkidle", timeout=30000)
-            time.sleep(3)
+            # Ensure the session is authenticated before the OAuth consent step.
+            # Probe first; only re-login if the sign-up session did not stick.
+            self._ensure_logged_in(page)
 
-            # Navigate to device authorization only after registration has completed.
+            # Navigate to device authorization only after the session is logged in.
             print(f"[BROWSER] Opening device authorization...")
-            page.goto(verification_url, wait_until="networkidle")
-            time.sleep(2)
+            self._open_device_authorization(page, verification_url)
 
             # The first device page only has a positive Continue action. Do not use a
             # generic submit selector here: the confirmation page can include a submit
@@ -470,44 +638,27 @@ class XaiFarmBot:
             except Exception as error:
                 raise RuntimeError("Could not find the initial device authorization Continue button") from error
 
-            if os.environ.get("XAI_FARM_DEBUG") == "1":
-                debug_path = Path(__file__).parent.parent.parent / "data" / "xfarm-device-debug.json"
-                debug_path.parent.mkdir(parents=True, exist_ok=True)
-                controls = page.locator("button, input[type=submit], input[type=button]").evaluate_all(
-                    """elements => elements.map(element => ({
-                        tag: element.tagName,
-                        text: (element.innerText || element.value || '').trim(),
-                        type: element.getAttribute('type'),
-                        name: element.getAttribute('name'),
-                        ariaLabel: element.getAttribute('aria-label'),
-                        disabled: element.disabled,
-                    }))"""
-                )
-                debug_path.write_text(json.dumps({"url": page.url, "controls": controls}, indent=2))
-                print(f"[BROWSER] Saved redacted device controls to: {debug_path}")
+            debug_path = Path(__file__).parent.parent.parent / "data" / "xfarm-device-debug.json"
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            controls = page.locator("button, input[type=submit], input[type=button], a[role=button]").evaluate_all(
+                """elements => elements.map(element => ({
+                    tag: element.tagName,
+                    text: (element.innerText || element.value || '').trim(),
+                    type: element.getAttribute('type'),
+                    name: element.getAttribute('name'),
+                    ariaLabel: element.getAttribute('aria-label'),
+                    testid: element.getAttribute('data-testid'),
+                    disabled: element.disabled,
+                }))"""
+            )
+            debug_path.write_text(json.dumps({"url": page.url, "controls": controls}, indent=2))
+            print(f"[BROWSER] Saved device controls to: {debug_path}")
 
             # The final confirmation action is the Allow button. Match the exact label
             # first so a partial match on "Confirm"/"Authorize" can never hit a deny
             # action. Order matters: Allow is the expected positive button.
             print(f"[BROWSER] Confirming device authorization...")
-            auth_selectors = [
-                re.compile(r"^Allow$", re.IGNORECASE),
-                re.compile(r"^Authorize$", re.IGNORECASE),
-                re.compile(r"^Approve$", re.IGNORECASE),
-                re.compile(r"^Confirm$", re.IGNORECASE),
-            ]
-            clicked_auth = False
-            for pattern in auth_selectors:
-                btn = page.get_by_role("button", name=pattern)
-                try:
-                    btn.wait_for(state="visible", timeout=5000)
-                    btn.click(timeout=5000)
-                    clicked_auth = True
-                    break
-                except Exception:
-                    continue
-            if not clicked_auth:
-                raise RuntimeError("Could not find the positive device authorization confirmation button")
+            self._click_positive_auth_button(page)
             time.sleep(5)
 
             print(f"[BROWSER] Authorization complete!")
@@ -553,6 +704,7 @@ class XaiFarmBot:
                 time.sleep(2)
             email_input.wait_for(state="visible", timeout=15000)
             email_input.fill(self.email)
+            self._check_required_consents(page)
             continue_btn = page.locator('button[type="submit"], button:has-text("Continue"), button:has-text("Next")').first
             if continue_btn.is_visible(timeout=5000):
                 continue_btn.click()
@@ -580,14 +732,14 @@ class XaiFarmBot:
             given_name.fill("Mirais")
             page.locator('input[data-testid="familyName"], input[name="familyName"], input[autocomplete="family-name"]').first.fill("User")
             page.locator('input[data-testid="password"], input[name="password"], input[type="password"]').first.fill(self.password)
+            self._check_required_consents(page)
             page.locator('button[type="submit"], button:has-text("Continue"), button:has-text("Sign up"), button:has-text("Create account")').first.click()
             time.sleep(3)
-            print(f"[BROWSER] Opening xAI account page...")
-            page.goto("https://accounts.x.ai/account", wait_until="networkidle", timeout=30000)
-            time.sleep(3)
+            print(f"[BROWSER] Verifying logged-in session...")
+            self._ensure_logged_in(page)
 
             print(f"[BROWSER] Authorizing device...")
-            page.goto(verification_url, wait_until="networkidle")
+            self._open_device_authorization(page, verification_url)
             continue_btn = page.get_by_role("button", name=re.compile(r"^Continue$", re.IGNORECASE))
             try:
                 continue_btn.wait_for(state="visible", timeout=10000)
@@ -598,24 +750,7 @@ class XaiFarmBot:
 
             # The final confirmation is the Allow button; exact-match so a partial
             # "Confirm" hit can never trigger a deny action.
-            auth_selectors = [
-                re.compile(r"^Allow$", re.IGNORECASE),
-                re.compile(r"^Authorize$", re.IGNORECASE),
-                re.compile(r"^Approve$", re.IGNORECASE),
-                re.compile(r"^Confirm$", re.IGNORECASE),
-            ]
-            clicked_auth = False
-            for pattern in auth_selectors:
-                btn = page.get_by_role("button", name=pattern)
-                try:
-                    btn.wait_for(state="visible", timeout=5000)
-                    btn.click(timeout=5000)
-                    clicked_auth = True
-                    break
-                except Exception:
-                    continue
-            if not clicked_auth:
-                raise RuntimeError("Could not find the positive device authorization confirmation button")
+            self._click_positive_auth_button(page)
             time.sleep(5)
 
             browser.close()

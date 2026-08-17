@@ -160,4 +160,47 @@ describe("xAI Grok CLI adapter", () => {
 
     expect(body.reasoning).toEqual({ summary: "concise", effort: "high" });
   });
+
+  test("converts Grok plain-text tool_calls marker into delta.tool_calls", () => {
+    const translator = new XaiStreamTranslator("grok-4.6");
+    const out: string[] = [];
+    out.push(...translator.handleEvent("response.output_text.delta", JSON.stringify({
+      type: "response.output_text.delta",
+      delta: "Let me check.\ntool_calls:\n- run_command\n{\"command\":\"go build ./...\",\"timeout_ms\":20000.0}",
+    })));
+    out.push(...translator.handleEvent("response.completed", JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } } })));
+    const joined = out.join("");
+    expect(joined).not.toContain("tool_calls:");
+    expect(joined).toContain('"tool_calls"');
+    expect(joined).toContain('"name":"run_command"');
+    expect(joined).toContain('"type":"function"');
+    expect(joined).toContain('go build ./...');
+    expect(joined).toContain('"finish_reason":"tool_calls"');
+  });
+
+  test("converts fragmented Grok plain-text tool_calls marker", () => {
+    const translator = new XaiStreamTranslator("grok-4.6");
+    const out: string[] = [];
+    out.push(...translator.handleEvent("response.output_text.delta", JSON.stringify({ type: "response.output_text.delta", delta: "tool_calls:\n- run_" })));
+    out.push(...translator.handleEvent("response.output_text.delta", JSON.stringify({ type: "response.output_text.delta", delta: "command\n{\"command\":\"ls\"}" })));
+    out.push(...translator.handleEvent("response.completed", JSON.stringify({ type: "response.completed", response: {} })));
+    const joined = out.join("");
+    expect(joined).not.toContain("tool_calls:");
+    expect(joined).toContain('"name":"run_command"');
+    expect(joined).toContain('\\"command\\":\\"ls\\"');
+  });
+
+  test("handles nested JSON braces in Grok plain-text tool arguments", () => {
+    const translator = new XaiStreamTranslator("grok-4.6");
+    const out: string[] = [];
+    out.push(...translator.handleEvent("response.output_text.delta", JSON.stringify({
+      type: "response.output_text.delta",
+      delta: 'tool_calls:\n- write_file\n{"path":"a.txt","meta":{"nested":true},"content":"hi"}',
+    })));
+    out.push(...translator.handleEvent("response.completed", JSON.stringify({ type: "response.completed", response: {} })));
+    const joined = out.join("");
+    expect(joined).not.toContain("tool_calls:");
+    expect(joined).toContain('"name":"write_file"');
+    expect(joined).toContain('\\"meta\\":{\\"nested\\":true}');
+  });
 });

@@ -12,6 +12,7 @@ Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory*
 |---|---|---|
 | Bun ≥ 1.1 | `powershell -c "irm bun.sh/install.ps1 \| iex"` | `curl -fsSL https://bun.sh/install \| bash` |
 | Git | git-scm.com | `sudo apt install -y git` |
+| Python 3 | python.org | `sudo apt install -y python3 python3-venv` |
 | (optional) Docker | Docker Desktop | `sudo apt install -y docker.io docker-compose-v2` |
 
 Verify: `bun --version`
@@ -40,6 +41,10 @@ The Windows installer automatically opens a UAC prompt and relaunches itself
 with administrator access. Administrator access is used to install the global
 `mirais` command in `C:\Windows`; no manually elevated PowerShell window is
 required.
+
+Both one-shot installers create an isolated Python environment at
+`<install-root>/.venv` and store the Camoufox browser at
+`<install-root>/.camoufox`. Farm never installs packages into global Python.
 
 ### Manual path
 
@@ -89,7 +94,7 @@ mirais restart
 mirais stop
 mirais autostart on
 mirais autostart off
-mirais update     # compact output: "Update in progress... please wait." then success/failure summary
+mirais update     # shows old → new version, clears caches, updates, rebuilds, and restarts
 mirais fix          # force update/install/build/start from remembered install root
 mirais doctor       # diagnose and repair safe installation issues
 mirais doctor --fix # run the full repair flow
@@ -257,7 +262,7 @@ curl http://localhost:1463/v1/chat/completions \
 
 | Task | How |
 |---|---|
-| Update | `git pull && bun install && (cd dashboard && bun install) && bun run build && restart service` |
+| Update | `git pull && clear Bun/package/build caches && bun install && (cd dashboard && bun install) && bun run build && restart service` |
 | Repair stale install / bad root | `mirais fix` |
 | Backup | Dashboard → Settings → Data → **Backup now** (or `bun run scripts/backup.ts`, cron it) |
 | Logs | journalctl / `data/service.log` / in-app Logs page |

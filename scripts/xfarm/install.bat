@@ -5,8 +5,12 @@ echo xAI Farm - Installation
 echo ============================================
 echo.
 
-REM Check Python
-python --version >nul 2>&1
+set "ROOT=%~dp0..\.."
+set "VENV_PYTHON=%ROOT%\.venv\Scripts\python.exe"
+set "PYTHONUTF8=1"
+
+REM Create installation-local Python environment
+py -3 --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python not found. Please install Python 3.8+ first.
     echo Download from: https://www.python.org/downloads/
@@ -14,18 +18,19 @@ if errorlevel 1 (
 )
 
 echo [OK] Python found
-python --version
+if not exist "%VENV_PYTHON%" py -3 -m venv "%ROOT%\.venv"
+if errorlevel 1 exit /b 1
 
 REM Create .camoufox directory in project root
 echo.
 echo [INFO] Creating .camoufox cache directory...
-if not exist "%~dp0..\..\.camoufox" mkdir "%~dp0..\..\.camoufox"
-echo [OK] Camoufox cache: %~dp0..\..\.camoufox
+if not exist "%ROOT%\.camoufox" mkdir "%ROOT%\.camoufox"
+echo [OK] Camoufox cache: %ROOT%\.camoufox
 
 REM Install Python packages
 echo.
 echo [INFO] Installing Python packages...
-pip install -r "%~dp0requirements.txt"
+"%VENV_PYTHON%" -m pip install -r "%~dp0requirements.txt"
 
 if errorlevel 1 (
     echo [ERROR] Failed to install Python packages
@@ -34,13 +39,14 @@ if errorlevel 1 (
 
 echo [OK] Python packages installed
 
-REM Install Playwright browsers
+REM Install Camoufox browser into the project cache
 echo.
-echo [INFO] Installing Playwright browsers...
-python -m playwright install chromium
+echo [INFO] Installing Camoufox browser...
+"%VENV_PYTHON%" -c "import runpy,sys; from pathlib import Path; import camoufox.pkgman as p; p.INSTALL_DIR=Path(sys.argv[1]); sys.argv=['camoufox','fetch']; runpy.run_module('camoufox',run_name='__main__')" "%ROOT%\.camoufox"
 
 if errorlevel 1 (
-    echo [WARN] Playwright browser install failed, but continuing...
+    echo [ERROR] Camoufox browser install failed
+    exit /b 1
 )
 
 echo.
@@ -55,5 +61,5 @@ echo 3. Enter your Gmail address and App Password
 echo 4. Set email domain (e.g., levanza.my.id)
 echo 5. Click "Farm Account" on xAI provider page
 echo.
-echo Note: Camoufox browser data will be stored in .camoufox/
+echo Note: Python packages are stored in .venv/ and Camoufox in .camoufox/
 echo.

@@ -65,6 +65,19 @@ Push-Location dashboard
 & bun install | Out-Null
 Pop-Location
 
+if (Test-ExecutableAvailable py) {
+  & py -3 -m venv '.venv'
+} elseif (Test-ExecutableAvailable python) {
+  & python -m venv '.venv'
+} else {
+  throw 'Python 3 is required for XAI Farm.'
+}
+$venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
+$env:PYTHONUTF8 = '1'
+& $venvPython -m pip install -r 'scripts\xfarm\requirements.txt' | Out-Null
+New-Item -ItemType Directory -Force -Path '.camoufox' | Out-Null
+& $venvPython -c "import runpy,sys; from pathlib import Path; import camoufox.pkgman as p; p.INSTALL_DIR=Path(sys.argv[1]); sys.argv=['camoufox','fetch']; runpy.run_module('camoufox',run_name='__main__')" (Join-Path $InstallDir '.camoufox') | Out-Null
+
 if (-not (Test-Path '.env')) {
   Copy-Item '.env.example' '.env'
 }

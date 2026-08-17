@@ -384,6 +384,7 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             </div>
             <p className="mt-2 font-mono text-sm text-text-primary" title={l.requested_model}>{l.requested_model}</p>
             <p className="mt-1 text-xs text-text-muted">{l.provider ?? "—"} · upstream {l.model ?? "—"}{l.account_label ? ` · account ${l.account_label}` : ""}</p>
+            {l.reasoning_effort && <Badge tone={l.reasoning_effort === "off" ? "muted" : "accent"}>Thinking requested: {l.reasoning_effort}</Badge>}
           </div>
           <div className="grid gap-1 text-xs text-text-muted">
             <span>Tokens: <span className="text-text-primary">{fmtNum(l.input_tokens)} → {fmtNum(l.output_tokens)}</span></span>
@@ -411,12 +412,13 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             <Detail k="Output tokens" v={fmtNum(l.output_tokens)} />
             {l.credit_usage != null && <Detail k="Credit used" v={fmtNum(l.credit_usage)} />}
             <Detail k="Tokens saved" v={fmtNum(l.tokens_saved)} />
+            <Detail k="Thinking requested" v={l.reasoning_effort ?? "Not requested"} />
             <Detail k="Latency" v={fmtMs(l.latency_ms)} />
             {l.error && <Detail k="Error" v={l.error} />}
           </div>
           <Payload title="Request body" value={l.request_body} />
           <Payload title="Response body" value={l.response_body} />
-          {!l.request_body && !l.response_body && <p className="mt-4 text-xs text-text-muted">Payload capture is disabled. Set <code>TRACK_PAYLOADS=full</code> and restart Mirais to record new request and response bodies.</p>}
+          {!l.request_body && !l.response_body && <p className="mt-4 text-xs text-text-muted">No payload was captured for this request. Set <code>TRACK_PAYLOADS=full</code>, restart Mirais, then send a new request.</p>}
         </div>
       ) : null}
     </>

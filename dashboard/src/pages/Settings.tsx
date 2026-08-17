@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { settings, backups, healthInfo, providers, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -812,6 +812,7 @@ function BackupSection() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [restoreId, setRestoreId] = useState<string | null>(null);
+  const [restoreProgress, setRestoreProgress] = useState<{ progress: number; stage: string; status: "running" | "success" | "error" } | null>(null);
   const list = useQuery({ queryKey: ["backups"], queryFn: backups.list });
 
   const create = useMutation({
@@ -830,23 +831,47 @@ function BackupSection() {
     onError: (e) => toast(e.message, "error"),
   });
   const restore = useMutation({
-    mutationFn: ({ id, mode }: { id: string; mode: "merge" | "overwrite" }) => backups.restore(id, mode),
-    onSuccess: (data) => {
-      setRestoreId(null);
+    mutationFn: async ({ id, mode }: { id: string; mode: "merge" | "overwrite" }) => {
+      setRestoreProgress({ progress: 10, stage: "Preparing backup restore…", status: "running" });
+      const data = await backups.restore(id, mode);
       if (data.mode === "merge") {
+        setRestoreProgress({ progress: 80, stage: "Finishing database merge…", status: "running" });
         const added = Object.entries(data.added ?? {}).filter(([, n]) => n > 0).map(([t, n]) => `${t}: +${n}`).join(", ");
         const skipped = Object.entries(data.skipped ?? {}).filter(([, n]) => n > 0).map(([t, n]) => `${t}: ${n}`).join(", ");
         toast(`Merge done. ${added || "Nothing added"}.${skipped ? ` Duplicates skipped (${skipped}).` : ""}`, "success");
         qc.invalidateQueries({ queryKey: ["backups"] });
+        setRestoreProgress({ progress: 100, stage: "Restore completed successfully.", status: "success" });
       } else {
-        toast("Backup restored. Mirais is restarting — reload in a few seconds.");
+        setRestoreProgress({ progress: 55, stage: "Restarting Mirais…", status: "running" });
+        await new Promise((resolve) => window.setTimeout(resolve, 750));
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          try {
+            await healthInfo.detailed();
+            qc.invalidateQueries({ queryKey: ["backups"] });
+            setRestoreProgress({ progress: 100, stage: "Mirais is back online. Restore completed successfully.", status: "success" });
+            return;
+          } catch {
+            setRestoreProgress({ progress: Math.min(95, 60 + attempt), stage: "Waiting for Mirais to come back online…", status: "running" });
+            await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+          }
+        }
+        throw new Error("Mirais did not come back online within one minute");
       }
     },
-    onError: (e) => toast(e.message, "error"),
+    onSuccess: () => setRestoreId(null),
+    onError: (e) => {
+      setRestoreProgress({ progress: 100, stage: e.message, status: "error" });
+      toast(e.message, "error");
+    },
   });
 
   const formatSize = (size: number) => size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
   const formatDate = (value: string) => new Date(value).toLocaleString();
+  const startRestore = (mode: "merge" | "overwrite") => {
+    if (!restoreId) return;
+    setRestoreId(null);
+    restore.mutate({ id: restoreId, mode });
+  };
 
   return (
     <Card>
@@ -879,7 +904,7 @@ function BackupSection() {
         <p className="mb-5 text-sm text-text-muted">Choose how to restore this backup:</p>
         <div className="space-y-3">
           <button
-            onClick={() => restore.mutate({ id: restoreId!, mode: "merge" })}
+            onClick={() => startRestore("merge")}
             disabled={restore.isPending}
             className="w-full rounded-xl border border-border p-4 text-left hover:border-accent/40 hover:bg-bg-raised disabled:opacity-50"
           >
@@ -887,7 +912,7 @@ function BackupSection() {
             <p className="mt-1 text-xs text-text-muted">Adds data from the backup into the current database. Rows that already exist (e.g. same provider key) are skipped — no duplicates.</p>
           </button>
           <button
-            onClick={() => restore.mutate({ id: restoreId!, mode: "overwrite" })}
+            onClick={() => startRestore("overwrite")}
             disabled={restore.isPending}
             className="w-full rounded-xl border border-destructive/30 p-4 text-left hover:bg-destructive/10 disabled:opacity-50"
           >
@@ -895,6 +920,20 @@ function BackupSection() {
             <p className="mt-1 text-xs text-text-muted">Replaces the entire database with the backup. Current data is lost (a pre-restore fallback backup is created automatically). Mirais restarts.</p>
           </button>
         </div>
+      </Modal>
+
+      <Modal open={!!restoreProgress} onClose={() => restoreProgress?.status !== "running" && setRestoreProgress(null)} title="Restoring backup">
+        {restoreProgress && <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            {restoreProgress.status === "running" ? <Loader2 className="h-5 w-5 animate-spin text-accent" /> : restoreProgress.status === "success" ? <CheckCircle2 className="h-5 w-5 text-success" /> : <XCircle className="h-5 w-5 text-danger" />}
+            <p className="text-sm text-text-muted">{restoreProgress.stage}</p>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-bg-base" role="progressbar" aria-label="Restore progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={restoreProgress.progress}>
+            <div className={`h-full rounded-full transition-all duration-300 ${restoreProgress.status === "error" ? "bg-danger" : restoreProgress.status === "success" ? "bg-success" : "bg-accent"}`} style={{ width: `${restoreProgress.progress}%` }} />
+          </div>
+          <p className="text-right font-mono text-xs text-text-muted">{restoreProgress.progress}%</p>
+          {restoreProgress.status !== "running" && <div className="flex justify-end"><Button size="sm" onClick={() => setRestoreProgress(null)}>Close</Button></div>}
+        </div>}
       </Modal>
     </Card>
   );

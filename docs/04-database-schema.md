@@ -127,6 +127,7 @@ CREATE TABLE request_logs (
   credit_usage    REAL,                      -- provider credit units; null when unavailable
   latency_ms      INTEGER,
   tokens_saved    INTEGER DEFAULT 0,         -- by token saver
+  reasoning_effort TEXT,                     -- requested thinking mode; never reasoning content
   request_body    TEXT,                      -- only when TRACK_PAYLOADS=full
   response_body   TEXT
 );

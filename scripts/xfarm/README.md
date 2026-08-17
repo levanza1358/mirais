@@ -6,20 +6,21 @@ Automated xAI account registration using OAuth Device Code Flow + Camoufox brows
 
 - **No API credits required** — Uses Grok CLI's public OAuth client
 - **Automated registration** — Camoufox browser + IMAP OTP retrieval
-- **Project-local browser** — Camoufox cache stored in `.camoufox/`
+- **Installation-local runtime** — Python packages in `.venv/`, Camoufox browser in `.camoufox/`
 - **Configurable** — All settings via Mirais Settings UI
 
 ## Setup
 
 ### 1. Install Dependencies
 
+The GitHub installers create `.venv/`, install the Python packages there, and download Camoufox into `.camoufox/`. If either directory is missing, the dashboard's **Install all missing** action recreates it locally and shows stage-based progress from 0–100%.
+
 ```bash
 # Windows
-scripts\xfarm\install.bat
+.venv\Scripts\python.exe scripts\xfarm\farm.py
 
-# Linux/Mac
-pip install -r scripts/xfarm/requirements.txt
-python -m playwright install chromium
+# Linux
+.venv/bin/python scripts/xfarm/farm.py
 ```
 
 ### 2. Configure Settings
@@ -48,6 +49,10 @@ Make sure your domain forwards all emails to the Gmail address:
 2. Click **Farm Account** button
 3. Wait for automation to complete
 4. Account is automatically added
+
+When farming multiple accounts, Mirais waits a cooldown between sign-ups to
+avoid xAI's registration rate limit. The default is 5 minutes; override it with
+the `XAI_FARM_COOLDOWN_MS` environment variable (milliseconds).
 
 ### Via CLI (for testing)
 
@@ -89,6 +94,7 @@ scripts/xfarm/
 └── README.md            # This file
 
 .camoufox/               # Browser cache (auto-created)
+.venv/                   # Isolated Python environment (auto-created)
 ```
 
 ## Available Models
@@ -105,8 +111,8 @@ After successful farm, these models are available:
 
 ### "Missing dependencies"
 ```bash
-pip install camoufox playwright python-dotenv
-python -m playwright install chromium
+.venv\Scripts\python.exe -m pip install -r scripts\xfarm\requirements.txt  # Windows
+.venv/bin/python -m pip install -r scripts/xfarm/requirements.txt           # Linux
 ```
 
 ### "Gmail login failed"

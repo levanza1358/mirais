@@ -18,6 +18,7 @@ export interface LogInsert {
   creditUsage?: number | null;
   latencyMs: number | null;
   tokensSaved: number;
+  reasoningEffort?: RequestLog["reasoning_effort"];
   requestBody?: string | null;
   responseBody?: string | null;
   attemptsDetail?: AttemptRecord[] | null;
@@ -33,8 +34,8 @@ export class LogsRepo {
       .query(
         `INSERT INTO request_logs
          (id, ts, key_id, endpoint, requested_model, provider, model, attempts, status, http_status, error,
-         input_tokens, output_tokens, credit_usage, latency_ms, tokens_saved, request_body, response_body, attempts_detail, account_label, kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         input_tokens, output_tokens, credit_usage, latency_ms, tokens_saved, reasoning_effort, request_body, response_body, attempts_detail, account_label, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         ulid(),
@@ -53,6 +54,7 @@ export class LogsRepo {
         entry.creditUsage ?? null,
         entry.latencyMs,
         entry.tokensSaved,
+        entry.reasoningEffort ?? null,
         entry.requestBody ?? null,
         entry.responseBody ?? null,
         entry.attemptsDetail ? JSON.stringify(entry.attemptsDetail) : null,
@@ -87,7 +89,7 @@ export class LogsRepo {
     const items = this.db
       .query(
         `SELECT rl.id, rl.ts, rl.ts AS created_at, rl.key_id, gk.label AS key_label, rl.endpoint, rl.requested_model, rl.provider, rl.model, rl.attempts, rl.status, rl.http_status, rl.error,
-                rl.input_tokens, rl.output_tokens, rl.credit_usage, rl.latency_ms, rl.tokens_saved, rl.request_body, rl.response_body, rl.account_label, rl.kind
+                rl.input_tokens, rl.output_tokens, rl.credit_usage, rl.latency_ms, rl.tokens_saved, rl.reasoning_effort, rl.request_body, rl.response_body, rl.account_label, rl.kind
          FROM request_logs rl
          LEFT JOIN gateway_keys gk ON gk.id = rl.key_id
          ${whereSql} ORDER BY rl.ts DESC LIMIT ? OFFSET ?`,

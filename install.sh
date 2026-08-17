@@ -8,6 +8,10 @@ else
   DEFAULT_INSTALL_DIR="$HOME/mirais"
 fi
 INSTALL_DIR="${MIRAIS_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO="sudo"
+fi
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -15,8 +19,8 @@ need_cmd() {
 
 echo "Installation in progress... please wait."
 if ! need_cmd git; then
-  sudo apt-get update >/dev/null
-  sudo apt-get install -y git curl unzip >/dev/null
+  $SUDO apt-get update >/dev/null
+  $SUDO apt-get install -y git curl unzip >/dev/null
 fi
 
 if ! need_cmd bun; then
@@ -38,6 +42,21 @@ cd "$INSTALL_DIR"
 bun install >/dev/null
 (cd dashboard && bun install >/dev/null)
 
+if ! need_cmd python3; then
+  $SUDO apt-get update >/dev/null
+  $SUDO apt-get install -y python3 python3-venv >/dev/null
+fi
+if ! python3 -m venv .venv 2>/dev/null; then
+  $SUDO apt-get update >/dev/null
+  $SUDO apt-get install -y python3-venv >/dev/null
+  python3 -m venv .venv
+fi
+VENV_PYTHON="$INSTALL_DIR/.venv/bin/python"
+export PYTHONUTF8=1
+"$VENV_PYTHON" -m pip install -r scripts/xfarm/requirements.txt >/dev/null
+mkdir -p .camoufox
+"$VENV_PYTHON" -c "import runpy,sys; from pathlib import Path; import camoufox.pkgman as p; p.INSTALL_DIR=Path(sys.argv[1]); sys.argv=['camoufox','fetch']; runpy.run_module('camoufox',run_name='__main__')" "$INSTALL_DIR/.camoufox" >/dev/null
+
 if [ ! -f .env ]; then
   cp .env.example .env
 fi
@@ -49,8 +68,8 @@ mkdir -p "$HOME/.config/mirais"
 cat > "$HOME/.config/mirais/install.json" <<JSON
 {"root":"$INSTALL_DIR"}
 JSON
-sudo ln -sf "$INSTALL_DIR/mirais" /usr/local/bin/mirais
-sudo chmod +x "$INSTALL_DIR/mirais"
+$SUDO ln -sf "$INSTALL_DIR/mirais" /usr/local/bin/mirais
+$SUDO chmod +x "$INSTALL_DIR/mirais"
 
 # Optional: install yt-dlp / ffmpeg extras (audio + video discovery). Run
 # `bun run extras` any time later if you skipped it here.

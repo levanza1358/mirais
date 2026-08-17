@@ -121,7 +121,7 @@ export function v1Routes(db: Database) {
     if (rl.retryAfterSec !== undefined) {
       set.status = 429;
       set.headers["retry-after"] = String(rl.retryAfterSec);
-      logRequest(key.id === "anonymous" ? null : key.id, "/v1/chat/completions", req.model, null, null, 1, "rate_limited", 429, "rate limit", started);
+      logRequest(key.id === "anonymous" ? null : key.id, "/v1/chat/completions", req.model, null, null, 1, "rate_limited", 429, "rate limit", started, undefined, 0, undefined, undefined, "request", reasoningEffort(req));
       return new GatewayError(429, "rate_limit_error", "Rate limit exceeded").toJSON();
     }
 
@@ -162,13 +162,13 @@ export function v1Routes(db: Database) {
           .then(([usage, text]) => {
             logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
-              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind);
+              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind, reasoningEffort(req));
           })
           .catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
             logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "error", 502, message, started, undefined, saver.tokensSaved, result.attempts,
-              { request: summarizeRequest(req), response: summarizeResponse(null, message) }, kind);
+              { request: summarizeRequest(req), response: summarizeResponse(null, message) }, kind, reasoningEffort(req));
           })
           .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
         return tap.stream;
@@ -176,13 +176,13 @@ export function v1Routes(db: Database) {
 
       logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
-        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
+        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind, reasoningEffort(req));
       return result.response;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
       const msg = err instanceof Error ? err.message : String(err);
       logRequest(logKeyId, "/v1/chat/completions", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
-        undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind);
+        undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind, reasoningEffort(req));
       throw err;
     } finally {
       if (req.stream !== true && logKeyId) releaseSlot(logKeyId);
@@ -222,26 +222,36 @@ export function v1Routes(db: Database) {
         xaiRequestId: set.headers["x-request-id"],
       }, providersRepo, routingPolicy);
       if (result.kind === "stream") {
-        const translated = chatSseToResponses(result.stream, req.model);
+        const tap = tapOpenAiStream(result.stream);
+        const translated = chatSseToResponses(tap.stream, req.model);
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
         set.headers["cache-control"] = "no-cache";
         set.headers["x-accel-buffering"] = "no";
-        Promise.all([result.usagePromise, translated.usagePromise])
-          .then(([upstreamUsage, translatedUsage]) => {
+        Promise.all([result.usagePromise, translated.usagePromise, tap.textPromise])
+          .then(([upstreamUsage, translatedUsage, text]) => {
             logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
-              result.attempts.length, "success", 200, null, started, translatedUsage ?? upstreamUsage, saver.tokensSaved, result.attempts, undefined, "request");
+              result.attempts.length, "success", 200, null, started, translatedUsage ?? upstreamUsage, saver.tokensSaved, result.attempts,
+              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, "request", reasoningEffort(req));
           })
-          .catch(() => undefined)
+          .catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
+              result.attempts.length, "error", 502, message, started, undefined, saver.tokensSaved, result.attempts,
+              { request: summarizeRequest(req), response: summarizeResponse(null, message) }, "request", reasoningEffort(req));
+          })
           .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
         return translated.stream;
       }
       logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
-        result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts);
+        result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
+        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, "request", reasoningEffort(req));
       return canonicalResponseToResponses(result.response, req.model);
     } catch (error) {
       const status = error instanceof GatewayError ? error.status : 500;
+      const message = error instanceof Error ? error.message : String(error);
       logRequest(logKeyId, "/v1/responses", req.model, null, null, 1, status < 500 ? "client_error" : "error", status,
-        error instanceof Error ? error.message : String(error), started);
+        message, started, undefined, 0, undefined,
+        { request: summarizeRequest(req), response: summarizeResponse(null, message) }, "request", reasoningEffort(req));
       throw error;
     } finally {
       if (!req.stream && logKeyId) releaseSlot(logKeyId);
@@ -313,7 +323,7 @@ export function v1Routes(db: Database) {
             const u = translator.result().usage;
             logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
-              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind);
+              { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind, reasoningEffort(req));
           })
           .catch(() => undefined)
           .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
@@ -323,13 +333,13 @@ export function v1Routes(db: Database) {
       const anthropicResp = openaiToAnthropicResponse(result.response);
       logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
-        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind);
+        { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind, reasoningEffort(req));
       return anthropicResp;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
       const msg = err instanceof Error ? err.message : String(err);
       logRequest(logKeyId, "/v1/messages", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
-        undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind);
+        undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind, reasoningEffort(req));
       if (err instanceof GatewayError) {
         set.status = err.status;
         return { type: "error", error: { type: err.type, message: err.message } };
@@ -358,6 +368,7 @@ export function v1Routes(db: Database) {
     attemptsDetail?: unknown[],
     payload?: { request?: string | null; response?: string | null },
     kind: "request" | "warmup" = "request",
+    reasoningEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null = null,
   ) {
     try {
       const trackPayloads = config.trackPayloads;
@@ -385,6 +396,7 @@ export function v1Routes(db: Database) {
         creditUsage,
         latencyMs: Date.now() - started,
         tokensSaved,
+        reasoningEffort,
         requestBody: storePayload ? payload?.request ?? null : null,
         responseBody: storePayload ? payload?.response ?? null : null,
         attemptsDetail: attemptsDetail as never,
@@ -394,6 +406,11 @@ export function v1Routes(db: Database) {
     } catch (err) {
       log.warn("failed to write request log", { err: String(err) });
     }
+  }
+
+  function reasoningEffort(req: CanonicalRequest): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+    if (!req.reasoning) return null;
+    return req.reasoning.enabled === false ? "off" : req.reasoning.effort ?? "minimal";
   }
 
   function stringifyUnknown(value: unknown): string {

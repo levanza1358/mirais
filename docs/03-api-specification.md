@@ -130,7 +130,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | GET | `/api/providers/:id/accounts/usage` | Per-account usage from request logs → `[{ account, requests_today, tokens_today, requests_total, tokens_total }]` |
 | GET | `/api/providers/accounts/:accId/codex-quota` | ChatGPT/Codex quota snapshot (OAuth accounts only) → `{ plan_type, email, limit_reached, primary, secondary, credits }`; each window has `used_percent, remaining_percent, window_seconds, resets_in_seconds, reset_at`. `secondary` = the 5-hour window when the plan has one |
 | POST | `/api/providers/accounts/:accId/codex-quota/reset` | Attempt ChatGPT/Codex banked reset for an OAuth account → `{ ok, message }` |
-| GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, each entry includes `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`) |
+| GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
 | GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, avg_latency_ms, errors, last_ts }]` |
 | POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (openai-type providers only) |
 | GET | `/oauth/callback` | OAuth redirect target — exchanges the code (PKCE) for tokens and creates the account labeled `ChatGPT (email)`. Public route, no session |
@@ -142,6 +142,9 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | POST | `/api/providers/:id/sync` | Fetch full model list from upstream `/models` and register all → `{ synced, models }`. For OAuth accounts: syncs the live Codex catalog (`{codex}/models?client_version=1.0.0`) |
 | POST | `/api/providers/:id/models/:modelId/test` | Per-model test: tiny chat completion (`max_tokens: 16`) against the upstream → `{ ok, status, latency_ms, model, detail? }`. For OAuth accounts: a streaming Codex `/responses` call (backend requires `stream: true`) |
 | GET | `/api/providers/:id/models` | Models known for this provider |
+| GET | `/api/xai/farm/check` | xAI Farm prerequisite report for IMAP settings, Python, Python packages, and Camoufox browser. |
+| POST | `/api/xai/farm/install-missing` | Starts a fixed-command background installation job. Creates `<install-root>/.venv` when absent, installs its packages, and downloads Camoufox into `<install-root>/.camoufox`. Returns the initial job status; concurrent jobs return `409`. |
+| GET | `/api/xai/farm/install-status` | Current install job state: `{ status, progress, stage, error?, checks? }`; `progress` is stage-based from 0–100. |
 | PUT | `/api/providers/:id/models/:modelId` | Update one model's metadata (display name, enabled state, context/capability metadata) |
 
 ### Aliases
@@ -175,7 +178,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, tokens, latency, cost, error) |
+| GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, thinking mode, tokens, latency, cost, error). Only the requested thinking setting is stored; reasoning content is never logged. |
 | GET | `/api/logs/:id` | Detail incl. payloads if `TRACK_PAYLOADS=full` |
 | DELETE | `/api/logs` | Purge (body: `{ before: "ISO-date" }`) |
 

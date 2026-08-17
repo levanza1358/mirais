@@ -89,7 +89,7 @@ mirais doctor --fix
 # Linux/macOS
 ./mirais start|status|restart|stop
 mirais autostart on|off
-mirais update
+mirais update     # clears package/build caches, then updates and restarts
 mirais expose on|off
 
 # Or via bun from anywhere in the project

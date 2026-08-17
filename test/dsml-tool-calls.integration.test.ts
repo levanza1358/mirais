@@ -83,4 +83,36 @@ describe("OpenAI chat DSML tool-call compatibility", () => {
     expect(events.some((event) => event !== "[DONE]" && (event.error as { code?: string } | undefined)?.code === "dsml_parse_error")).toBe(true);
     expect(events.at(-1)).toBe("[DONE]");
   });
+
+  test("preserves escaped characters inside tool arguments as valid JSON", async () => {
+    const events = await readEvents(dsmlToOpenAiStream(upstream([
+      chunk('<|DSML|><tool_calls><|DSML|><invoke name="write_file"><|DSML|><parameter name="path" string="true">a.txt</|DSML|><parameter><|DSML|><parameter name="content" string="true">line1\\nline2 with \\"quotes\\" and &amp; entity</|DSML|><parameter></|DSML|><invoke></|DSML|><tool_calls>'),
+      finish(),
+      "data: [DONE]\n\n",
+    ])));
+    const calls = toolCalls(events);
+    const args = JSON.parse(calls.map((call) => (call.function as { arguments?: string }).arguments ?? "").join(""));
+    expect(args).toEqual({ path: "a.txt", content: 'line1\\nline2 with \\"quotes\\" and & entity' });
+  });
+
+  test("round-trips a tool result into a follow-up completion", async () => {
+    const events = await readEvents(dsmlToOpenAiStream(upstream([
+      chunk('<|DSML|><tool_calls><|DSML|><invoke name="run_command"><|DSML|><parameter name="command" string="true">go build ./...</|DSML|><parameter></|DSML|><invoke></|DSML|><tool_calls>'),
+      finish(),
+      "data: [DONE]\n\n",
+    ])));
+    const calls = toolCalls(events);
+    const first = calls.find((call) => "id" in call) as { id: string; function: { name: string; arguments: string } };
+    const args = JSON.parse(calls.map((call) => (call.function as { arguments?: string }).arguments ?? "").join(""));
+
+    // The gateway must not execute the tool; instead the client returns the
+    // result as a `tool` role message keyed by the emitted tool_call id.
+    const toolResult = { role: "tool", tool_call_id: first.id, content: "compiled" };
+    expect(toolResult.tool_call_id).toBe(first.id);
+    expect(first.function.name).toBe("run_command");
+    expect(args).toEqual({ command: "go build ./..." });
+
+    const continuation = await readEvents(dsmlToOpenAiStream(upstream([chunk("All done."), finish(), "data: [DONE]\n\n"])));
+    expect(continuation.some((event) => event !== "[DONE]" && (event.choices as Array<{ delta: { content?: string } }>)[0]?.delta.content === "All done.")).toBe(true);
+  });
 });

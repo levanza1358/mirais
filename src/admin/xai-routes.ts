@@ -16,7 +16,7 @@ import {
   XAI_BASE_URL,
   type XaiImapSettings,
 } from "./xai-oauth";
-import { checkXaiFarmDependencies, installXaiFarmBrowser } from "../../scripts/xfarm/index";
+import { checkXaiFarmDependencies, installXaiFarmBrowser, installXaiFarmMissingDependencies, type XaiFarmDependencyStatus } from "../../scripts/xfarm/index";
 import { readXaiFarmLogs, writeXaiFarmLog, clearXaiFarmLogs } from "./xaiFarmLog";
 
 let farmStopRequested = false;
@@ -26,6 +26,23 @@ let farmDone = 0;
 let farmSucceeded = 0;
 let farmFailed = 0;
 let farmStartedAt: number | null = null;
+
+/** Cooldown between account sign-ups to avoid xAI sign-up rate limiting. */
+const FARM_ACCOUNT_COOLDOWN_MS = Number(process.env.XAI_FARM_COOLDOWN_MS ?? 5 * 60 * 1000);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface FarmInstallStatus {
+  status: "idle" | "running" | "success" | "error";
+  progress: number;
+  stage: string;
+  error?: string;
+  checks?: XaiFarmDependencyStatus[];
+}
+
+let farmInstallStatus: FarmInstallStatus = { status: "idle", progress: 0, stage: "Ready" };
 
 interface XaiAccountToken {
   accessToken?: string;
@@ -125,6 +142,30 @@ export function xaiAdminRoutes(db: Database) {
       return { success: true };
     })
 
+    .post("/farm/install-missing", async () => {
+      if (farmInstallStatus.status === "running") throw new AdminError(409, "Dependency installation is already running");
+      const imapSettings = settings.getJson<XaiImapSettings>("xai_imap");
+      const configured = Boolean(imapSettings?.enabled && imapSettings.gmail_username && imapSettings.gmail_app_password);
+      farmInstallStatus = { status: "running", progress: 0, stage: "Starting installation" };
+      void installXaiFarmMissingDependencies(configured, (progress, stage) => {
+        farmInstallStatus = { status: "running", progress, stage };
+      }).then((result) => {
+        farmInstallStatus = result.success
+          ? { status: "success", progress: 100, stage: "Installation complete", checks: result.checks }
+          : { status: "error", progress: farmInstallStatus.progress, stage: "Installation failed", error: result.error, checks: result.checks };
+      }).catch((error: unknown) => {
+        farmInstallStatus = {
+          status: "error",
+          progress: farmInstallStatus.progress,
+          stage: "Installation failed",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      });
+      return farmInstallStatus;
+    })
+
+    .get("/farm/install-status", () => farmInstallStatus)
+
     .post("/farm", async ({ body }) => {
       const input = body as { providerId?: string; count?: number; concurrency?: number };
       const { providerId } = input;
@@ -191,7 +232,19 @@ export function xaiAdminRoutes(db: Database) {
       let next = 0;
       const worker = async () => {
         while (next < count && !farmStopRequested) {
+          const index = next;
           next += 1;
+          // Wait before every account after the first so xAI's sign-up rate
+          // limit does not reject back-to-back registrations.
+          if (index > 0 && !farmStopRequested) {
+            const waitMs = FARM_ACCOUNT_COOLDOWN_MS;
+            await writeXaiFarmLog({ level: "info", message: `Cooldown ${Math.round(waitMs / 1000)}s before the next account` });
+            const started = Date.now();
+            while (Date.now() - started < waitMs && !farmStopRequested) {
+              await sleep(1000);
+            }
+          }
+          if (farmStopRequested) break;
           try {
             accounts.push(await runOne());
           } catch (error) {

@@ -19,6 +19,7 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
   const [farmCount, setFarmCount] = useState(1);
   const [farmCountInput, setFarmCountInput] = useState("1");
   const [farmConcurrency, setFarmConcurrency] = useState(1);
+  const [showInstallProgress, setShowInstallProgress] = useState(false);
 
   // A farm started in another tab (or before a page refresh) keeps running on
   // the server. Poll its status so the "Farm in progress" panel survives
@@ -62,14 +63,33 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
     onError: (e) => toast(e.message, "error"),
   });
 
-  const installBrowserMut = useMutation({
-    mutationFn: () => providers.xaiFarmInstallBrowser(),
-    onSuccess: () => {
-      toast("Camoufox browser installed", "success");
-      farmCheckMut.mutate();
-    },
+  const installStatus = useQuery({
+    queryKey: ["xai-farm-install-status"],
+    queryFn: providers.xaiFarmInstallStatus,
+    enabled: showInstallProgress,
+    refetchInterval: 1_000,
+  });
+
+  const installMissingMut = useMutation({
+    mutationFn: () => providers.xaiFarmInstallMissing(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["xai-farm-install-status"] }),
     onError: (e) => toast(e.message, "error"),
   });
+
+  const startInstall = () => {
+    queryClient.setQueryData(["xai-farm-install-status"], { status: "running", progress: 0, stage: "Starting installation" });
+    setShowInstallProgress(true);
+    installMissingMut.mutate();
+  };
+
+  const closeInstallProgress = () => {
+    if (installMissingMut.isPending || installStatus.data?.status === "running") return;
+    setShowInstallProgress(false);
+    if (installStatus.data?.status === "success" && installStatus.data.checks) {
+      setFarmCheck({ ok: installStatus.data.checks.every((check) => check.ok), checks: installStatus.data.checks });
+      toast("Installable requirements are ready", "success");
+    }
+  };
 
   const farmMut = useMutation({
     mutationFn: () => providers.xaiFarm(provider.id, farmCount, farmConcurrency),
@@ -207,11 +227,6 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
                       <div className="text-sm font-medium">{check.label}</div>
                       <div className="text-xs text-muted-foreground">{check.detail}</div>
                     </div>
-                    {!check.ok && check.key === "browser" && (
-                      <button onClick={() => installBrowserMut.mutate()} disabled={installBrowserMut.isPending} className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                        {installBrowserMut.isPending ? "Installing..." : "Install"}
-                      </button>
-                    )}
                   </div>
                 ))}
               </div>
@@ -237,6 +252,17 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
           </div>
 
           <div className="flex justify-end gap-2 border-t border-border pt-4">
+            {farmCheck?.checks.some((check) => !check.ok && check.key !== "imap") && (
+              <button
+                type="button"
+                onClick={startInstall}
+                disabled={installMissingMut.isPending || installStatus.data?.status === "running"}
+                className="flex items-center gap-2 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {installMissingMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                {installMissingMut.isPending ? "Installing..." : "Install all missing"}
+              </button>
+            )}
             <button onClick={() => setShowFarmSetup(false)} className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted">Hide setup</button>
             <button onClick={() => farmMut.mutate()} disabled={!farmCheck?.ok || farmMut.isPending} className="flex items-center gap-2 rounded-md bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
               {farmMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
@@ -253,6 +279,26 @@ export function XaiFarmCard({ provider, onDone }: { provider: Provider; onDone: 
               {farmStopMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
               Stop farm
             </button>
+          )}
+        </div>
+      </Modal>
+
+      <Modal open={showInstallProgress} onClose={closeInstallProgress} title="Installing XAI Farm">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-sm">
+            <span>{installStatus.data?.stage ?? "Starting installation"}</span>
+            <span className="font-medium">{installStatus.data?.progress ?? 0}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-border" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installStatus.data?.progress ?? 0}>
+            <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${installStatus.data?.progress ?? 0}%` }} />
+          </div>
+          {installStatus.data?.status === "running" && <p className="text-xs text-muted-foreground">Keep Mirais running while the local Python environment and Camoufox are installed.</p>}
+          {installStatus.data?.status === "error" && <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{installStatus.data.error ?? "Installation failed"}</p>}
+          {installStatus.data?.status === "success" && <p className="text-sm text-emerald-500">Installation completed successfully.</p>}
+          {installStatus.data?.status !== "running" && !installMissingMut.isPending && (
+            <div className="flex justify-end">
+              <button onClick={closeInstallProgress} className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">Close</button>
+            </div>
           )}
         </div>
       </Modal>

@@ -143,6 +143,7 @@ export interface RequestLog {
   credit_usage: number | null;
   latency_ms: number | null;
   tokens_saved: number | null;
+  reasoning_effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
   request_body?: string | null;
   response_body?: string | null;
   kind?: string;
@@ -338,6 +339,27 @@ export const providers = {
   xaiFarmLogsClear: () => req<{ ok: boolean }>("/api/xai/farm/logs/clear", { method: "POST" }),
   xaiFarmInstallBrowser: () =>
     req<{ success: boolean }>("/api/xai/farm/install-browser", { method: "POST" }),
+  xaiFarmInstallMissing: () =>
+    req<{
+      status: "idle" | "running" | "success" | "error";
+      progress: number;
+      stage: string;
+      error?: string;
+    }>("/api/xai/farm/install-missing", { method: "POST" }),
+  xaiFarmInstallStatus: () =>
+    req<{
+      status: "idle" | "running" | "success" | "error";
+      progress: number;
+      stage: string;
+      error?: string;
+      checks?: Array<{
+        key: "imap" | "python" | "packages" | "browser";
+        label: string;
+        ok: boolean;
+        detail: string;
+        required: boolean;
+      }>;
+    }>("/api/xai/farm/install-status"),
   xaiFarm: (providerId: string, count = 1, concurrency = 1) =>
     req<{
       ok: boolean;

@@ -145,6 +145,14 @@ function shell(command: string, args: string[], cwd = repoRoot): Promise<void> {
   });
 }
 
+function appVersion(root: string): string {
+  try {
+    return (JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { version?: string }).version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Run a maintenance command without streaming its implementation details. */
 function quietShell(command: string, args: string[], cwd = repoRoot): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -161,9 +169,17 @@ function quietShell(command: string, args: string[], cwd = repoRoot): Promise<vo
 }
 
 async function updateApp(): Promise<void> {
-  console.log("Update in progress... please wait.");
   try {
+    const previousVersion = appVersion(installRoot);
     await quietShell("git", ["pull", "--ff-only", "origin", "main"], installRoot);
+    const nextVersion = appVersion(installRoot);
+    console.log(`Mirais v${previousVersion} → v${nextVersion}`);
+    console.log("Update in progress... please wait.");
+    console.log("Clearing package and dashboard caches...");
+    fs.rmSync(path.join(installRoot, "node_modules", ".cache"), { recursive: true, force: true });
+    fs.rmSync(path.join(installRoot, "dashboard", "node_modules", ".cache"), { recursive: true, force: true });
+    fs.rmSync(path.join(installRoot, "dashboard", "dist"), { recursive: true, force: true });
+    await quietShell("bun", ["pm", "cache", "rm"], installRoot);
     await quietShell("bun", ["install"], installRoot);
     await quietShell("bun", ["install"], path.join(installRoot, "dashboard"));
     await quietShell("bun", ["run", "build"], installRoot);

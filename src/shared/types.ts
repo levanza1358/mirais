@@ -239,6 +239,8 @@ export interface RequestLog {
   credit_usage: number | null;
   latency_ms: number | null;
   tokens_saved: number;
+  /** Requested thinking mode; internal reasoning content is never stored. */
+  reasoning_effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
   request_body: string | null;
   response_body: string | null;
   /** 'request' (real traffic) or 'warmup' (test/ping). */
