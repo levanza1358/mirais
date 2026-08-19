@@ -8,6 +8,7 @@ import MusicMiniPlayer from "./components/MusicMiniPlayer";
 import Landing from "./pages/Landing";
 
 const Overview = lazy(() => import("./pages/Overview"));
+const Chat = lazy(() => import("./pages/Chat"));
 const Providers = lazy(() => import("./pages/Providers"));
 const ProviderDetail = lazy(() => import("./pages/ProviderDetail"));
 const Combos = lazy(() => import("./pages/Combos"));
@@ -17,7 +18,6 @@ const WarmupLogsRedirect = lazy(() => import("./pages/WarmupLogs"));
 const TestLogsRedirect = lazy(() => import("./pages/TestLogs"));
 const UsageLog = lazy(() => import("./pages/UsageLog"));
 const Settings = lazy(() => import("./pages/Settings"));
-const Integrations = lazy(() => import("./pages/Integrations"));
 const Proxy = lazy(() => import("./pages/Proxy"));
 const Music = lazy(() => import("./pages/Music"));
 
@@ -99,6 +99,7 @@ export default function App() {
               <Suspense fallback={<div className="p-8 text-sm text-muted">Loading…</div>}>
                 <Routes>
                   <Route index element={<Overview />} />
+                  <Route path="chat" element={<Chat />} />
                   <Route path="providers" element={<Providers />} />
                   <Route path="providers/:id" element={<ProviderDetail />} />
                   <Route path="combos" element={<Combos />} />
@@ -108,7 +109,6 @@ export default function App() {
                   <Route path="test-logs" element={<TestLogsRedirect />} />
                   <Route path="usage" element={<UsageLog />} />
                   <Route path="settings" element={<Settings />} />
-                  <Route path="integrations" element={<Integrations />} />
                   <Route path="proxies" element={<Proxy />} />
                   <Route path="music" element={<Music />} />
                   <Route path="*" element={<Navigate to="/dashboard" replace />} />

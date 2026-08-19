@@ -150,6 +150,7 @@ export function v1Routes(db: Database) {
         signal: request.signal,
         xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
         xaiRequestId: set.headers["x-request-id"],
+        allowPayloadTooLargeFallback: route.kind === "combo",
       }, providersRepo, routingPolicy);
 
       if (result.kind === "stream") {
@@ -220,6 +221,7 @@ export function v1Routes(db: Database) {
         signal: request.signal,
         xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
         xaiRequestId: set.headers["x-request-id"],
+        allowPayloadTooLargeFallback: route.kind === "combo",
       }, providersRepo, routingPolicy);
       if (result.kind === "stream") {
         const tap = tapOpenAiStream(result.stream);
@@ -308,6 +310,7 @@ export function v1Routes(db: Database) {
         signal: request.signal,
         xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
         xaiRequestId: requestId,
+        allowPayloadTooLargeFallback: route.kind === "combo",
       }, providersRepo, routingPolicy);
 
       if (result.kind === "stream") {
@@ -381,6 +384,10 @@ export function v1Routes(db: Database) {
       const creditUsage = provider === "openai" || provider === "codebuddy-cn"
         ? usage ? usage.prompt_tokens + usage.completion_tokens : null
         : null;
+      // Providers that report real credit consumption win. For everything else
+      // fall back to the model's configured credit_rate — clearly marked as an
+      // estimate so the dashboard never presents it as an actual bill.
+      const estimated = creditUsage === null ? estimateCredits(provider, model, usage) : null;
       logs.insert({
         keyId,
         endpoint,
@@ -393,7 +400,8 @@ export function v1Routes(db: Database) {
         error,
         inputTokens: usage?.prompt_tokens ?? null,
         outputTokens: usage?.completion_tokens ?? null,
-        creditUsage,
+        creditUsage: creditUsage ?? estimated,
+        creditSource: creditUsage !== null ? "upstream" : estimated !== null ? "estimated" : null,
         latencyMs: Date.now() - started,
         tokensSaved,
         reasoningEffort,
@@ -411,6 +419,24 @@ export function v1Routes(db: Database) {
   function reasoningEffort(req: CanonicalRequest): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null {
     if (!req.reasoning) return null;
     return req.reasoning.enabled === false ? "off" : req.reasoning.effort ?? "minimal";
+  }
+
+  /**
+   * Estimate credit consumption from the model's configured `credit_rate`
+   * (credits per 1,000 tokens). Returns null when no rate is configured — we
+   * never invent a number.
+   */
+  function estimateCredits(
+    provider: string | null,
+    model: string | null,
+    usage?: { prompt_tokens: number; completion_tokens: number } | null,
+  ): number | null {
+    if (!provider || !model || !usage) return null;
+    const providerRow = providersRepo.getByName(provider);
+    if (!providerRow) return null;
+    const rate = providersRepo.getProviderModel(providerRow.id, model)?.credit_rate;
+    if (rate == null || rate <= 0) return null;
+    return ((usage.prompt_tokens + usage.completion_tokens) / 1000) * rate;
   }
 
   function stringifyUnknown(value: unknown): string {

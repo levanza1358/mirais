@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Gauge, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Download, Gauge, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { type Provider, type ProviderAccount, providers } from "../../api";
-import { Badge, Button, Card, ConfirmModal, Modal, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
+import { Badge, Button, Card, ConfirmModal, Modal, Select, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
 import { AccountMetaModal } from "./AccountMetaModal";
 import { AddAccountModal } from "./AddAccountModal";
 import { CodexQuotaModal, InlineCodexQuota, quotaTitle } from "./quota";
 import { ACCOUNT_PAGE_SIZE_OPTIONS, DEFAULT_ACCOUNTS_PER_PAGE } from "./types";
+import { downloadCsv, toCsv } from "../../utils/csv";
 
 type AccountStatusTab = "healthy" | "rate_limited" | "failing" | "unknown";
 
@@ -28,6 +29,8 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const [pageSize, setPageSize] = useState<number>(DEFAULT_ACCOUNTS_PER_PAGE);
   const [editingMeta, setEditingMeta] = useState<ProviderAccount | null>(null);
   const [statusTab, setStatusTab] = useState<AccountStatusTab>("healthy");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [removingSelected, setRemovingSelected] = useState(false);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["providers"] });
 
   const usage = useQuery({
@@ -72,6 +75,8 @@ export function AccountsCard({ provider }: { provider: Provider }) {
     onSuccess: ({ removed, failed }) => {
       invalidate();
       setRemovingAll(false);
+      setRemovingSelected(false);
+      setSelected(new Set());
       setPage(1);
       setBulkDelete((current) => current ? { ...current, running: false } : current);
       toast(failed ? `${removed} removed; ${failed} failed` : `${removed} account${removed === 1 ? "" : "s"} removed`, failed ? "error" : "success");
@@ -104,6 +109,28 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   });
 
   const accounts = provider.accounts ?? [];
+  const exportAccounts = useMutation({
+    mutationFn: () => providers.exportAccounts(provider.id),
+    onSuccess: (rows) => {
+      const csv = toCsv(
+        rows.map((account, index) => ({
+          no: index + 1,
+          label: account.label,
+          auth_kind: account.auth_kind ?? "api_key",
+          credential: account.api_key,
+          refresh_token: account.refresh_token ?? "",
+          account_id: account.account_id ?? "",
+          expires_at: account.expires_at ? new Date(account.expires_at).toISOString() : "",
+          enabled: account.enabled ? "yes" : "no",
+          status: account.last_warmup_status ?? "unknown",
+          created_at: account.created_at,
+        })),
+      );
+      downloadCsv(`mirais-${provider.name}-accounts-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+      toast(`Exported ${rows.length} account${rows.length === 1 ? "" : "s"} — file contains full credentials, store it safely`, "success");
+    },
+    onError: (error: Error) => toast(error.message, "error"),
+  });
   const accountCounts = useMemo(
     () => Object.fromEntries(ACCOUNT_STATUS_TABS.map(({ id }) => [id, id === "unknown"
       ? accounts.filter((account) => !account.last_warmup_status).length
@@ -130,6 +157,25 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const totalPages = Math.max(1, Math.ceil(filteredAccounts.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageAccounts = filteredAccounts.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const pageAllSelected = pageAccounts.length > 0 && pageAccounts.every((account) => selected.has(account.id));
+
+  const toggleSelected = (accountId: string) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(accountId)) next.delete(accountId);
+    else next.add(accountId);
+    return next;
+  });
+
+  // Select/clear only the rows currently visible, so paging never hides a
+  // selection the user cannot see before confirming a delete.
+  const toggleSelectPage = () => setSelected((current) => {
+    const next = new Set(current);
+    for (const account of pageAccounts) {
+      if (pageAllSelected) next.delete(account.id);
+      else next.add(account.id);
+    }
+    return next;
+  });
 
   return (
     <Card>
@@ -142,11 +188,13 @@ export function AccountsCard({ provider }: { provider: Provider }) {
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 text-xs text-text-muted">
             <span>Show</span>
-            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="rounded-md border border-border bg-bg-base px-2 py-1 text-xs text-text-primary focus:border-accent focus:outline-none">
+            <Select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="h-8 w-20 rounded-md px-2 py-1 text-xs">
               {ACCOUNT_PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-            </select>
+            </Select>
           </div>
           <div className="flex items-center gap-2">
+            {selected.size > 0 && <Button variant="ghost" size="sm" onClick={() => setRemovingSelected(true)} aria-label={`Remove ${selected.size} selected accounts`}><Trash2 size={14} className="text-danger" /> Delete {selected.size} selected</Button>}
+            {accounts.length > 0 && <Button variant="ghost" size="sm" disabled={exportAccounts.isPending} onClick={() => exportAccounts.mutate()} aria-label={`Export all ${accounts.length} accounts`} title="Download every account with its credentials (CSV)">{exportAccounts.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export</Button>}
             {accounts.length > 0 && <Button variant="ghost" size="sm" onClick={() => setRemovingAll(true)} aria-label={`Remove all ${accounts.length} accounts`}><Trash2 size={14} className="text-danger" /> Delete all</Button>}
             <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add account</Button>
           </div>
@@ -171,6 +219,14 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       {accounts.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No accounts yet — add an API key to enable this provider.</p>}
       {accounts.length > 0 && filteredAccounts.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No {ACCOUNT_STATUS_TABS.find((tab) => tab.id === statusTab)?.label.toLowerCase()} accounts.</p>}
 
+      {pageAccounts.length > 0 && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-text-muted">
+          <input type="checkbox" checked={pageAllSelected} onChange={toggleSelectPage} aria-label="Select all accounts on this page" className="size-3.5 accent-accent" />
+          <span>Select page ({pageAccounts.length})</span>
+          {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="underline hover:text-text-primary">Clear {selected.size} selected</button>}
+        </div>
+      )}
+
       <div className="space-y-2">
         {pageAccounts.map((account) => {
           const row = usageByLabel.get(account.label);
@@ -180,6 +236,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
+                    <input type="checkbox" checked={selected.has(account.id)} onChange={() => toggleSelected(account.id)} aria-label={`Select ${account.label}`} className="size-3.5 shrink-0 accent-accent" />
                     <span className={`inline-block size-2 shrink-0 rounded-full ${account.enabled ? "bg-success" : "bg-text-muted/30"}`} />
                     <span className="font-medium">{account.label}</span>
                     {account.last_warmup_status === "healthy" && <Badge tone="success">healthy</Badge>}
@@ -252,6 +309,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
 
       <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => removing && removeAccount.mutate(removing.id)} title="Remove account" message={`Remove account "${removing?.label}" from ${provider.name}? Requests will no longer use this key.`} danger loading={removeAccount.isPending} />
       <ConfirmModal open={removingAll} onClose={() => setRemovingAll(false)} onConfirm={() => removeAllAccounts.mutate(accounts.map((account) => account.id))} title="Remove all accounts" message={`Remove all ${accounts.length} accounts from ${provider.name}? This cannot be undone and requests will no longer use this provider.`} danger loading={removeAllAccounts.isPending} />
+      <ConfirmModal open={removingSelected} onClose={() => setRemovingSelected(false)} onConfirm={() => removeAllAccounts.mutate([...selected])} title="Remove selected accounts" message={`Remove ${selected.size} selected account${selected.size === 1 ? "" : "s"} from ${provider.name}? This cannot be undone.`} danger loading={removeAllAccounts.isPending} />
       <Modal open={!!bulkDelete} onClose={() => { if (!bulkDelete?.running) setBulkDelete(null); }} title="Deleting accounts">
         {bulkDelete && (() => {
           const complete = bulkDelete.removed + bulkDelete.failed;

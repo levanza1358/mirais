@@ -357,6 +357,16 @@ export function providerRoutes(db: Database) {
       log.info("accounts bulk removed", { provider: p.name, removed });
       return { ok: true, removed };
     })
+    // Full credential export for migration/backup. Returns UNMASKED keys and
+    // refresh tokens — the dashboard is passwordless, so this endpoint must
+    // stay behind the same trusted-network boundary as the rest of /api.
+    .get("/:id/accounts/export", ({ params }) => {
+      const p = repo.get(params.id);
+      if (!p) throw new AdminError(404, "Provider not found");
+      const accounts = repo.listAccounts(p.id);
+      log.info("accounts exported", { provider: p.name, count: accounts.length });
+      return accounts;
+    })
     .patch("/accounts/:accId", ({ params, body }) => {
       const parsed = accountUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
@@ -905,25 +915,30 @@ export function providerRoutes(db: Database) {
       }
 
       let entries: UpstreamModel[] = [];
-      if (p.type === "anthropic") {
-        const res = await fetch(`${base}/v1/models`, {
-          headers: { "x-api-key": account.api_key, "anthropic-version": "2023-06-01" },
-          signal: AbortSignal.timeout(20_000),
-        });
-        if (!res.ok) throw new AdminError(502, `Upstream returned HTTP ${res.status}`);
-        const data = upstreamModelsResponseSchema.safeParse(await res.json());
-        if (!data.success) throw new AdminError(502, "Upstream returned an invalid model catalog");
-        entries = data.data.data;
-      } else {
-        const res = await fetch(`${base}/models`, {
-          headers: { Authorization: `Bearer ${account.api_key}` },
-          signal: AbortSignal.timeout(20_000),
-        });
-        if (!res.ok) throw new AdminError(502, `Upstream returned HTTP ${res.status}`);
-        const data = upstreamModelsResponseSchema.safeParse(await res.json());
-        if (!data.success) throw new AdminError(502, "Upstream returned an invalid model catalog");
-        entries = data.data.data;
+      let catalogFound = false;
+      let catalogError = "Upstream returned an invalid model catalog";
+      for (const candidate of accounts) {
+        try {
+          const res = await fetch(p.type === "anthropic" ? `${base}/v1/models` : `${base}/models`, {
+            headers: p.type === "anthropic"
+              ? { "x-api-key": candidate.api_key, "anthropic-version": "2023-06-01" }
+              : { Authorization: `Bearer ${candidate.api_key}` },
+            signal: AbortSignal.timeout(20_000),
+          });
+          if (!res.ok) {
+            catalogError = `Upstream returned HTTP ${res.status}`;
+            continue;
+          }
+          const data = upstreamModelsResponseSchema.safeParse(await res.json().catch(() => null));
+          if (!data.success) continue;
+          entries = data.data.data;
+          catalogFound = true;
+          break;
+        } catch (err) {
+          catalogError = err instanceof Error ? err.message : String(err);
+        }
       }
+      if (!catalogFound) throw new AdminError(502, catalogError);
 
       // Filter which models to keep. Mode is a global setting
       // ("model_sync_mode": "curated" | "all"), defaulting to curated.

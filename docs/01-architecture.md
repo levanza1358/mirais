@@ -88,7 +88,7 @@ sequenceDiagram
 
 ### Key design rules
 - **Streaming-first**: SSE is piped chunk-by-chunk; translation works on incremental events, never buffers the full body (except non-stream requests).
-- **Failover only on retriable errors**: 429, 500/502/503/504, network errors, upstream auth failure (account revoked). Client errors (400) are returned as-is.
+- **Failover only on retriable errors**: 429, 500/502/503/504, network errors, upstream auth failure (account revoked), and SSE streams that end before producing output. Client errors are returned as-is except `413` on Combo routes: the rejecting model is skipped because another model may accept the same context size. Once output is forwarded, the request is never retried.
 - **Cooldowns**: an account that returns 429 gets cooled down for the `Retry-After` window (default 60s); consecutive failures use exponential backoff (1m → 5m → 15m).
 - **Idempotent logging**: usage is logged after the response completes (or aborts), keyed by request id.
 
@@ -133,6 +133,7 @@ Accounts added via **ChatGPT login** (`auth_kind = 'oauth'`) cannot call `api.op
 - **Request translation** — canonical Chat Completions → Responses API: `messages` → `input` items (`input_text` / `output_text` / `input_image` / `function_call` / `function_call_output`), `system` → top-level `instructions`, `tools` → Responses function tools. `store: false` is always set.
 - **Backend quirks** — the Codex backend **requires `stream: true`** and **rejects `max_output_tokens`**. Non-streaming callers therefore stream internally and aggregate the SSE events into one chat completion (`aggregateResponsesStream`).
 - **Response translation** — Responses API SSE (`response.output_text.delta`, `response.output_item.added`, `response.function_call_arguments.delta`, `response.completed`) → OpenAI `chat.completion.chunk` stream, or a single aggregated chat completion.
+- **Empty-response failover** — the Codex backend can answer `200 OK` and then emit only an error event (`"Our servers are currently overloaded"`) with no content. `responsesStreamToChat()` therefore holds back the leading chunks until the first real output event and exposes a `ready` promise; the executor awaits it, so such a response fails over to the next account instead of streaming an empty assistant message. Once content is forwarded the request is never retried (no duplicate output).
 - **Headers** — `Authorization: Bearer <access_token>` + `chatgpt-account-id: <account_id>` + `originator: codex_cli_rs`.
 - **Model catalog** — synced from `GET {codex}/models?client_version=1.0.0` (the same version-gated catalog the Codex CLI uses), with a static fallback list.
 - **Paid-plan routing** — warmup and quota checks persist the Codex usage `plan_type` on each OAuth account. Models marked as requiring Plus/Pro are eligible only for an account with a matching persisted paid tier; Free and unknown tiers are excluded (fail closed) and are never attempted as fallback.

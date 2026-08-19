@@ -40,6 +40,7 @@ export interface Provider {
   base_url_effective?: string;
   enabled: number;
   priority: number;
+  account_strategy: "priority" | "round_robin";
   created_at: string;
   updated_at: string;
   accounts?: ProviderAccount[];
@@ -76,6 +77,8 @@ export interface ProviderModel {
   context_length: number | null;
   max_output_tokens: number | null;
   capabilities: string | null;
+  credit_rate: number | null;
+  credit_unit: "token" | "credit" | "request" | "image" | null;
 }
 
 export interface Alias {
@@ -104,7 +107,19 @@ export interface Combo {
 export interface ComboDiagnostic {
   combo: string;
   requested_model: string;
-  candidates: Array<{ position: number; provider: string; model: string; available_accounts: number; healthy_accounts: number }>;
+  ok: boolean;
+  candidates: Array<{
+    position: number;
+    provider: string;
+    model: string;
+    available_accounts: number;
+    healthy_accounts: number;
+    ok: boolean;
+    status: number;
+    latency_ms: number;
+    account?: string;
+    detail?: string;
+  }>;
 }
 
 export interface GatewayKey {
@@ -141,6 +156,7 @@ export interface RequestLog {
   input_tokens: number | null;
   output_tokens: number | null;
   credit_usage: number | null;
+  credit_source: "upstream" | "estimated" | null;
   latency_ms: number | null;
   tokens_saved: number | null;
   reasoning_effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
@@ -241,9 +257,9 @@ export interface Settings {
 export const providers = {
   list: () => req<Provider[]>("/api/providers"),
   models: (id: string) => req<ProviderModel[]>(`/api/providers/${id}/models`),
-  create: (input: { name: string; type: string; baseUrl?: string; priority?: number }) =>
+  create: (input: { name: string; type: string; baseUrl?: string; priority?: number; accountStrategy?: Provider["account_strategy"] }) =>
     req<Provider>("/api/providers", { method: "POST", body: JSON.stringify(input) }),
-  update: (id: string, patch: Partial<{ name: string; baseUrl: string | null; enabled: boolean; priority: number }>) =>
+  update: (id: string, patch: Partial<{ name: string; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>) =>
     req<Provider>(`/api/providers/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id: string) => req<{ ok: boolean }>(`/api/providers/${id}`, { method: "DELETE" }),
   addAccount: (id: string, input: { label: string; apiKey: string; priority?: number }) =>
@@ -251,6 +267,7 @@ export const providers = {
   addAccountsBulk: (id: string, apiKeys: string[], labelPrefix?: string) =>
     req<{ added: number; skipped: number }>(`/api/providers/${id}/accounts/bulk`, { method: "POST", body: JSON.stringify({ apiKeys, labelPrefix }) }),
   removeAllAccounts: (id: string) => req<{ ok: boolean; removed: number }>(`/api/providers/${id}/accounts`, { method: "DELETE" }),
+  exportAccounts: (id: string) => req<ProviderAccount[]>(`/api/providers/${id}/accounts/export`),
   accountUsage: (id: string) =>
     req<Array<{ account: string; requests_today: number; tokens_today: number; requests_total: number; tokens_total: number }>>(
       `/api/providers/${id}/accounts/usage`),
@@ -271,7 +288,7 @@ export const providers = {
   checkinAccount: (accId: string) =>
     req<{ ok: boolean; message: string; quotaTotal: number | null }>(`/api/providers/accounts/${accId}/checkin`, { method: "POST" }),
   removeAccount: (accId: string) => req<{ ok: boolean }>(`/api/providers/accounts/${accId}`, { method: "DELETE" }),
-  upsertModel: (id: string, modelId: string, patch?: Partial<{ displayName: string; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>) =>
+  upsertModel: (id: string, modelId: string, patch?: Partial<{ displayName: string; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null; creditRate: number | null; creditUnit: ProviderModel["credit_unit"] }>) =>
     req<{ ok: boolean }>(`/api/providers/${id}/models/${encodeURIComponent(modelId)}`, { method: "PUT", body: JSON.stringify(patch ?? {}) }),
   removeModel: (id: string, modelId: string) =>
     req<{ ok: boolean }>(`/api/providers/${id}/models/${encodeURIComponent(modelId)}`, { method: "DELETE" }),
@@ -498,39 +515,6 @@ export const settings = {
 };
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");
-
-// ── integrations ──
-export interface IntegrationModel {
-  id: string;
-  provider: string;
-  providerType: string;
-}
-
-export interface IntegrationCli {
-  id: "opencode" | "codex" | "claude-code" | "aider";
-  name: string;
-  configPath: string;
-  detected: boolean;
-  command: string | null;
-  configExists: boolean;
-  supportsApply: boolean;
-  note: string;
-}
-
-export interface IntegrationCatalog {
-  baseUrl: string;
-  clis: IntegrationCli[];
-  models: IntegrationModel[];
-}
-
-export const integrations = {
-  catalog: () => req<IntegrationCatalog>("/api/integrations/catalog"),
-  apply: (input: { cli: IntegrationCli["id"]; model: string; apiKey: string }) =>
-    req<{ ok: boolean; cli: string; path: string; backup: string | null }>("/api/integrations/apply", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-};
 
 // ── proxies ──
 export type ProxyStatus = "pending" | "healthy" | "slow" | "failing" | "disabled";

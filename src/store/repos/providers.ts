@@ -17,25 +17,26 @@ export class ProvidersRepo {
     return (this.db.query("SELECT * FROM providers WHERE lower(name) = lower(?)").get(name) as Provider) ?? null;
   }
 
-  create(input: { name: string; type: ProviderType; baseUrl?: string | null; enabled?: boolean; priority?: number }): Provider {
+  create(input: { name: string; type: ProviderType; baseUrl?: string | null; enabled?: boolean; priority?: number; accountStrategy?: Provider["account_strategy"] }): Provider {
     const id = ulid();
     this.db
-      .query("INSERT INTO providers (id, name, type, base_url, enabled, priority) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(id, input.name, input.type, input.baseUrl ?? null, input.enabled === false ? 0 : 1, input.priority ?? 100);
+      .query("INSERT INTO providers (id, name, type, base_url, enabled, priority, account_strategy) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.name, input.type, input.baseUrl ?? null, input.enabled === false ? 0 : 1, input.priority ?? 100, input.accountStrategy ?? "priority");
     return this.get(id)!;
   }
 
-  update(id: string, patch: Partial<{ name: string; type: ProviderType; baseUrl: string | null; enabled: boolean; priority: number }>): Provider | null {
+  update(id: string, patch: Partial<{ name: string; type: ProviderType; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>): Provider | null {
     const cur = this.get(id);
     if (!cur) return null;
     this.db
-      .query("UPDATE providers SET name=?, type=?, base_url=?, enabled=?, priority=?, updated_at=? WHERE id=?")
+      .query("UPDATE providers SET name=?, type=?, base_url=?, enabled=?, priority=?, account_strategy=?, updated_at=? WHERE id=?")
       .run(
         patch.name ?? cur.name,
         patch.type ?? cur.type,
         patch.baseUrl !== undefined ? patch.baseUrl : cur.base_url,
         patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
         patch.priority ?? cur.priority,
+        patch.accountStrategy ?? cur.account_strategy,
         nowIso(),
         id,
       );
@@ -131,7 +132,7 @@ export class ProvidersRepo {
   findModel(modelId: string): Array<ProviderModel & { provider: Provider }> {
     const rows = this.db
       .query(
-        `SELECT pm.*, p.id as p_id, p.name as p_name, p.type as p_type, p.base_url as p_base_url, p.enabled as p_enabled, p.priority as p_priority
+        `SELECT pm.*, p.id as p_id, p.name as p_name, p.type as p_type, p.base_url as p_base_url, p.enabled as p_enabled, p.priority as p_priority, p.account_strategy as p_account_strategy
          FROM provider_models pm JOIN providers p ON p.id = pm.provider_id
          WHERE pm.model_id = ? AND pm.enabled = 1 AND p.enabled = 1
          ORDER BY p.priority ASC`,
@@ -162,6 +163,8 @@ export class ProvidersRepo {
       context_length: row.context_length,
       max_output_tokens: row.max_output_tokens,
       capabilities: row.capabilities,
+      credit_rate: row.credit_rate,
+      credit_unit: row.credit_unit,
       provider: {
         id: row.p_id,
         name: row.p_name,
@@ -169,13 +172,14 @@ export class ProvidersRepo {
         base_url: row.p_base_url,
         enabled: row.p_enabled,
         priority: row.p_priority,
+        account_strategy: row.p_account_strategy,
         created_at: "",
         updated_at: "",
       },
     } as ProviderModel & { provider: Provider };
   }
 
-  upsertModel(providerId: string, modelId: string, patch?: Partial<{ displayName: string | null; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null; source: "manual" | "sync" }>): void {
+  upsertModel(providerId: string, modelId: string, patch?: Partial<{ displayName: string | null; enabled: boolean; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null; creditRate: number | null; creditUnit: ProviderModel["credit_unit"]; source: "manual" | "sync" }>): void {
     const caps = patch?.capabilities !== undefined ? (patch.capabilities ? JSON.stringify(patch.capabilities) : null) : undefined;
     const existing = this.db
       .query("SELECT id FROM provider_models WHERE provider_id = ? AND model_id = ?")
@@ -183,19 +187,21 @@ export class ProvidersRepo {
     if (existing) {
       const cur = this.db.query("SELECT * FROM provider_models WHERE id = ?").get(existing.id) as ProviderModel;
       this.db
-        .query("UPDATE provider_models SET display_name=?, enabled=?, context_length=?, max_output_tokens=?, capabilities=?, source=? WHERE id=?")
+        .query("UPDATE provider_models SET display_name=?, enabled=?, context_length=?, max_output_tokens=?, capabilities=?, credit_rate=?, credit_unit=?, source=? WHERE id=?")
         .run(
           patch?.displayName ?? cur.display_name,
           patch?.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
           patch?.contextLength !== undefined ? patch.contextLength : cur.context_length,
           patch?.maxOutputTokens !== undefined ? patch.maxOutputTokens : cur.max_output_tokens,
           caps !== undefined ? caps : cur.capabilities,
+          patch?.creditRate !== undefined ? patch.creditRate : cur.credit_rate,
+          patch?.creditUnit !== undefined ? patch.creditUnit : cur.credit_unit,
           cur.source === "manual" ? "manual" : (patch?.source ?? cur.source),
           existing.id,
         );
     } else {
       this.db
-        .query("INSERT INTO provider_models (id, provider_id, model_id, display_name, enabled, context_length, max_output_tokens, capabilities, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .query("INSERT INTO provider_models (id, provider_id, model_id, display_name, enabled, context_length, max_output_tokens, capabilities, credit_rate, credit_unit, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(
           ulid(),
           providerId,
@@ -205,6 +211,8 @@ export class ProvidersRepo {
           patch?.contextLength ?? null,
           patch?.maxOutputTokens ?? null,
           caps !== undefined ? caps : null,
+          patch?.creditRate ?? null,
+          patch?.creditUnit ?? null,
           patch?.source ?? "manual",
         );
     }

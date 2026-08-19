@@ -1,10 +1,14 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Boxes, ChevronRight, Plus, AlertTriangle, RefreshCw } from "lucide-react";
 import { providers, healthInfo, type Provider } from "../api";
-import { Button, Card, Switch, Badge, EmptyState, Skeleton, toast } from "../components/ui";
+import { Button, Card, Input, Modal, Switch, Badge, EmptyState, Skeleton, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { PROVIDER_PRESETS, presetForType, type ProviderPreset } from "../providerCatalog";
+import { PROVIDER_PRESETS, presetFor, isCatalogPreset, type ProviderPreset } from "../providerCatalog";
+
+/** Fixed catalog tiles, always rendered. User-created custom providers get their own card each. */
+const CATALOG = PROVIDER_PRESETS.filter(isCatalogPreset);
 
 export default function Providers() {
   const qc = useQueryClient();
@@ -38,13 +42,22 @@ export default function Providers() {
     onError: (e) => toast(e.message, "error"),
   });
 
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ name: "", baseUrl: "" });
+  const createCustom = useMutation({
+    mutationFn: () =>
+      providers.create({ name: form.name.trim(), type: "custom", baseUrl: form.baseUrl.trim() || undefined }),
+    onSuccess: (p) => {
+      invalidate();
+      setAddOpen(false);
+      setForm({ name: "", baseUrl: "" });
+      toast("Custom provider created");
+      navigate(`/dashboard/providers/${p.id}`);
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
   const existing = list.data ?? [];
-  const byType = new Map<string, Provider[]>();
-  for (const p of existing) {
-    const arr = byType.get(p.type) ?? [];
-    arr.push(p);
-    byType.set(p.type, arr);
-  }
 
   // Fetch quota summaries for all existing providers
   const quotaQueries = useQueries({
@@ -56,23 +69,76 @@ export default function Providers() {
     })),
   });
   const quotaById = new Map(existing.map((p, i) => [p.id, quotaQueries[i]]));
-  // Providers whose type isn't in the preset catalog (legacy/unknown types).
-  const knownTypes = new Set(PROVIDER_PRESETS.map((p) => p.type));
-  const others = existing.filter((p) => !knownTypes.has(p.type));
-  const enabledPresets = PROVIDER_PRESETS.filter((preset) => (byType.get(preset.type)?.[0]?.enabled ?? false));
-  const disabledPresets = PROVIDER_PRESETS.filter((preset) => !(byType.get(preset.type)?.[0]?.enabled ?? false));
+
+  // A catalog tile owns providers matching its name, or (for the type-specific presets) its type.
+  const claimed = new Set<string>();
+  const tiles = CATALOG.map((preset) => {
+    const instances = existing.filter((p) =>
+      preset.type === "custom" ? p.name === preset.name : p.type === preset.type,
+    );
+    for (const p of instances) claimed.add(p.id);
+    return { preset, primary: instances[0], extraCount: Math.max(0, instances.length - 1) };
+  });
+  // Everything else (user-created custom providers, legacy/unknown types) gets its own card.
+  const others = existing.filter((p) => !claimed.has(p.id));
+
+  const enabledTiles = tiles.filter((t) => t.primary?.enabled);
+  const disabledTiles = tiles.filter((t) => !t.primary?.enabled);
   const enabledOthers = others.filter((p) => !!p.enabled);
   const disabledOthers = others.filter((p) => !p.enabled);
 
-  const openPreset = (preset: ProviderPreset) => {
-    const found = byType.get(preset.type)?.[0];
-    if (found) navigate(`/dashboard/providers/${found.id}`);
+  const openPreset = (preset: ProviderPreset, primary: Provider | undefined) => {
+    if (primary) navigate(`/dashboard/providers/${primary.id}`);
     else createAndOpen.mutate(preset);
   };
 
   return (
     <div>
-      <PageHeader title="Providers" />
+      <PageHeader title="Providers">
+        <Button size="sm" onClick={() => setAddOpen(true)}>
+          <Plus size={14} /> Add custom provider
+        </Button>
+      </PageHeader>
+
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add custom provider">
+        <form
+          className="space-y-3"
+          onSubmit={(e) => { e.preventDefault(); createCustom.mutate(); }}
+        >
+          <label className="block text-xs text-text-muted">
+            Name
+            <Input
+              className="mt-1"
+              autoFocus
+              required
+              pattern="[a-z0-9][a-z0-9\-_]*"
+              maxLength={64}
+              placeholder="my-endpoint"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+            <span className="mt-1 block text-[11px] text-text-muted/70">Lowercase letters, digits, dash, underscore. Must be unique.</span>
+          </label>
+          <label className="block text-xs text-text-muted">
+            Base URL
+            <Input
+              className="mt-1"
+              type="url"
+              required
+              placeholder="https://api.example.com/v1"
+              value={form.baseUrl}
+              onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
+            />
+            <span className="mt-1 block text-[11px] text-text-muted/70">Any OpenAI-compatible endpoint.</span>
+          </label>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button type="button" variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button type="submit" size="sm" disabled={createCustom.isPending}>
+              {createCustom.isPending ? "Creating…" : "Create"}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {list.isLoading ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -109,29 +175,25 @@ export default function Providers() {
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">Enabled providers</h2>
-              <span className="text-xs text-text-muted">{enabledPresets.length + enabledOthers.length} shown</span>
+              <span className="text-xs text-text-muted">{enabledTiles.length + enabledOthers.length} shown</span>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {enabledPresets.map((preset) => {
-                const instances = byType.get(preset.type) ?? [];
-                const primary = instances[0];
-                return (
-                  <ProviderCard
-                    key={preset.type}
-                    preset={preset}
-                    provider={primary}
-                    quota={primary ? quotaById.get(primary.id) : undefined}
-                    extraCount={Math.max(0, instances.length - 1)}
-                    onOpen={() => openPreset(preset)}
-                    onToggle={primary ? () => toggle.mutate(primary) : undefined}
-                    toggling={toggle.isPending && toggle.variables?.id === primary?.id}
-                  />
-                );
-              })}
+              {enabledTiles.map(({ preset, primary, extraCount }) => (
+                <ProviderCard
+                  key={preset.name}
+                  preset={preset}
+                  provider={primary}
+                  quota={primary ? quotaById.get(primary.id) : undefined}
+                  extraCount={extraCount}
+                  onOpen={() => openPreset(preset, primary)}
+                  onToggle={primary ? () => toggle.mutate(primary) : undefined}
+                  toggling={toggle.isPending && toggle.variables?.id === primary?.id}
+                />
+              ))}
               {enabledOthers.map((p) => (
                 <ProviderCard
                   key={p.id}
-                  preset={presetForType(p.type)}
+                  preset={presetFor(p)}
                   provider={p}
                   quota={quotaById.get(p.id)}
                   extraCount={0}
@@ -146,30 +208,26 @@ export default function Providers() {
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-text-muted">Disabled / not configured</h2>
-              <span className="text-xs text-text-muted">{disabledPresets.length + disabledOthers.length} shown</span>
+              <span className="text-xs text-text-muted">{disabledTiles.length + disabledOthers.length} shown</span>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {disabledPresets.map((preset) => {
-                const instances = byType.get(preset.type) ?? [];
-                const primary = instances[0];
-                return (
-                  <ProviderCard
-                    key={preset.type}
-                    preset={preset}
-                    provider={primary}
-                    quota={primary ? quotaById.get(primary.id) : undefined}
-                    extraCount={Math.max(0, instances.length - 1)}
-                    onOpen={() => openPreset(preset)}
-                    onToggle={primary ? () => toggle.mutate(primary) : undefined}
-                    toggling={toggle.isPending && toggle.variables?.id === primary?.id}
-                    dimmed
-                  />
-                );
-              })}
+              {disabledTiles.map(({ preset, primary, extraCount }) => (
+                <ProviderCard
+                  key={preset.name}
+                  preset={preset}
+                  provider={primary}
+                  quota={primary ? quotaById.get(primary.id) : undefined}
+                  extraCount={extraCount}
+                  onOpen={() => openPreset(preset, primary)}
+                  onToggle={primary ? () => toggle.mutate(primary) : undefined}
+                  toggling={toggle.isPending && toggle.variables?.id === primary?.id}
+                  dimmed
+                />
+              ))}
               {disabledOthers.map((p) => (
                 <ProviderCard
                   key={p.id}
-                  preset={presetForType(p.type)}
+                  preset={presetFor(p)}
                   provider={p}
                   quota={quotaById.get(p.id)}
                   extraCount={0}
@@ -264,7 +322,9 @@ function ProviderCard({
               <h3 className="truncate text-sm font-semibold">{provider?.name ?? preset.displayName}</h3>
               {provider && !provider.enabled && <Badge tone="warning">disabled</Badge>}
             </div>
-            <p className="mt-0.5 truncate text-xs text-text-muted">{preset.description}</p>
+            <p className="mt-0.5 truncate text-xs text-text-muted">
+              {(!isCatalogPreset(preset) && provider?.base_url) || preset.description}
+            </p>
           </div>
           <ChevronRight size={16} className="mt-1 shrink-0 text-text-muted/40 transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
         </div>

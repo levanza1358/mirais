@@ -135,6 +135,7 @@ export const providerCreateSchema = z.object({
   baseUrl: z.string().url().optional().nullable(),
   enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
+  accountStrategy: z.enum(["priority", "round_robin"]).optional(),
 });
 
 export const providerUpdateSchema = providerCreateSchema.partial();
@@ -169,6 +170,8 @@ export const providerModelUpdateSchema = z.object({
   contextLength: z.number().int().positive().max(10_000_000).nullable().optional(),
   maxOutputTokens: z.number().int().positive().max(10_000_000).nullable().optional(),
   capabilities: z.array(z.string().trim().min(1).max(64)).max(32).nullable().optional(),
+  creditRate: z.number().nonnegative().max(1_000_000).nullable().optional(),
+  creditUnit: z.enum(["token", "credit", "request", "image"]).nullable().optional(),
 }).strict();
 
 export const upstreamModelSchema = z.object({

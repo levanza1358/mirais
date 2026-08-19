@@ -133,6 +133,7 @@ export interface Provider {
   base_url: string | null;
   enabled: number;
   priority: number;
+  account_strategy: "priority" | "round_robin";
   created_at: string;
   updated_at: string;
 }
@@ -177,6 +178,10 @@ export interface ProviderModel {
   context_length: number | null;
   max_output_tokens: number | null;
   capabilities: string | null;
+  /** Credit units consumed per 1,000 tokens. Null when unknown — never guessed. */
+  credit_rate: number | null;
+  /** What one credit unit means for this model. */
+  credit_unit: "token" | "credit" | "request" | "image" | null;
   source: "manual" | "sync";
 }
 
@@ -237,6 +242,8 @@ export interface RequestLog {
   input_tokens: number | null;
   output_tokens: number | null;
   credit_usage: number | null;
+  /** 'upstream' = reported by the provider; 'estimated' = derived from the model's credit_rate. */
+  credit_source: "upstream" | "estimated" | null;
   latency_ms: number | null;
   tokens_saved: number;
   /** Requested thinking mode; internal reasoning content is never stored. */

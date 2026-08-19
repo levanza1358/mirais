@@ -15,7 +15,7 @@ Violations of §1 (Hard Rules) block merge. §2 conventions block merge when cle
 ### Correctness / Data
 - **R1.7** Schema changes only via new migration file `NNNN_name.sql`; never edit an applied migration. Migrations must be idempotent and run inside a transaction.
 - **R1.8** Proxy path never buffers a full SSE stream. Translation is incremental.
-- **R1.9** Failover only on the retriable set {429, 500, 502, 503, 504, network, upstream-auth}. Client 4xx passes through untouched.
+- **R1.9** Failover only on the retriable set {429, 500, 502, 503, 504, network, upstream-auth}. Client 4xx passes through untouched except `413` on Combo routes, which skips the rejecting model and tries the next Combo target.
 - **R1.10** All SQL through repo modules in `src/store/repos/`; no ad-hoc queries in route handlers; always parameterized statements — string interpolation into SQL is forbidden.
 - **R1.11** Money/token math: integers for tokens; USD as REAL rounded at display time only.
 

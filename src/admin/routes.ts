@@ -8,7 +8,8 @@ import { log } from "../utils/logger";
 import { ProvidersRepo } from "../store/repos/providers";
 import { SettingsRepo } from "../store/repos/settings";
 import { normalizeRoutingPolicy, Router } from "../proxy/router";
-import type { RoutingPolicy } from "../shared/types";
+import { executeRequest } from "../proxy/executor";
+import type { CanonicalRequest, RoutingPolicy } from "../shared/types";
 
 export function aliasRoutes(db: Database) {
   const repo = new AliasesRepo(db);
@@ -28,7 +29,8 @@ export function aliasRoutes(db: Database) {
 
 export function comboRoutes(db: Database) {
   const repo = new CombosRepo(db);
-  const router = new Router(new ProvidersRepo(db), new AliasesRepo(db), repo);
+  const providers = new ProvidersRepo(db);
+  const router = new Router(providers, new AliasesRepo(db), repo);
   const settings = new SettingsRepo(db);
   return new Elysia({ prefix: "/api/combos" })
     .get("/", () => repo.list())
@@ -47,22 +49,54 @@ export function comboRoutes(db: Database) {
       if (!combo) throw new AdminError(404, "Combo not found");
       return combo;
     })
-    .post("/:id/test", ({ params }) => {
+    .post("/:id/test", async ({ params }) => {
       const combo = repo.get(params.id);
       if (!combo) throw new AdminError(404, "Combo not found");
       const policy = normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
       try {
         const route = router.resolveWithPolicy(`combo:${combo.name}`, policy);
+        const request: CanonicalRequest = {
+          model: `combo:${combo.name}`,
+          messages: [{ role: "user", content: "Reply with exactly: OK" }],
+          max_tokens: 8,
+          stream: false,
+          reasoning: { enabled: false },
+        };
+        const candidates = [];
+        for (const [index, candidate] of route.candidates.entries()) {
+          const started = Date.now();
+          try {
+            const result = await executeRequest(request, [candidate], {}, providers, policy);
+            candidates.push({
+              position: index,
+              provider: candidate.provider.name,
+              model: candidate.modelId,
+              available_accounts: candidate.accounts.length,
+              healthy_accounts: candidate.accounts.filter((account) => account.last_warmup_status === "healthy").length,
+              ok: true,
+              status: 200,
+              latency_ms: result.kind === "json" ? result.latencyMs : Date.now() - started,
+              account: result.accountLabel,
+            });
+          } catch (error) {
+            candidates.push({
+              position: index,
+              provider: candidate.provider.name,
+              model: candidate.modelId,
+              available_accounts: candidate.accounts.length,
+              healthy_accounts: candidate.accounts.filter((account) => account.last_warmup_status === "healthy").length,
+              ok: false,
+              status: error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 500,
+              latency_ms: Date.now() - started,
+              detail: error instanceof Error ? error.message : "Provider test failed",
+            });
+          }
+        }
         return {
           combo: combo.name,
           requested_model: `combo:${combo.name}`,
-          candidates: route.candidates.map((candidate, index) => ({
-            position: index,
-            provider: candidate.provider.name,
-            model: candidate.modelId,
-            available_accounts: candidate.accounts.length,
-            healthy_accounts: candidate.accounts.filter((account) => account.last_warmup_status === "healthy").length,
-          })),
+          ok: candidates.every((candidate) => candidate.ok),
+          candidates,
         };
       } catch (error) {
         throw new AdminError(error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : 400,

@@ -4,7 +4,7 @@ import { ExternalLink, Pencil, RefreshCw, Trash2, Zap } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { type Provider, providers } from "../../api";
 import { Badge, Button, Card, ConfirmModal, Skeleton, Switch, toast } from "../../components/ui";
-import { presetForType } from "../../providerCatalog";
+import { presetFor } from "../../providerCatalog";
 import { AccountsCard } from "./AccountsCard";
 import { BackLink } from "./BackLink";
 import { ModelsCard } from "./ModelsCard";
@@ -108,7 +108,7 @@ export function ProviderDetailPage() {
     return <div className="space-y-4"><BackLink /><Card><p className="py-8 text-center text-sm text-text-muted">Provider not found.</p></Card></div>;
   }
 
-  const preset = presetForType(provider.type);
+  const preset = presetFor(provider);
 
   return (
     <div className="space-y-4">

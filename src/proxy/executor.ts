@@ -100,6 +100,7 @@ export interface ExecutorContext {
   signal?: AbortSignal;
   xaiSessionId?: string;
   xaiRequestId?: string;
+  allowPayloadTooLargeFallback?: boolean;
 }
 
 export interface ExecuteSuccess {
@@ -121,6 +122,7 @@ export interface ExecuteStreamSuccess {
 }
 
 export type ExecuteResult = ExecuteSuccess | ExecuteStreamSuccess;
+type AccountPlanEntry = { candidate: RouteCandidate; account: ProviderAccount };
 
 const MAX_ATTEMPTS = 3;
 
@@ -149,6 +151,31 @@ function codeBuddyHeaders(apiKey: string, accept: "text/event-stream" | "applica
   };
 }
 
+export function buildAccountPlan(candidates: RouteCandidate[]): AccountPlanEntry[] {
+  const plan: AccountPlanEntry[] = [];
+  for (const candidate of candidates) {
+    const rrKey = `${candidate.provider.id}:${candidate.modelId}`;
+    const roundRobin = candidate.provider.account_strategy === "round_robin";
+    const start = roundRobin ? (rrCursor.get(rrKey) ?? 0) % candidate.accounts.length : 0;
+    const ordered = [...candidate.accounts.slice(start), ...candidate.accounts.slice(0, start)];
+    if (roundRobin) rrCursor.set(rrKey, start + 1);
+    for (const account of ordered) {
+      if (!isCoolingDown(cooldownKey(candidate, account.id))) plan.push({ candidate, account });
+    }
+  }
+  return plan;
+}
+
+export function limitAttemptsPerCandidate(plan: AccountPlanEntry[], maxAttempts: number): AccountPlanEntry[] {
+  const candidateCounts = new Map<RouteCandidate, number>();
+  return plan.filter(({ candidate }) => {
+    const count = candidateCounts.get(candidate) ?? 0;
+    if (count >= maxAttempts) return false;
+    candidateCounts.set(candidate, count + 1);
+    return true;
+  });
+}
+
 export async function executeRequest(
   req: CanonicalRequest,
   candidates: RouteCandidate[],
@@ -158,18 +185,11 @@ export async function executeRequest(
 ): Promise<ExecuteResult> {
   const attempts: AttemptRecord[] = [];
   let lastError: GatewayError | null = null;
+  const payloadRejectedCandidates = new Set<RouteCandidate>();
 
-  // Flatten candidates × accounts, skipping cooled-down pairs, round-robin start
-  const plan: Array<{ candidate: RouteCandidate; account: RouteCandidate["accounts"][number] }> = [];
-  for (const candidate of candidates) {
-    const start = (rrCursor.get(candidate.provider.name) ?? 0) % candidate.accounts.length;
-    const ordered = [...candidate.accounts.slice(start), ...candidate.accounts.slice(0, start)];
-    rrCursor.set(candidate.provider.name, start + 1);
-    for (const account of ordered) {
-      const key = cooldownKey(candidate, account.id);
-      if (!isCoolingDown(key)) plan.push({ candidate, account });
-    }
-  }
+  // Flatten candidates × accounts. Priority mode always starts at the lowest
+  // account priority; round-robin rotates the first account per model pool.
+  const plan = buildAccountPlan(candidates);
 
   if (!plan.length) {
     const next = nextCoolingCandidate(candidates);
@@ -204,9 +224,14 @@ export async function executeRequest(
     throw new GatewayError(503, "server_error", `${req.model} requires an eligible ${label} Codex account. Run account warmup to refresh account plan tiers.`);
   }
 
-  const maxAttempts = Math.min(policy?.maxAttempts ?? MAX_ATTEMPTS, planEligible.length);
-  for (let attemptNo = 0; attemptNo < maxAttempts; attemptNo++) {
-    const { candidate, account } = planEligible[attemptNo]!;
+  // maxAttempts is per model candidate. A provider with many accounts must not
+  // consume the entire budget and prevent later models in a combo from running.
+  const attemptsPerCandidate = policy?.maxAttempts ?? MAX_ATTEMPTS;
+  const executionPlan = limitAttemptsPerCandidate(planEligible, attemptsPerCandidate);
+
+  for (let attemptNo = 0; attemptNo < executionPlan.length; attemptNo++) {
+    const { candidate, account } = executionPlan[attemptNo]!;
+    if (payloadRejectedCandidates.has(candidate)) continue;
     const effectiveReq = clampMaxTokens(req, candidate, providersRepo);
     const started = Date.now();
     const format = upstreamFormat(candidate.provider);
@@ -269,6 +294,13 @@ export async function executeRequest(
 
       if (req.stream) {
         const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
+        try {
+          await result.ready;
+        } catch (err) {
+          void result.usagePromise.catch(() => null);
+          await result.stream.cancel().catch(() => undefined);
+          throw err;
+        }
         markSuccess(cdKey);
         clearAccountRateLimit(providersRepo, account.id);
         attempts.push({
@@ -312,8 +344,9 @@ export async function executeRequest(
     } catch (err) {
       const latencyMs = Date.now() - started;
       const gErr = toGatewayError(err);
+      const payloadTooLarge = gErr.status === 413 && ctx.allowPayloadTooLargeFallback;
       const retriable = gErr instanceof GatewayError
-        ? isRetriableStatus(gErr.status) || gErr.type === "authentication_error"
+        ? isRetriableStatus(gErr.status) || gErr.type === "authentication_error" || payloadTooLarge
         : true;
 
       attempts.push({
@@ -329,6 +362,7 @@ export async function executeRequest(
       });
 
       if (retriable) {
+        if (payloadTooLarge) payloadRejectedCandidates.add(candidate);
         const quotaExhausted = gErr.status === 429 && /free-usage-exhausted|usage limit has been reached|limit has been reached|quota/i.test(gErr.message);
         const cooldownMs = quotaExhausted ? 24 * 60 * 60_000 : gErr.status === 429 ? (retryAfterMsFrom(gErr) ?? 60_000) : undefined;
         // A "quota exhausted" 429 is not a transient rate limit — the account
@@ -336,7 +370,7 @@ export async function executeRequest(
         // it as a short cooldown would make the gateway fail over to other
         // exhausted accounts and force clients into repeated recovery+retry
         // loops that replay the same answer.
-        markCooldown(cdKey, cooldownMs);
+        if (!payloadTooLarge) markCooldown(cdKey, cooldownMs);
         if (cooldownMs && providersRepo) {
           // Persist the rate-limit window so the account is skipped on the next
           // request (not just in-memory), and recovers to healthy automatically
@@ -449,7 +483,7 @@ async function openUpstreamStream(
   base: string,
   format: "openai" | "anthropic",
   signal?: AbortSignal,
-): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
+): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null>; ready: Promise<void> }> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
@@ -501,6 +535,13 @@ async function openUpstreamStream(
     const translator = new AnthropicToOpenAIStreamTranslator(req.model);
     let resolveUsage: (u: Usage | null) => void;
     const usagePromise = new Promise<Usage | null>((r) => { resolveUsage = r; });
+    let resolveReady: () => void;
+    let rejectReady: (reason?: unknown) => void;
+    let readySettled = false;
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -512,15 +553,27 @@ async function openUpstreamStream(
             const text = decoder.decode(value, { stream: true });
             for (const ev of parser.feed(text)) {
               for (const line of translator.handleEvent(ev.event, ev.data)) {
+                if (!readySettled && /"(?:content|tool_calls)"\s*:/.test(line)) {
+                  readySettled = true;
+                  resolveReady!();
+                }
                 controller.enqueue(encoder.encode(line));
               }
             }
           }
         } catch (err) {
+          if (!readySettled) {
+            readySettled = true;
+            rejectReady!(err);
+          }
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: "upstream stream error", type: "server_error" } })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           void err;
         } finally {
+          if (!readySettled) {
+            readySettled = true;
+            rejectReady!(new GatewayError(502, "server_error", "Upstream SSE stream ended before producing output"));
+          }
           resolveUsage!(translator.result().usage);
           controller.close();
         }
@@ -529,7 +582,7 @@ async function openUpstreamStream(
         res.body?.cancel().catch(() => undefined);
       },
     });
-    return { stream, usagePromise };
+    return { stream, usagePromise, ready };
   }
 
   // openai passthrough (model name inside chunks replaced with requested model)
@@ -537,9 +590,16 @@ async function openUpstreamStream(
   let usage: Usage | null = null;
   let resolveUsage: (u: Usage | null) => void;
   let rejectUsage: (reason?: unknown) => void;
+  let resolveReady: () => void;
+  let rejectReady: (reason?: unknown) => void;
+  let readySettled = false;
   const usagePromise = new Promise<Usage | null>((resolve, reject) => {
     resolveUsage = resolve;
     rejectUsage = reject;
+  });
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
   });
 
   const stream = new ReadableStream<Uint8Array>({
@@ -555,6 +615,18 @@ async function openUpstreamStream(
           }
           try {
             const obj = JSON.parse(ev.data) as Record<string, unknown>;
+            const choices = obj.choices as Array<{ delta?: { content?: unknown; reasoning_content?: unknown; tool_calls?: unknown[] } }> | undefined;
+            const delta = choices?.[0]?.delta;
+            if (!readySettled && (typeof delta?.content === "string" && delta.content.length > 0
+              || typeof delta?.reasoning_content === "string" && delta.reasoning_content.length > 0
+              || (delta?.tool_calls?.length ?? 0) > 0)) {
+              readySettled = true;
+              resolveReady!();
+            }
+            if (!readySettled && obj.error) {
+              readySettled = true;
+              rejectReady!(new GatewayError(502, "server_error", "Upstream SSE returned an error before producing output"));
+            }
             obj.model = req.model;
             const u = obj.usage as Usage | undefined;
             if (u) usage = u;
@@ -575,10 +647,18 @@ async function openUpstreamStream(
         forwardEvents(parser.finish());
       } finally {
         if (sentDone) {
+          if (!readySettled) {
+            readySettled = true;
+            rejectReady!(new GatewayError(502, "server_error", "Upstream SSE completed without producing output"));
+          }
           resolveUsage!(usage);
           controller.close();
         } else {
           const error = new Error("Upstream SSE stream ended before [DONE]");
+          if (!readySettled) {
+            readySettled = true;
+            rejectReady!(error);
+          }
           rejectUsage!(error);
           controller.error(error);
         }
@@ -588,7 +668,7 @@ async function openUpstreamStream(
       res.body?.cancel().catch(() => undefined);
     },
   });
-  return { stream, usagePromise };
+  return { stream, usagePromise, ready };
 }
 
 // ── ChatGPT Codex backend (OAuth accounts) ──
@@ -632,7 +712,11 @@ async function openCodexStream(
   });
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");
-  return responsesStreamToChat(res.body, req.model);
+  const result = responsesStreamToChat(res.body, req.model);
+  // Fail (and let the executor fail over) when the upstream errors out before
+  // emitting any content instead of streaming an empty assistant message.
+  await result.ready;
+  return result;
 }
 
 async function callXai(

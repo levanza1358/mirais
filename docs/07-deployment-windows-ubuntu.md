@@ -97,6 +97,7 @@ mirais autostart off
 mirais update     # shows old → new version, clears caches, updates, rebuilds, and restarts
 mirais fix          # force update/install/build/start from remembered install root
 mirais doctor       # diagnose and repair safe installation issues
+mirais doctor --json # same checks, machine-readable output for monitoring
 mirais doctor --fix # run the full repair flow
 mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry
 mirais expose off  # switch back to localhost-only; restart required

@@ -5,13 +5,13 @@ import { providers } from "../../api";
 import { Button, Input, Modal, Select, toast } from "../../components/ui";
 import { TYPES } from "./types";
 
-export function ProviderModal({ provider, onClose }: { provider: { id: string; name: string; base_url?: string | null; priority: number }; onClose: () => void }) {
+export function ProviderModal({ provider, onClose }: { provider: { id: string; name: string; base_url?: string | null; priority: number; account_strategy: "priority" | "round_robin" }; onClose: () => void }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({ name: provider.name, baseUrl: provider.base_url ?? "", priority: provider.priority });
+  const [form, setForm] = useState({ name: provider.name, baseUrl: provider.base_url ?? "", priority: provider.priority, accountStrategy: provider.account_strategy });
   const [error, setError] = useState("");
 
   const save = useMutation({
-    mutationFn: () => providers.update(provider.id, { name: form.name, baseUrl: form.baseUrl || null, priority: form.priority }),
+    mutationFn: () => providers.update(provider.id, { name: form.name, baseUrl: form.baseUrl || null, priority: form.priority, accountStrategy: form.accountStrategy }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["providers"] });
       toast("Provider updated");
@@ -34,6 +34,18 @@ export function ProviderModal({ provider, onClose }: { provider: { id: string; n
         <div>
           <label className="mb-1 block text-xs text-text-muted">Priority <span className="text-text-muted/50">(lower = preferred)</span></label>
           <Input type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Account usage</label>
+          <Select value={form.accountStrategy} onChange={(e) => setForm({ ...form, accountStrategy: e.target.value as typeof form.accountStrategy })}>
+            <option value="priority">Sequential priority (Free → Plus → Pro)</option>
+            <option value="round_robin">Round robin (spread evenly)</option>
+          </Select>
+          <p className="mt-1 text-xs text-text-muted">
+            {form.accountStrategy === "priority"
+              ? "Always starts with the lowest account priority; moves on when it is unavailable."
+              : "Rotates the first account for each model; failed accounts still fall back to the next one."}
+          </p>
         </div>
         {error && <p className="text-xs text-danger">{error}</p>}
         <div className="flex justify-end gap-2 pt-2">

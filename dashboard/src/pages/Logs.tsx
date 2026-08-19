@@ -388,7 +388,7 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
           </div>
           <div className="grid gap-1 text-xs text-text-muted">
             <span>Tokens: <span className="text-text-primary">{fmtNum(l.input_tokens)} → {fmtNum(l.output_tokens)}</span></span>
-            {l.credit_usage != null && <span>Credit: <span className="text-text-primary">{fmtNum(l.credit_usage)}</span></span>}
+            {l.credit_usage != null && <span>Credit{l.credit_source === "estimated" ? " (est.)" : ""}: <span className="text-text-primary">{fmtNum(l.credit_usage)}</span></span>}
             <span>Saved: <span className={(l.tokens_saved ?? 0) > 0 ? "text-success" : "text-text-primary"}>{(l.tokens_saved ?? 0) > 0 ? `-${fmtNum(l.tokens_saved ?? 0)}` : "—"}</span></span>
           </div>
           <div className="grid gap-1 text-xs text-text-muted">
@@ -410,7 +410,7 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             <Detail k="HTTP status" v={l.http_status != null ? String(l.http_status) : "—"} />
             <Detail k="Input tokens" v={fmtNum(l.input_tokens)} />
             <Detail k="Output tokens" v={fmtNum(l.output_tokens)} />
-            {l.credit_usage != null && <Detail k="Credit used" v={fmtNum(l.credit_usage)} />}
+            {l.credit_usage != null && <Detail k={l.credit_source === "estimated" ? "Credit used (estimated)" : "Credit used (reported by provider)"} v={fmtNum(l.credit_usage)} />}
             <Detail k="Tokens saved" v={fmtNum(l.tokens_saved)} />
             <Detail k="Thinking requested" v={l.reasoning_effort ?? "Not requested"} />
             <Detail k="Latency" v={fmtMs(l.latency_ms)} />

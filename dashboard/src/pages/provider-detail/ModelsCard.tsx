@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Crown, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
-import { type Provider, providers } from "../../api";
+import { CheckCircle2, Coins, Crown, ListChecks, Loader2, Plus, RefreshCw, Trash2, XCircle, Zap } from "lucide-react";
+import { type Provider, type ProviderModel, providers } from "../../api";
 import { Button, Card, ConfirmModal, Modal, toast } from "../../components/ui";
 // Labels show the full model id (no alias shortening).
 import { AddCustomModelModal } from "./AddCustomModelModal";
+import { ModelCostModal } from "./ModelCostModal";
 import type { ModelTestResult } from "./types";
 
 function fmtCtx(n: number | null): string {
@@ -44,6 +45,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
   const [testingAll, setTestingAll] = useState(false);
   const [testAllPrompt, setTestAllPrompt] = useState(false);
   const [addCustomOpen, setAddCustomOpen] = useState(false);
+  const [costModel, setCostModel] = useState<ProviderModel | null>(null);
   const [deleteAllPrompt, setDeleteAllPrompt] = useState(false);
   const modelsQuery = useQuery({ queryKey: ["providers", p.id, "models"], queryFn: () => providers.models(p.id) });
   const invalidate = () => Promise.all([
@@ -134,6 +136,13 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
     onError: (e) => toast(e.message, "error"),
   });
 
+  const setModelCost = useMutation({
+    mutationFn: (payload: { modelId: string; creditRate: number | null; creditUnit: ProviderModel["credit_unit"] }) =>
+      providers.upsertModel(p.id, payload.modelId, { creditRate: payload.creditRate, creditUnit: payload.creditUnit }),
+    onSuccess: () => { invalidate(); setCostModel(null); toast("Estimated cost updated"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
   const removeModel = useMutation({
     mutationFn: (modelId: string) => providers.removeModel(p.id, modelId),
     onSuccess: invalidate,
@@ -181,6 +190,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
             if (m.context_length) meta.push(`Context: ${m.context_length.toLocaleString()} tokens`);
             if (m.max_output_tokens) meta.push(`Max output: ${m.max_output_tokens.toLocaleString()} tokens`);
             if (caps.length) meta.push(`Supports: ${caps.join(", ")}`);
+            if (m.credit_rate != null) meta.push(`Estimated cost: ${m.credit_rate} ${m.credit_unit ?? "credit"}(s) per 1,000 tokens`);
             if (planRequirement) meta.push(`ChatGPT plan: ${planRequirement} required`);
             const testLine = r?.testing ? "Testing…" : r ? (r.ok ? `${r.preview_text ?? `Test: OK · ${r.latency_ms}ms`}` : `Test failed: ${r.detail ?? "error"}`) : null;
             const tip = [modelLabel, m.model_id !== modelLabel ? m.model_id : null, ...meta, testLine].filter(Boolean).join("\n");
@@ -195,6 +205,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
                 })}
                 {planRequirement && <span className="inline-flex items-center gap-0.5 rounded border border-warning/40 px-1 text-[9px] leading-3 text-warning" title={`Requires a ChatGPT ${planRequirement} subscription for Codex access`}><Crown size={9} /> {planRequirement}</span>}
                 {r && !r.testing && <span className={r.ok ? "text-success/80" : "text-danger/80"}>{r.ok ? `${r.latency_ms}ms` : "✗"}</span>}
+                <button onClick={() => setCostModel(m)} className={m.credit_rate != null ? "text-accent/70 hover:text-accent" : "text-text-muted/40 hover:text-accent"} aria-label={`Set estimated cost for ${m.model_id}`} title={m.credit_rate != null ? `Estimated ${m.credit_rate} ${m.credit_unit ?? "credit"}(s) per 1,000 tokens` : "Set estimated cost per 1,000 tokens"}><Coins size={11} /></button>
                 <button onClick={() => testOne(m.model_id)} disabled={r?.testing || testingAll} className="text-text-muted/40 hover:text-accent disabled:opacity-40" aria-label={`Test ${m.model_id}`} title="Test this model"><Zap size={11} /></button>
                 <button onClick={() => removeModel.mutate(m.model_id)} className="text-text-muted/40 hover:text-danger" aria-label={`Remove ${m.model_id}`}><Trash2 size={11} /></button>
               </span>
@@ -227,6 +238,13 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
           },
         }, { onSuccess: () => { toast(`Added custom model ${modelId}`); setAddCustomOpen(false); } })}
         saving={addModel.isPending}
+      />
+
+      <ModelCostModal
+        model={costModel}
+        onClose={() => setCostModel(null)}
+        onSave={(patch) => costModel && setModelCost.mutate({ modelId: costModel.model_id, ...patch })}
+        saving={setModelCost.isPending}
       />
     </Card>
   );

@@ -286,22 +286,44 @@ async function uninstall(): Promise<void> {
   console.log("Mirais uninstalled. The global launcher may need to be removed from PATH manually if it was installed separately.");
 }
 
-async function doctor(): Promise<void> {
-  console.log("Mirais doctor — checking installation, database, and service");
+interface DoctorCheck {
+  name: string;
+  status: "ok" | "fixed" | "warn" | "error";
+  detail?: string;
+}
+
+async function doctor(json = false): Promise<void> {
+  const checks: DoctorCheck[] = [];
+  const say = (line: string, stream: "out" | "err" = "out") => {
+    if (json) return;
+    if (stream === "err") console.error(line);
+    else console.log(line);
+  };
+
+  say("Mirais doctor — checking installation, database, and service");
   let failed = false;
   const check = async (label: string, ok: boolean, repair?: () => Promise<void> | void) => {
-    console.log(`${ok ? "OK" : "ERROR"}  ${label}`);
-    if (!ok && repair) {
+    say(`${ok ? "OK" : "ERROR"}  ${label}`);
+    if (ok) {
+      checks.push({ name: label, status: "ok" });
+      return;
+    }
+    if (repair) {
       try {
         await repair();
-        console.log(`FIXED ${label}`);
+        say(`FIXED ${label}`);
+        checks.push({ name: label, status: "fixed" });
+        return;
       } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
         failed = true;
-        console.error(`FAIL  repair ${label}: ${err instanceof Error ? err.message : err}`);
+        say(`FAIL  repair ${label}: ${detail}`, "err");
+        checks.push({ name: label, status: "error", detail });
+        return;
       }
-    } else if (!ok) {
-      failed = true;
     }
+    failed = true;
+    checks.push({ name: label, status: "error" });
   };
 
   const envPath = path.join(repoRoot, ".env");
@@ -333,7 +355,8 @@ async function doctor(): Promise<void> {
   const pid = readPid();
   if (pid && !isRunning(pid)) {
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-    console.log("FIXED stale PID file removed");
+    say("FIXED stale PID file removed");
+    checks.push({ name: "service process", status: "fixed", detail: "stale PID file removed" });
   } else {
     await check("service process", !!pid && isRunning(pid));
   }
@@ -341,14 +364,25 @@ async function doctor(): Promise<void> {
   // yt-dlp is optional — the Music page falls back to Invidious when it's
   // missing. Doctor still surfaces it so the user knows the upgrade path.
   const ytdlp = await ensureYtDlp();
-  console.log(`${ytdlp.ok ? "OK" : "WARN"}  yt-dlp (Music) — ${ytdlp.message}${ytdlp.via ? ` [${ytdlp.via}]` : ""}`);
+  say(`${ytdlp.ok ? "OK" : "WARN"}  yt-dlp (Music) — ${ytdlp.message}${ytdlp.via ? ` [${ytdlp.via}]` : ""}`);
+  checks.push({ name: "yt-dlp (Music)", status: ytdlp.ok ? "ok" : "warn", detail: ytdlp.message });
 
-  if (failed) {
+  if (json) {
+    console.log(JSON.stringify({
+      ok: !failed,
+      version: appVersion(installRoot),
+      installRoot,
+      dataDir: config.dataDir,
+      dbPath: config.dbPath,
+      url: displayUrl,
+      checks,
+    }, null, 2));
+  } else if (failed) {
     console.log("Doctor found issues. Safe repairs were applied where possible; run `mirais restart` and inspect data/mirais.log.");
-    process.exitCode = 1;
   } else {
     console.log("Doctor found no issues.");
   }
+  if (failed) process.exitCode = 1;
 }
 
 const cmd = process.argv[2];
@@ -381,11 +415,11 @@ switch (cmd) {
   case "uninstall": await uninstall(); break;
   case "doctor":
     if (process.argv[3] === "--fix") await fix();
-    else await doctor();
+    else await doctor(process.argv.includes("--json"));
     break;
   case "fix": await fix(); break;
   case "extras": await ensureExtras(); break;
   default:
-    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix]|fix|update|extras|autostart on|off|expose on|off|uninstall --yes>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix|--json]|fix|update|extras|autostart on|off|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }

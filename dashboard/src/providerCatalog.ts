@@ -107,7 +107,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://copilot.tencent.com/v2",
   },
   {
-    type: "tokenrouter",
+    type: "custom",
     name: "tokenrouter",
     displayName: "TokenRouter",
     description: "TokenRouter multi-provider gateway (OpenAI-compatible)",
@@ -127,5 +127,17 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 ];
 
 export function presetForType(type: string): ProviderPreset {
-  return PROVIDER_PRESETS.find((p) => p.type === type) ?? PROVIDER_PRESETS[PROVIDER_PRESETS.length - 1]!;
+  return PROVIDER_PRESETS.find((p) => p.type === type && p.name !== "custom") ?? CUSTOM_PRESET;
 }
+
+/** Resolve the tile a stored provider belongs to: by name first (custom-typed presets), then by type. */
+export function presetFor(provider: { name: string; type: string }): ProviderPreset {
+  return PROVIDER_PRESETS.find((p) => p.name === provider.name) ?? presetForType(provider.type);
+}
+
+/** True for fixed catalog entries — rendered even when no provider exists yet. */
+export function isCatalogPreset(p: ProviderPreset): boolean {
+  return p.name !== "custom";
+}
+
+const CUSTOM_PRESET = PROVIDER_PRESETS.find((p) => p.name === "custom")!;

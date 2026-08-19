@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, CheckCircle2, Loader2, XCircle, Globe2 } from "lucide-react";
 import { settings, backups, healthInfo, providers, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -85,7 +85,7 @@ export default function Settings() {
         ))}
       </div>
       {/* Tab content */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className={tab === "general" ? "grid grid-cols-1 gap-6 lg:grid-cols-2" : "w-full"}>
         {tab === "general" && (
           <>
             <GatewaySection />
@@ -110,10 +110,11 @@ function DatabaseSection() {
   const health = useQuery({ queryKey: ["health-detailed"], queryFn: healthInfo.detailed, refetchInterval: 30_000 });
   const storage = health.data?.storage;
   return (
-    <Card className="mb-6">
-      <h3 className="mb-2 flex items-center gap-2 text-sm font-medium">
-        <Database size={14} /> Database
-      </h3>
+    <Card>
+      <div className="mb-4 flex items-center gap-2">
+        <Database size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Database</h3>
+      </div>
       {health.isLoading ? (
         <p className="text-xs text-text-muted">Reading server info…</p>
       ) : health.isError ? (
@@ -194,7 +195,7 @@ function AppearanceSection() {
         <Palette size={14} className="text-accent" />
         <h3 className="text-sm font-medium">Appearance</h3>
       </div>
-      <p className="mb-4 text-xs text-text-muted">Pick the dashboard accent color. Saved to server settings so it follows your account, with a local copy as fallback.</p>
+      <p className="mb-5 text-xs text-text-muted">Pick the dashboard accent color. Saved to server settings so it follows your account, with a local copy as fallback.</p>
       <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
         {ACCENT_OPTIONS.map((opt) => {
           const isActive = opt.value.toLowerCase() === accent.toLowerCase();
@@ -248,7 +249,10 @@ function NetworkSection() {
 
   return (
     <Card>
-      <h3 className="mb-1 text-sm font-medium">Network exposure</h3>
+      <div className="mb-1 flex items-center gap-2">
+        <Globe2 size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Network exposure</h3>
+      </div>
       <p className="mb-4 text-xs text-text-muted">Default is exposed. When enabled, Mirais binds to <code className="font-mono">0.0.0.0</code> so it can be reached from LAN, Tailscale, or the internet depending on your firewall and routing.</p>
       <div className="flex items-center justify-between gap-4">
         <div>
@@ -281,7 +285,10 @@ function GatewaySection() {
 
   return (
     <Card>
-      <h3 className="mb-4 text-sm font-medium">Gateway</h3>
+      <div className="mb-4 flex items-center gap-2">
+        <SettingsIcon size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Gateway</h3>
+      </div>
       <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-4">
         <div>
           <label className="mb-1 block text-xs text-text-muted">Log retention (days)</label>
@@ -327,20 +334,23 @@ function ModelSyncSection() {
           { v: "curated" as const, label: "Curated", desc: "Only flagship chat models (GPT, Claude, Gemini, DeepSeek, Llama, Qwen, Kimi, …). Recommended." },
           { v: "all" as const, label: "All chat models", desc: "Keep every chat-completion model the provider lists." },
         ]).map((opt) => (
-          <label key={opt.v} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${mode === opt.v ? "border-accent bg-accent/5" : "border-border hover:border-text-muted"}`}>
-            <input
-              type="radio"
-              name="model_sync_mode"
-              className="mt-0.5"
-              checked={mode === opt.v}
-              onChange={() => save.mutate(opt.v)}
-              disabled={save.isPending}
-            />
+          <button
+            key={opt.v}
+            type="button"
+            role="radio"
+            aria-checked={mode === opt.v}
+            onClick={() => save.mutate(opt.v)}
+            disabled={save.isPending}
+            className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors disabled:pointer-events-none disabled:opacity-50 ${mode === opt.v ? "border-accent bg-accent/5" : "border-border hover:border-text-muted hover:bg-bg-raised/40"}`}
+          >
+            <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${mode === opt.v ? "border-accent" : "border-text-muted"}`}>
+              {mode === opt.v && <span className="h-2 w-2 rounded-full bg-accent" />}
+            </span>
             <span>
               <span className="block text-sm font-medium text-text-primary">{opt.label}</span>
               <span className="block text-xs text-text-muted">{opt.desc}</span>
             </span>
-          </label>
+          </button>
         ))}
       </div>
       <p className="mt-3 text-xs text-text-muted">Re-sync a provider to apply. Models that no longer pass the filter are removed automatically.</p>
@@ -352,25 +362,20 @@ function ModelSyncSection() {
 
 function TokenSaverSection() {
   return (
-    <div className="lg:col-span-2 space-y-6">
-      {/* Header */}
-      <div className="rounded-2xl border border-border bg-gradient-to-br from-bg-raised to-bg-base p-6">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15">
-            <Zap className="h-6 w-6 text-accent" />
+    <div className="space-y-6">
+      <div className="border-b border-border/70 pb-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
+            <Zap className="h-4 w-4" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold">boltToken Saver</h2>
-            <p className="mt-1 text-sm text-text-muted max-w-2xl">
-              Four independent techniques to reduce token usage without making Mirais "goblok."
-              Each technique targets a different part of the pipeline — input, context, output, and behavior.
-              Enable only what you need.
+            <h2 className="text-base font-semibold">Token Saver</h2>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-text-muted">
+              Reduce input, context, and output tokens with independent pipeline controls. Enable only the techniques you need.
             </p>
           </div>
         </div>
       </div>
-
-      {/* Card grid */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <RTKCard />
         <HeadroomCard />
@@ -436,22 +441,19 @@ function RTKCard() {
   };
 
   return (
-    <Card className="relative overflow-hidden">
-      {/* Badge */}
-      <div className="absolute top-3 right-3">
-        <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noopener noreferrer"
-           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
-          RTK <ExternalLink size={10} />
-        </a>
-      </div>
-
+    <Card className="overflow-hidden">
       <div className="mb-4 flex items-start gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/15">
           <FileCode className="h-4.5 w-4.5 text-amber-400" />
         </div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Tool Output Compression</h3>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-sm font-semibold">Tool Output Compression</h3>
+              <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/20">
+                RTK <ExternalLink size={10} />
+              </a>
+            </div>
             <Switch checked={ts.enabled} onChange={toggleEnabled} disabled={save.isPending} aria-label="Enable RTK" />
           </div>
           <p className="mt-0.5 text-xs text-text-muted">
@@ -568,21 +570,19 @@ function HeadroomCard() {
   };
 
   return (
-    <Card className="relative overflow-hidden">
-      <div className="absolute top-3 right-3">
-        <a href="https://github.com/chopratejas/headroom" target="_blank" rel="noopener noreferrer"
-           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
-          Headroom <ExternalLink size={10} />
-        </a>
-      </div>
-
+    <Card className="overflow-hidden">
       <div className="mb-4 flex items-start gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/15">
           <Brain className="h-4.5 w-4.5 text-sky-400" />
         </div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Context Compression</h3>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-sm font-semibold">Context Compression</h3>
+              <a href="https://github.com/chopratejas/headroom" target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/20">
+                Headroom <ExternalLink size={10} />
+              </a>
+            </div>
             <Switch checked={cfg.enabled} onChange={toggle} disabled={save.isPending} aria-label="Enable Headroom" />
           </div>
           <p className="mt-0.5 text-xs text-text-muted">
@@ -660,21 +660,19 @@ function CavemanCard() {
   };
 
   return (
-    <Card className="relative overflow-hidden">
-      <div className="absolute top-3 right-3">
-        <a href="https://github.com/JuliusBrussee/caveman" target="_blank" rel="noopener noreferrer"
-           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
-          Caveman <ExternalLink size={10} />
-        </a>
-      </div>
-
+    <Card className="overflow-hidden">
       <div className="mb-4 flex items-start gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/15">
           <Coffee className="h-4.5 w-4.5 text-emerald-400" />
         </div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Terse Output Mode</h3>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-sm font-semibold">Terse Output Mode</h3>
+              <a href="https://github.com/JuliusBrussee/caveman" target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/20">
+                Caveman <ExternalLink size={10} />
+              </a>
+            </div>
             <Switch checked={cfg.enabled} onChange={toggle} disabled={save.isPending} aria-label="Enable Caveman" />
           </div>
           <p className="mt-0.5 text-xs text-text-muted">
@@ -752,21 +750,19 @@ function PonytailCard() {
   };
 
   return (
-    <Card className="relative overflow-hidden">
-      <div className="absolute top-3 right-3">
-        <a href="https://github.com/DietrichGebert/ponytail" target="_blank" rel="noopener noreferrer"
-           className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2.5 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/20 transition-colors">
-          Ponytail <ExternalLink size={10} />
-        </a>
-      </div>
-
+    <Card className="overflow-hidden">
       <div className="mb-4 flex items-start gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-500/15">
           <Coffee className="h-4.5 w-4.5 text-rose-400" />
         </div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Lazy Senior Dev Bias</h3>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-sm font-semibold">Lazy Senior Dev Bias</h3>
+              <a href="https://github.com/DietrichGebert/ponytail" target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/20">
+                Ponytail <ExternalLink size={10} />
+              </a>
+            </div>
             <Switch checked={cfg.enabled} onChange={toggle} disabled={save.isPending} aria-label="Enable Ponytail" />
           </div>
           <p className="mt-0.5 text-xs text-text-muted">
@@ -877,7 +873,10 @@ function BackupSection() {
     <Card>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-medium">Backup & restore</h3>
+          <div className="flex items-center gap-2">
+            <HardDrive size={14} className="text-accent" />
+            <h3 className="text-sm font-medium">Backup & restore</h3>
+          </div>
           <p className="mt-1 text-xs text-text-muted">Create a consistent SQLite snapshot, download it, or restore a previous backup. A pre-restore fallback is created automatically.</p>
         </div>
         <div className="flex gap-2">
@@ -992,7 +991,10 @@ function XaiImapSection() {
 
   return (
     <Card>
-      <h3 className="mb-1 text-sm font-medium">XAI IMAP</h3>
+      <div className="mb-1 flex items-center gap-2">
+        <Mail size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">XAI IMAP</h3>
+      </div>
       <p className="mb-4 text-xs text-text-muted">Configure Gmail IMAP for xAI (Grok) account farming. OTP emails are forwarded to this Gmail account.</p>
       <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-4">
         <div className="flex items-center justify-between">
@@ -1066,7 +1068,10 @@ function XaiImapSection() {
 function AboutSection() {
   return (
     <Card>
-      <h3 className="mb-2 text-sm font-medium">About</h3>
+      <div className="mb-2 flex items-center gap-2">
+        <Info size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">About</h3>
+      </div>
       <div className="space-y-1 text-xs text-text-muted">
         <p><span className="text-text-primary">Mirais</span> — self-hosted AI gateway & router</p>
         <p>Gateway endpoint: <code className="font-mono text-accent">http://localhost:1463/v1</code></p>

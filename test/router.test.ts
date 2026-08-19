@@ -5,7 +5,7 @@ import { ProvidersRepo } from "../src/store/repos/providers";
 import { AliasesRepo, CombosRepo } from "../src/store/repos/routing";
 import { Router, baseUrlFor, upstreamFormat } from "../src/proxy/router";
 import { GatewayError } from "../src/shared/errors";
-import { clampMaxTokens } from "../src/proxy/executor";
+import { buildAccountPlan, clampMaxTokens, executeRequest, limitAttemptsPerCandidate } from "../src/proxy/executor";
 
 let db: Database;
 let providers: ProvidersRepo;
@@ -175,6 +175,70 @@ describe("Router.resolve", () => {
   });
 });
 
+describe("combo streaming failover", () => {
+  test("tries the next model when a 200 SSE stream ends before output", async () => {
+    seedProvider("first", "openai", ["m1"], 10);
+    seedProvider("second", "openai", ["m2"], 20);
+    combos.create("fallback", ["first/m1", "second/m2"]);
+    const candidates = router.resolve("combo:fallback").candidates;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(calls === 1
+        ? 'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n'
+        : 'data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const result = await executeRequest({
+        model: "combo:fallback",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      }, candidates, {}, providers);
+      expect(result.kind).toBe("stream");
+      if (result.kind !== "stream") return;
+      expect(result.candidate.provider.name).toBe("second");
+      expect(await new Response(result.stream).text()).toContain('"content":"OK"');
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("tries the next model when a combo candidate rejects a large payload", async () => {
+    seedProvider("small", "openai", ["m1"], 10);
+    seedProvider("large", "openai", ["m2"], 20);
+    combos.create("payload-fallback", ["small/m1", "large/m2"]);
+    const candidates = router.resolve("combo:payload-fallback").candidates;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return calls === 1
+        ? new Response("Request Entity Too Large", { status: 413 })
+        : new Response('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n', {
+          headers: { "content-type": "text/event-stream" },
+        });
+    }) as unknown as typeof fetch;
+    try {
+      const result = await executeRequest({
+        model: "combo:payload-fallback",
+        messages: [{ role: "user", content: "large prompt" }],
+        stream: true,
+      }, candidates, { allowPayloadTooLargeFallback: true }, providers);
+      expect(result.kind).toBe("stream");
+      if (result.kind !== "stream") return;
+      expect(result.candidate.provider.name).toBe("large");
+      expect(await new Response(result.stream).text()).toContain('"content":"OK"');
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("model output limits", () => {
   test("stored provider limit overrides static model metadata", () => {
     const p = seedProvider("provider", "openai", ["gpt-4o"]);
@@ -182,6 +246,39 @@ describe("model output limits", () => {
     const candidate = router.resolve("provider/gpt-4o").candidates[0]!;
     const result = clampMaxTokens({ model: "provider/gpt-4o", messages: [{ role: "user", content: "hi" }], max_tokens: 9999 }, candidate, providers);
     expect(result.max_tokens).toBe(1234);
+  });
+});
+
+describe("provider account strategy", () => {
+  function candidateWithAccounts(strategy: "priority" | "round_robin", suffix = "main") {
+    const p = providers.create({ name: `accounts-${strategy}-${suffix}`, type: "openai", accountStrategy: strategy });
+    for (const [label, priority] of [["free", 0], ["plus", 10], ["pro", 20]] as const) {
+      const account = providers.addAccount(p.id, { label, apiKey: `sk-${label}`, priority });
+      providers.updateAccount(account.id, { lastWarmupStatus: "healthy", planType: label });
+    }
+    providers.upsertModel(p.id, "m");
+    return router.resolve(`${p.name}/m`).candidates[0]!;
+  }
+
+  test("priority always starts from the lowest account priority", () => {
+    const candidate = candidateWithAccounts("priority");
+    expect(buildAccountPlan([candidate]).map(({ account }) => account.label)).toEqual(["free", "plus", "pro"]);
+    expect(buildAccountPlan([candidate]).map(({ account }) => account.label)).toEqual(["free", "plus", "pro"]);
+  });
+
+  test("round robin rotates independently per provider model", () => {
+    const candidate = candidateWithAccounts("round_robin");
+    expect(buildAccountPlan([candidate]).map(({ account }) => account.label)).toEqual(["free", "plus", "pro"]);
+    expect(buildAccountPlan([candidate]).map(({ account }) => account.label)).toEqual(["plus", "pro", "free"]);
+  });
+
+  test("attempt limit applies to each combo candidate", () => {
+    const first = candidateWithAccounts("priority", "attempts");
+    const second = { ...first, modelId: "fallback" };
+    const limited = limitAttemptsPerCandidate(buildAccountPlan([first, second]), 2);
+    expect(limited.map(({ candidate, account }) => `${candidate.modelId}/${account.label}`)).toEqual([
+      "m/free", "m/plus", "fallback/free", "fallback/plus",
+    ]);
   });
 });
 

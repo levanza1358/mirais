@@ -85,6 +85,7 @@ mirais restart
 mirais stop
 mirais fix        # update/install/build/start using the remembered install root
 mirais doctor --fix
+mirais doctor --json   # machine-readable health report
 
 # Linux/macOS
 ./mirais start|status|restart|stop

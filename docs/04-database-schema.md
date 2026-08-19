@@ -27,6 +27,8 @@ CREATE TABLE providers (
   base_url    TEXT,                          -- override; null → type default
   enabled     INTEGER NOT NULL DEFAULT 1,
   priority    INTEGER NOT NULL DEFAULT 100,  -- lower = preferred when routing ambiguous
+  -- 0024_provider_account_strategy: priority | round_robin
+  account_strategy TEXT NOT NULL DEFAULT 'priority',
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -62,6 +64,9 @@ CREATE TABLE provider_models (
   context_length    INTEGER,                 -- e.g. 128000
   max_output_tokens INTEGER,
   capabilities      TEXT,                    -- JSON array, e.g. ["reasoning","vision","pdf","tools"]
+  -- 0023_model_credit_rate: fallback cost estimate; null = unknown, never guessed
+  credit_rate       REAL,                    -- credit units per 1,000 tokens
+  credit_unit       TEXT,                    -- token | credit | request | image
   -- 0014_provider_model_source: sync pruning never removes manual models
   source            TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'sync')),
   UNIQUE(provider_id, model_id)
@@ -125,6 +130,7 @@ CREATE TABLE request_logs (
   input_tokens    INTEGER,
   output_tokens   INTEGER,
   credit_usage    REAL,                      -- provider credit units; null when unavailable
+  credit_source   TEXT,                      -- 'upstream' (reported) | 'estimated' (from credit_rate)
   latency_ms      INTEGER,
   tokens_saved    INTEGER DEFAULT 0,         -- by token saver
   reasoning_effort TEXT,                     -- requested thinking mode; never reasoning content
@@ -161,6 +167,8 @@ CREATE TABLE settings (
 **Backups** — SQLite online backup: `bun run scripts/backup.ts` copies `mirais.db` via the `VACUUM INTO` command to `DATA_DIR/backups/mirais-<ts>.db` (keep last 7).
 
 **Secrets at rest** — `provider_accounts.api_key` is plaintext by design (needed to call upstreams). `DATA_DIR` must be `chmod 700` on Ubuntu and ACL-restricted on Windows. Gateway keys are stored plaintext (migration 0021+) so operators can recover them; the legacy `key_hash` column remains for lookup fallback on pre-0021 databases.
+
+**Account selection** — each provider owns an `account_strategy`. `priority` always starts with the lowest-priority healthy account (use account priorities to express Free → Plus → Pro). `round_robin` rotates the first healthy account independently per provider/model. Retriable failures continue through the remaining accounts; persisted quota cooldowns remove exhausted accounts until their window expires. `routing_policy.maxAttempts` limits account attempts per model candidate, so later combo entries are still reachable.
 
 **Settings keys**
 

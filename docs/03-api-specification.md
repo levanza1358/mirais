@@ -121,13 +121,14 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/providers` | List providers with accounts, models, health |
-| POST | `/api/providers` | Create: `{ name, type, baseUrl?, enabled }` |
-| PATCH | `/api/providers/:id` | Update fields / enable-disable |
+| POST | `/api/providers` | Create: `{ name, type, baseUrl?, enabled?, priority?, accountStrategy? }`; strategy is `priority` (default) or `round_robin` |
+| PATCH | `/api/providers/:id` | Update fields / enable-disable, including `accountStrategy` |
 | DELETE | `/api/providers/:id` | Remove (blocked if referenced by a combo) |
 | POST | `/api/providers/:id/accounts` | Add account: `{ label, apiKey, priority? }` |
 | POST | `/api/providers/:id/accounts/bulk` | Bulk import: `{ apiKeys: string[], labelPrefix? }` (max 200) → `{ added, skipped }`; labels auto-generated, duplicates skipped |
 | DELETE | `/api/providers/:id/accounts` | Remove every account belonging to the provider → `{ ok: true, removed }` |
 | GET | `/api/providers/:id/accounts/usage` | Per-account usage from request logs → `[{ account, requests_today, tokens_today, requests_total, tokens_total }]` |
+| GET | `/api/providers/:id/accounts/export` | Full account export for backup/migration → account rows with **unmasked** `api_key`, `refresh_token`, `account_id`. Dashboard "Export" downloads this as CSV. Treat the response and the file as credentials |
 | GET | `/api/providers/accounts/:accId/codex-quota` | ChatGPT/Codex quota snapshot (OAuth accounts only) → `{ plan_type, email, limit_reached, primary, secondary, credits }`; each window has `used_percent, remaining_percent, window_seconds, resets_in_seconds, reset_at`. `secondary` = the 5-hour window when the plan has one |
 | POST | `/api/providers/accounts/:accId/codex-quota/reset` | Attempt ChatGPT/Codex banked reset for an OAuth account → `{ ok, message }` |
 | GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
@@ -145,7 +146,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | GET | `/api/xai/farm/check` | xAI Farm prerequisite report for IMAP settings, Python, Python packages, and Camoufox browser. |
 | POST | `/api/xai/farm/install-missing` | Starts a fixed-command background installation job. Creates `<install-root>/.venv` when absent, installs its packages, and downloads Camoufox into `<install-root>/.camoufox`. Returns the initial job status; concurrent jobs return `409`. |
 | GET | `/api/xai/farm/install-status` | Current install job state: `{ status, progress, stage, error?, checks? }`; `progress` is stage-based from 0–100. |
-| PUT | `/api/providers/:id/models/:modelId` | Update one model's metadata (display name, enabled state, context/capability metadata) |
+| PUT | `/api/providers/:id/models/:modelId` | Update one model's metadata (display name, enabled state, context/capability metadata, `creditRate` + `creditUnit` for cost estimation) |
 
 ### Aliases
 
@@ -162,7 +163,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | POST | `/api/combos` | `{ name, strategy: "sequential", chain: ["anthropic/claude-opus-4-7", "openai/gpt-5.2", "glm/glm-5.1"] }` |
 | PATCH | `/api/combos/:id` | Rename / reorder chain |
 | DELETE | `/api/combos/:id` | Remove |
-| POST | `/api/combos/:id/test` | Dry-run resolution → shows which providers would be tried |
+| POST | `/api/combos/:id/test` | Sends a tiny inference request to every resolved provider/model candidate in order and returns per-candidate status, latency, account, and error detail |
 
 ### Gateway API keys
 
@@ -188,6 +189,13 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 - Raw internal chain-of-thought is never requested, logged, or exposed.
 - Grok-4.5 uses `reasoning.effort: "high"`, its maximum effective effort level. Requests with tools receive a verified-workflow instruction: inspect first, make minimal changes, preserve existing behavior, and verify before reporting completion.
 - Mirais waits for xAI's first SSE byte before committing a streaming response. If a connection aborts before any bytes arrive, the normal retry/failover policy can select another eligible account. Once a byte is forwarded, Mirais never replays the request, preventing duplicate tool calls. Every translated xAI stream failure is closed with `data: [DONE]` so clients do not wait indefinitely.
+
+### ChatGPT (Codex) reasoning models
+
+- Reasoning deltas (`response.reasoning_text.delta`, `response.reasoning_summary_text.delta`) are streamed in the `reasoning_content` channel, never mixed into `content`.
+- When a model returns its answer only in the final `response.completed` payload instead of text deltas, Mirais emits that text before the finish chunk so the client never receives an empty assistant turn.
+- `response.incomplete` maps to `finish_reason: "length"`; `response.completed` maps to `stop` (or `tool_calls`).
+- For non-streaming requests, a reasoning-only response falls back to the reasoning text as content.
 
 ### Settings
 

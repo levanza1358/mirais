@@ -606,16 +606,24 @@ interface ResponsesApiResponse {
   error?: { message?: string };
 }
 
-export function responsesApiToChatCompletion(data: ResponsesApiResponse, requestedModel: string): CanonicalResponse {
+/** Visible assistant text carried by a Responses API `output` array. */
+export function responsesOutputText(output?: Array<Record<string, unknown>>): string {
   let text = "";
+  for (const item of output ?? []) {
+    if (item.type !== "message") continue;
+    for (const c of (item.content as Array<Record<string, unknown>> | undefined) ?? []) {
+      if ((c.type === "output_text" || c.type === "text") && typeof c.text === "string") text += c.text;
+    }
+  }
+  return text;
+}
+
+export function responsesApiToChatCompletion(data: ResponsesApiResponse, requestedModel: string): CanonicalResponse {
+  const text = responsesOutputText(data.output);
   const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
 
   for (const item of data.output ?? []) {
-    if (item.type === "message") {
-      for (const c of (item.content as Array<Record<string, unknown>> | undefined) ?? []) {
-        if ((c.type === "output_text" || c.type === "text") && typeof c.text === "string") text += c.text;
-      }
-    } else if (item.type === "function_call") {
+    if (item.type === "function_call") {
       toolCalls.push({
         id: (item.call_id ?? item.id ?? `call_${ulid()}`) as string,
         type: "function",
@@ -654,6 +662,7 @@ export class ResponsesToChatStreamTranslator {
   private started = false;
   private usage: Usage | null = null;
   private sawToolCall = false;
+  private sawText = false;
   private nextToolCallIndex = 0;
   private toolCallIndices = new Map<string, number>();
 
@@ -716,7 +725,19 @@ export class ResponsesToChatStreamTranslator {
         const delta = parsed.delta as string | undefined;
         if (delta) {
           if (!this.started) out.push(startChunk());
+          this.sawText = true;
           out.push(this.chunk({ content: delta }, null));
+        }
+        break;
+      }
+      // Reasoning models (gpt-5.x) stream their thinking on a separate channel.
+      // Keep it out of `content` so it never contaminates the answer.
+      case "response.reasoning_text.delta":
+      case "response.reasoning_summary_text.delta": {
+        const delta = parsed.delta as string | undefined;
+        if (delta) {
+          if (!this.started) out.push(startChunk());
+          out.push(this.chunk({ reasoning_content: delta }, null));
         }
         break;
       }
@@ -744,7 +765,17 @@ export class ResponsesToChatStreamTranslator {
           };
         }
         if (!this.started) out.push(startChunk());
-        out.push(this.chunk({}, this.sawToolCall ? "tool_calls" : "stop"));
+        // Some models put the whole answer in the final response object instead
+        // of streaming text deltas — emit it so the client is not left empty.
+        if (!this.sawText && !this.sawToolCall) {
+          const text = responsesOutputText(r?.output);
+          if (text) {
+            this.sawText = true;
+            out.push(this.chunk({ content: text }, null));
+          }
+        }
+        const finish = this.sawToolCall ? "tool_calls" : type === "response.incomplete" ? "length" : "stop";
+        out.push(this.chunk({}, finish));
         out.push("data: [DONE]\n\n");
         break;
       }
@@ -762,6 +793,11 @@ export class ResponsesToChatStreamTranslator {
 
   result(): { usage: Usage | null } {
     return { usage: this.usage };
+  }
+
+  /** True when the stream carried visible content or a tool call. */
+  producedOutput(): boolean {
+    return this.sawText || this.sawToolCall;
   }
 
   private chunk(delta: Record<string, unknown>, finishReason: string | null): string {
@@ -873,6 +909,7 @@ export async function aggregateResponsesStream(
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let text = "";
+  let reasoning = "";
   const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
   let finishReason: string | null = null;
 
@@ -890,8 +927,12 @@ export async function aggregateResponsesStream(
           continue;
         }
         const type = (parsed.type as string | undefined) ?? ev.event;
+        const failure = responsesStreamError(ev.event, ev.data);
+        if (failure) throw new GatewayError(503, "server_error", failure);
         if (type === "response.output_text.delta" || type === "response.refusal.delta") {
           text += (parsed.delta as string | undefined) ?? "";
+        } else if (type === "response.reasoning_text.delta" || type === "response.reasoning_summary_text.delta") {
+          reasoning += (parsed.delta as string | undefined) ?? "";
         } else if (type === "response.output_item.added") {
           const item = parsed.item as Record<string, unknown> | undefined;
           if (item?.type === "function_call") {
@@ -906,7 +947,8 @@ export async function aggregateResponsesStream(
           const tc = toolCalls.get(Math.max(0, idx)) ?? toolCalls.get(toolCalls.size - 1);
           if (tc) tc.arguments += (parsed.delta as string | undefined) ?? "";
         } else if (type === "response.completed" || type === "response.incomplete" || type === "response.failed") {
-          finishReason = toolCalls.size ? "tool_calls" : "stop";
+          if (!text) text = responsesOutputText((parsed.response as ResponsesApiResponse | undefined)?.output);
+          finishReason = toolCalls.size ? "tool_calls" : type === "response.incomplete" ? "length" : "stop";
         }
         // feed the translator too so usage is captured
         translator.handleEvent(ev.event, ev.data);
@@ -917,7 +959,10 @@ export async function aggregateResponsesStream(
   }
 
   const usage = translator.result().usage;
-  const message: CanonicalResponse["choices"][number]["message"] = { role: "assistant", content: text };
+  // Reasoning-only responses would otherwise arrive empty for non-streaming
+  // clients, so fall back to the thinking text when there is nothing else.
+  const content = text || (toolCalls.size ? "" : reasoning);
+  const message: CanonicalResponse["choices"][number]["message"] = { role: "assistant", content };
   if (toolCalls.size) {
     message.tool_calls = [...toolCalls.values()].map((tc) => ({
       id: tc.id,
@@ -935,21 +980,82 @@ export async function aggregateResponsesStream(
   };
 }
 
-/** Wrap a Responses API SSE body as an OpenAI chat.completion.chunk stream. */
+/** Events that prove the upstream response produced real output. */
+const OPENING_EVENTS = new Set([
+  "response.output_text.delta",
+  "response.refusal.delta",
+  "response.reasoning_text.delta",
+  "response.reasoning_summary_text.delta",
+  "response.output_item.added",
+  "response.function_call_arguments.delta",
+  "response.completed",
+  "response.incomplete",
+]);
+
+function eventType(event: string, data: string): string {
+  try {
+    return (JSON.parse(data) as { type?: string }).type ?? event;
+  } catch {
+    return event;
+  }
+}
+
+/** Error message carried by an upstream SSE event, if it is a failure event. */
+export function responsesStreamError(event: string, data: string): string | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(data) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const type = (parsed.type as string | undefined) ?? event;
+  const err = parsed.error as Record<string, unknown> | undefined;
+  // Some upstreams emit a bare `{"error":{...}}` event with no `type` field.
+  if (type === "error" || (err && !type.startsWith("response."))) {
+    return String(err?.message ?? parsed.message ?? "upstream stream error");
+  }
+  if (type === "response.failed") {
+    const r = parsed.response as Record<string, unknown> | undefined;
+    const rErr = r?.error as Record<string, unknown> | undefined;
+    return String(rErr?.message ?? err?.message ?? "upstream response failed");
+  }
+  return null;
+}
+
+/**
+ * Wrap a Responses API SSE body as an OpenAI chat.completion.chunk stream.
+ *
+ * `ready` rejects when the upstream fails before emitting any content (e.g.
+ * "Our servers are currently overloaded"), so the executor can fail over to
+ * another account instead of handing the client an empty assistant message.
+ */
 export function responsesStreamToChat(
   body: ReadableStream<Uint8Array>,
   requestedModel: string,
-): { stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> } {
+): { stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null>; ready: Promise<void> } {
   const parser = new SseParser();
   const translator = new ResponsesToChatStreamTranslator(requestedModel);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let resolveUsage: (u: Usage | null) => void;
   const usagePromise = new Promise<Usage | null>((r) => { resolveUsage = r; });
+  let openStream: () => void;
+  let failStream: (err: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => { openStream = resolve; failStream = reject; });
+  let opened = false;
+  const seenEvents: string[] = [];
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = body.getReader();
+      // Hold back the leading chunks until the response proves viable.
+      const pending: string[] = [];
+      const flush = () => {
+        opened = true;
+        for (const line of pending) controller.enqueue(encoder.encode(line));
+        pending.length = 0;
+        openStream();
+      };
       try {
         for (;;) {
           const { done, value } = await reader.read();
@@ -957,14 +1063,39 @@ export function responsesStreamToChat(
           const text = decoder.decode(value, { stream: true });
           for (const ev of parser.feed(text)) {
             if (ev.data === "[DONE]") continue;
-            for (const line of translator.handleEvent(ev.event, ev.data)) {
-              controller.enqueue(encoder.encode(line));
+            if (!opened) {
+              const message = responsesStreamError(ev.event, ev.data);
+              if (message) {
+                failStream(new GatewayError(503, "server_error", message));
+                await reader.cancel().catch(() => undefined);
+                return;
+              }
             }
+            const type = eventType(ev.event, ev.data);
+            if (seenEvents.length < 40) seenEvents.push(type);
+            const lines = translator.handleEvent(ev.event, ev.data);
+            if (opened) {
+              for (const line of lines) controller.enqueue(encoder.encode(line));
+              continue;
+            }
+            pending.push(...lines);
+            if (OPENING_EVENTS.has(type)) flush();
           }
         }
+        if (!opened) {
+          failStream(new GatewayError(502, "server_error", "Upstream stream ended before any content"));
+        } else if (!translator.producedOutput()) {
+          // Empty assistant turn — record which upstream events arrived so the
+          // unmapped event type can be identified without a payload dump.
+          log.warn("codex stream produced no content", { model: requestedModel, events: seenEvents.join(",") });
+        }
       } catch (err) {
-        void err;
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: "upstream stream error", type: "server_error" } })}\n\n`));
+        const detail = err instanceof Error ? err.name : "UnknownError";
+        if (!opened) {
+          failStream(new GatewayError(502, "server_error", `Upstream stream error (${detail})`));
+          return;
+        }
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: `upstream stream error (${detail})`, type: "server_error" } })}\n\n`));
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } finally {
         resolveUsage!(translator.result().usage);
@@ -975,5 +1106,5 @@ export function responsesStreamToChat(
       body.cancel().catch(() => undefined);
     },
   });
-  return { stream, usagePromise };
+  return { stream, usagePromise, ready };
 }

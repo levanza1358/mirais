@@ -327,7 +327,7 @@ function plainClone(value: unknown): unknown {
       });
     });
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement || (e.target instanceof HTMLElement && e.target.closest('[role="combobox"]'))) return;
       if (e.code === "Space") {
         e.preventDefault();
         if (audio.paused) void audio.play().catch(() => undefined);

@@ -7,7 +7,6 @@ import {
   KeyRound,
   LayoutDashboard,
   Music,
-  Plug,
   ScrollText,
   Settings as SettingsIcon,
   BarChart3,
@@ -25,6 +24,7 @@ type Command = {
 
 const COMMANDS: Command[] = [
   { id: "nav-overview", label: "Open Overview", hint: "Dashboard", icon: LayoutDashboard, run: ({ navigate, close }) => { navigate("/dashboard"); close(); } },
+  { id: "nav-chat", label: "Open Chat", icon: LayoutDashboard, run: ({ navigate, close }) => { navigate("/dashboard/chat"); close(); } },
   { id: "nav-providers", label: "Open Providers", icon: Boxes, run: ({ navigate, close }) => { navigate("/dashboard/providers"); close(); } },
   { id: "nav-proxies", label: "Open Proxy Pool", icon: Globe2, run: ({ navigate, close }) => { navigate("/dashboard/proxies"); close(); } },
   { id: "nav-combos", label: "Open Combos", icon: GitBranch, run: ({ navigate, close }) => { navigate("/dashboard/combos"); close(); } },
@@ -32,7 +32,6 @@ const COMMANDS: Command[] = [
   { id: "nav-logs", label: "Open Logs", icon: ScrollText, run: ({ navigate, close }) => { navigate("/dashboard/logs"); close(); } },
   { id: "nav-usage", label: "Open Usage", icon: BarChart3, run: ({ navigate, close }) => { navigate("/dashboard/usage"); close(); } },
   { id: "nav-music", label: "Open Music", icon: Music, run: ({ navigate, close }) => { navigate("/dashboard/music"); close(); } },
-  { id: "nav-integrations", label: "Open Integrations", icon: Plug, run: ({ navigate, close }) => { navigate("/dashboard/integrations"); close(); } },
   { id: "nav-settings", label: "Open Settings", icon: SettingsIcon, run: ({ navigate, close }) => { navigate("/dashboard/settings"); close(); } },
   { id: "nav-landing", label: "Back to landing page", icon: LayoutDashboard, run: ({ navigate, close }) => { navigate("/"); close(); } },
 ];
