@@ -96,6 +96,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://www.codebuddy.ai/v2",
   },
   {
+    type: "github-copilot",
+    name: "github-copilot",
+    displayName: "GitHub Copilot",
+    description: "GitHub Copilot via a local OpenAI-compatible sidecar per account",
+    textIcon: "GH",
+    color: "#F0F6FC",
+    credentialUrl: "https://docs.github.com/copilot",
+  },
+  {
     type: "codebuddy-cn",
     name: "codebuddy-cn",
     displayName: "CodeBuddy China",

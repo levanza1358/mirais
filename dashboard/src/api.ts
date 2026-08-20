@@ -66,6 +66,7 @@ export interface ProviderAccount {
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;
   last_warmup_detail?: string | null;
+  base_url?: string | null;
 }
 
 export interface ProviderModel {
@@ -262,7 +263,7 @@ export const providers = {
   update: (id: string, patch: Partial<{ name: string; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>) =>
     req<Provider>(`/api/providers/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id: string) => req<{ ok: boolean }>(`/api/providers/${id}`, { method: "DELETE" }),
-  addAccount: (id: string, input: { label: string; apiKey: string; priority?: number }) =>
+  addAccount: (id: string, input: { label: string; apiKey?: string; baseUrl?: string; priority?: number }) =>
     req<ProviderAccount>(`/api/providers/${id}/accounts`, { method: "POST", body: JSON.stringify(input) }),
   addAccountsBulk: (id: string, apiKeys: string[], labelPrefix?: string) =>
     req<{ added: number; skipped: number }>(`/api/providers/${id}/accounts/bulk`, { method: "POST", body: JSON.stringify({ apiKeys, labelPrefix }) }),
@@ -276,6 +277,29 @@ export const providers = {
       `/api/providers/${id}/quota`),
   codexQuota: (accId: string) => req<CodexQuota>(`/api/providers/accounts/${accId}/codex-quota`),
   codexQuotaReset: (accId: string) => req<{ ok: boolean; message: string }>(`/api/providers/accounts/${accId}/codex-quota/reset`, { method: "POST" }),
+  copilotQuota: (accId: string) => req<CopilotQuota>(`/api/providers/accounts/${accId}/copilot-quota`),
+  copilotStart: (providerId: string, label: string) =>
+    req<{ accountId: string; url: string }>("/api/copilot/start", { method: "POST", body: JSON.stringify({ providerId, label }) }),
+  copilotReconnect: (accountId: string) =>
+    req<{ accountId: string; url: string }>(`/api/copilot/${encodeURIComponent(accountId)}/reconnect`, { method: "POST" }),
+  copilotStatus: (accountId: string) =>
+    req<{ done: boolean; ok?: boolean; message?: string; duplicate?: boolean; login?: string | null; existingAccountId?: string }>(`/api/copilot/${encodeURIComponent(accountId)}/status`),
+  copilotOverwrite: (accountId: string) =>
+    req<{ ok: boolean }>(`/api/copilot/${encodeURIComponent(accountId)}/overwrite`, { method: "POST" }),
+  copilotLoginInfo: (accountId: string) =>
+    req<{ code: string | null; done: boolean; ok?: boolean; error?: string | null; url: string }>(`/api/copilot/${encodeURIComponent(accountId)}/login-info`),
+  copilotCancel: (accountId: string) =>
+    req<{ ok: boolean }>(`/api/copilot/${encodeURIComponent(accountId)}/login`, { method: "DELETE" }),
+  copilotBulk: (providerId: string, accounts: string, force = false) =>
+    req<{ jobId: string; total: number }>("/api/copilot/bulk", { method: "POST", body: JSON.stringify({ providerId, label: "bulk", accounts, force }) }),
+  copilotBulkStatus: (jobId: string) =>
+    req<{ id: string; providerId: string; startedAt: string; done: boolean; error: string | null; results: Array<{ email: string; success: boolean; error?: string | null }> }>(`/api/copilot/bulk/${encodeURIComponent(jobId)}`),
+  copilotBulkLogs: (jobId: string) =>
+    req<{ logs: string[]; done: boolean; results: Array<{ email: string; success: boolean; error?: string | null }>; error: string | null }>(`/api/copilot/bulk/${encodeURIComponent(jobId)}/logs`),
+  copilotBulkLatest: (providerId: string) =>
+    req<{ job: { id: string; done: boolean; error: string | null; results: Array<{ email: string; success: boolean; error?: string | null }>; logs: string[] } | null }>(`/api/copilot/bulk/latest/${encodeURIComponent(providerId)}`),
+  copilotBulkDismiss: (providerId: string) =>
+    req<{ ok: boolean }>(`/api/copilot/bulk/latest/${encodeURIComponent(providerId)}`, { method: "DELETE" }),
   oauthStart: (providerId: string) =>
     req<{ url: string; state: string }>("/api/oauth/openai/start", { method: "POST", body: JSON.stringify({ providerId }) }),
   oauthRedirectUrl: (url: string) => `/api/oauth/openai/redirect?url=${encodeURIComponent(url)}`,
@@ -283,7 +307,7 @@ export const providers = {
     req<{ done: boolean; ok?: boolean; message?: string }>(`/api/oauth/openai/status?state=${encodeURIComponent(state)}`),
   oauthSubmitCallback: (url: string) =>
     req<{ ok: boolean }>("/api/oauth/openai/callback", { method: "POST", body: JSON.stringify({ url }) }),
-  updateAccount: (accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null }>) =>
+  updateAccount: (accId: string, patch: Partial<{ label: string; apiKey: string; baseUrl: string | null; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null }>) =>
     req<ProviderAccount>(`/api/providers/accounts/${accId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   checkinAccount: (accId: string) =>
     req<{ ok: boolean; message: string; quotaTotal: number | null }>(`/api/providers/accounts/${accId}/checkin`, { method: "POST" }),
@@ -428,6 +452,21 @@ export interface CodexQuota {
   secondary: CodexQuotaWindow | null;
   banked_resets: { remaining: number | null; total: number | null } | null;
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
+}
+
+export interface CopilotQuotaSnapshot {
+  isUnlimitedEntitlement: boolean;
+  entitlementRequests: number;
+  usedRequests: number;
+  usageAllowedWithExhaustedQuota: boolean;
+  remainingPercentage: number;
+  overage: number;
+  overageAllowedWithExhaustedQuota: boolean;
+  resetDate?: string;
+}
+
+export interface CopilotQuota {
+  quotaSnapshots: Record<string, CopilotQuotaSnapshot | undefined>;
 }
 
 // ── aliases / combos ──

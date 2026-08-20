@@ -124,6 +124,7 @@ export type ProviderType =
   | "blackbox"
   | "codebuddy-global"
   | "codebuddy-cn"
+  | "github-copilot"
   | "custom";
 
 export interface Provider {
@@ -167,6 +168,7 @@ export interface ProviderAccount {
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;
   last_warmup_detail?: string | null;
+  base_url?: string | null;
 }
 
 export interface ProviderModel {

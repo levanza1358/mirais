@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Download, Gauge, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cable, CalendarCheck, ChevronLeft, ChevronRight, Download, Gauge, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { type Provider, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, Card, ConfirmModal, Modal, Select, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
 import { AccountMetaModal } from "./AccountMetaModal";
 import { AddAccountModal } from "./AddAccountModal";
-import { CodexQuotaModal, InlineCodexQuota, quotaTitle } from "./quota";
+import { CodexQuotaModal, InlineCodexQuota, InlineCopilotQuota, quotaTitle } from "./quota";
 import { ACCOUNT_PAGE_SIZE_OPTIONS, DEFAULT_ACCOUNTS_PER_PAGE } from "./types";
 import { downloadCsv, toCsv } from "../../utils/csv";
 
@@ -21,6 +21,7 @@ const ACCOUNT_STATUS_TABS: Array<{ id: AccountStatusTab; label: string; activeCl
 export function AccountsCard({ provider }: { provider: Provider }) {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
+  const [reconnecting, setReconnecting] = useState<ProviderAccount | null>(null);
   const [removing, setRemoving] = useState<ProviderAccount | null>(null);
   const [removingAll, setRemovingAll] = useState(false);
   const [bulkDelete, setBulkDelete] = useState<{ total: number; removed: number; failed: number; running: boolean } | null>(null);
@@ -154,6 +155,20 @@ export function AccountsCard({ provider }: { provider: Provider }) {
     () => new Map(codexAccounts.map((account, index) => [account.id, codexQuotaQueries[index]])),
     [codexAccounts, codexQuotaQueries],
   );
+  const copilotAccounts = provider.type === "github-copilot" ? accounts : [];
+  const copilotQuotaQueries = useQueries({
+    queries: copilotAccounts.map((account) => ({
+      queryKey: ["copilot-quota", account.id],
+      queryFn: () => providers.copilotQuota(account.id),
+      refetchInterval: 60_000,
+      staleTime: 30_000,
+      retry: 1,
+    })),
+  });
+  const copilotQuotaByAccountId = useMemo(
+    () => new Map(copilotAccounts.map((account, index) => [account.id, copilotQuotaQueries[index]])),
+    [copilotAccounts, copilotQuotaQueries],
+  );
   const totalPages = Math.max(1, Math.ceil(filteredAccounts.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageAccounts = filteredAccounts.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -231,6 +246,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
         {pageAccounts.map((account) => {
           const row = usageByLabel.get(account.label);
           const quota = codexQuotaByAccountId.get(account.id);
+          const copilotQuota = copilotQuotaByAccountId.get(account.id);
           return (
             <div key={account.id} className="relative rounded-lg bg-bg-base/50 px-3 py-3 text-xs">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
@@ -243,11 +259,13 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                     {account.last_warmup_status === "rate_limited" && <Badge tone="warning">rate limited</Badge>}
                     {account.last_warmup_status === "failing" && <Badge tone="danger">failing</Badge>}
                     {!account.last_warmup_status && <Badge tone="muted">unknown</Badge>}
-                    <span className="break-all font-mono text-text-muted">{account.api_key}</span>
+                    {account.api_key && <span className="break-all font-mono text-text-muted">{account.api_key}</span>}
                   </div>
                   <div className="flex flex-col gap-1 text-text-muted sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+                    {provider.type === "github-copilot" && account.base_url && <span className="break-all font-mono">{account.base_url}</span>}
                     <span title={row ? `Today: ${row.requests_today} req · ${fmtNum(row.tokens_today)} tok\nAll-time: ${row.requests_total} req · ${fmtNum(row.tokens_total)} tok` : "No usage recorded yet"}>{row ? `${fmtNum(row.requests_today)} req · ${fmtNum(row.tokens_today)} tok today` : "—"}</span>
                     {quota && <div className="lg:hidden"><InlineCodexQuota data={quota.data} loading={quota.isLoading} /></div>}
+                    {copilotQuota && <div className="lg:hidden"><InlineCopilotQuota data={copilotQuota.data} loading={copilotQuota.isLoading} /></div>}
                     <span>{fmtTime(account.created_at)}</span>
                     {account.last_warmup_at && <span>Warmup: {fmtTime(account.last_warmup_at)}</span>}
                     {account.last_warmup_latency_ms != null && <span>{account.last_warmup_latency_ms}ms</span>}
@@ -262,6 +280,9 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                   )}
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2 lg:ml-auto">
+                  {provider.type === "github-copilot" && account.last_warmup_status === "failing" && (
+                    <Button variant="ghost" size="sm" onClick={() => setReconnecting(account)} aria-label={`Reconnect ${account.label}`} title="Reconnect GitHub"><RefreshCw size={13} className="text-warning" /></Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => setEditingMeta(account)}><Pencil size={13} /></Button>
                   {provider.type === "codebuddy-cn" && (
                     <Button
@@ -287,6 +308,11 @@ export function AccountsCard({ provider }: { provider: Provider }) {
                   <InlineCodexQuota data={quota.data} loading={quota.isLoading} />
                 </div>
               )}
+              {copilotQuota && (
+                <div className="pointer-events-none absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 lg:block">
+                  <InlineCopilotQuota data={copilotQuota.data} loading={copilotQuota.isLoading} />
+                </div>
+              )}
             </div>
           );
         })}
@@ -304,6 +330,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       )}
 
       {adding && <AddAccountModal provider={provider} accountCount={accounts.length} onClose={() => setAdding(false)} />}
+      {reconnecting && <AddAccountModal provider={provider} accountCount={accounts.length} reconnectAccount={reconnecting} onClose={() => setReconnecting(null)} />}
       {quotaFor && <CodexQuotaModal account={quotaFor} providerType={provider.type} onClose={() => setQuotaFor(null)} />}
       {editingMeta && <AccountMetaModal account={editingMeta} loading={updateMeta.isPending} onClose={() => setEditingMeta(null)} onSave={(notes, tags, sessionCookie) => updateMeta.mutate({ accountId: editingMeta.id, notes, tags, sessionCookie })} />}
 

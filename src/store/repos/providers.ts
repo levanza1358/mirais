@@ -59,22 +59,23 @@ export class ProvidersRepo {
     return (this.db.query("SELECT * FROM provider_accounts WHERE id = ?").get(accId) as ProviderAccount) ?? null;
   }
 
-  addAccount(providerId: string, input: { label: string; apiKey: string; priority?: number }): ProviderAccount {
+  addAccount(providerId: string, input: { label: string; apiKey?: string; baseUrl?: string | null; priority?: number }): ProviderAccount {
     const id = ulid();
     this.db
-      .query("INSERT INTO provider_accounts (id, provider_id, label, api_key, priority) VALUES (?, ?, ?, ?, ?)")
-      .run(id, providerId, input.label, input.apiKey, input.priority ?? 100);
+      .query("INSERT INTO provider_accounts (id, provider_id, label, api_key, base_url, priority) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(id, providerId, input.label, input.apiKey ?? "", input.baseUrl ?? null, input.priority ?? 100);
     return this.getAccount(id)!;
   }
 
-  updateAccount(accId: string, patch: Partial<{ label: string; apiKey: string; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null; planType: string | null; rateLimitedUntil: number | null; lastWarmupAt: string | null; lastWarmupStatus: string | null; lastWarmupLatencyMs: number | null; lastWarmupDetail: string | null }>): ProviderAccount | null {
+  updateAccount(accId: string, patch: Partial<{ label: string; apiKey: string; baseUrl: string | null; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null; planType: string | null; rateLimitedUntil: number | null; lastWarmupAt: string | null; lastWarmupStatus: string | null; lastWarmupLatencyMs: number | null; lastWarmupDetail: string | null }>): ProviderAccount | null {
     const cur = this.getAccount(accId);
     if (!cur) return null;
     this.db
-      .query("UPDATE provider_accounts SET label=?, api_key=?, priority=?, enabled=?, notes=?, tags=?, session_cookie=?, plan_type=?, rate_limited_until=?, last_warmup_at=?, last_warmup_status=?, last_warmup_latency_ms=?, last_warmup_detail=?, updated_at=? WHERE id=?")
+      .query("UPDATE provider_accounts SET label=?, api_key=?, base_url=?, priority=?, enabled=?, notes=?, tags=?, session_cookie=?, plan_type=?, rate_limited_until=?, last_warmup_at=?, last_warmup_status=?, last_warmup_latency_ms=?, last_warmup_detail=?, updated_at=? WHERE id=?")
       .run(
         patch.label ?? cur.label,
         patch.apiKey ?? cur.api_key,
+        patch.baseUrl !== undefined ? patch.baseUrl : (cur.base_url ?? null),
         patch.priority ?? cur.priority,
         patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
         patch.notes !== undefined ? patch.notes : (cur.notes ?? null),

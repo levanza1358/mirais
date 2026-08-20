@@ -41,6 +41,13 @@ describe("baseUrlFor / upstreamFormat", () => {
     expect(baseUrlFor(p)).toBe("http://localhost:9999/v1");
     expect(upstreamFormat(p)).toBe("openai");
   });
+
+  test("GitHub Copilot uses the account sidecar URL", () => {
+    const p = providers.create({ name: "github-copilot", type: "github-copilot" });
+    const account = providers.addAccount(p.id, { label: "personal", baseUrl: "http://127.0.0.1:4141/v1" });
+    expect(baseUrlFor(p, account)).toBe("http://127.0.0.1:4141/v1");
+    expect(upstreamFormat(p)).toBe("openai");
+  });
 });
 
 describe("Router.resolve", () => {
@@ -176,6 +183,30 @@ describe("Router.resolve", () => {
 });
 
 describe("combo streaming failover", () => {
+  test("fails over between GitHub Copilot account sidecars", async () => {
+    const p = providers.create({ name: "github-copilot", type: "github-copilot", accountStrategy: "round_robin" });
+    const first = providers.addAccount(p.id, { label: "first", baseUrl: "http://127.0.0.1:4141/v1" });
+    const second = providers.addAccount(p.id, { label: "second", baseUrl: "http://127.0.0.1:4142/v1" });
+    providers.updateAccount(first.id, { lastWarmupStatus: "healthy" });
+    providers.updateAccount(second.id, { lastWarmupStatus: "healthy" });
+    providers.upsertModel(p.id, "gpt-5");
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return urls.length === 1
+        ? new Response("rate limited", { status: 429 })
+        : new Response('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      const result = await executeRequest({ model: "github-copilot/gpt-5", messages: [{ role: "user", content: "hi" }], stream: true }, router.resolve("github-copilot/gpt-5").candidates, {}, providers);
+      expect(result.kind).toBe("stream");
+      expect(urls).toEqual(["http://127.0.0.1:4141/v1/chat/completions", "http://127.0.0.1:4142/v1/chat/completions"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("tries the next model when a 200 SSE stream ends before output", async () => {
     seedProvider("first", "openai", ["m1"], 10);
     seedProvider("second", "openai", ["m2"], 20);

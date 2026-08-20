@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
-import { type CodexQuota, type CodexQuotaWindow, type ProviderAccount, providers } from "../../api";
+import { type CodexQuota, type CodexQuotaWindow, type CopilotQuota, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, ConfirmModal, Modal, fmtNum, toast } from "../../components/ui";
 
 export function windowLabel(windowData: CodexQuotaWindow | null, fallback: string): string {
@@ -64,6 +64,30 @@ export function InlineCodexQuota({ data, loading }: { data: CodexQuota | undefin
         <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${used}%` }} />
       </div>
       <span className="truncate text-[11px] text-text-muted">resets {resetLabel(windowData)}</span>
+    </div>
+  );
+}
+
+export function InlineCopilotQuota({ data, loading }: { data: CopilotQuota | undefined; loading: boolean }) {
+  if (loading) return <span className="text-[11px] text-text-muted">Checking quota…</span>;
+  const premium = data?.quotaSnapshots.premium_interactions;
+  const quota = premium && (premium.isUnlimitedEntitlement || premium.entitlementRequests > 0)
+    ? premium
+    : data?.quotaSnapshots.chat ?? data?.quotaSnapshots.completions;
+  if (!quota) return <span className="text-[11px] text-text-muted">Quota unavailable</span>;
+  if (quota.isUnlimitedEntitlement) return <span className="text-[11px] text-success">Unlimited quota</span>;
+
+  const remaining = Math.max(0, Math.min(100, quota.remainingPercentage));
+  const used = 100 - remaining;
+  const color = used >= 100 ? "bg-danger" : used >= 80 ? "bg-warning" : "bg-accent";
+  const reset = fmtQuotaReset(quota.resetDate);
+  return (
+    <div className="flex min-w-52 items-center gap-2" title={`${Math.round(remaining)}% remaining${reset === "—" ? "" : `, resets ${reset}`}`}>
+      <span className="shrink-0 text-[11px] text-text-muted">{Math.round(remaining)}% left</span>
+      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-bg-base">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${used}%` }} />
+      </div>
+      <span className="truncate text-[11px] text-text-muted">resets {reset}</span>
     </div>
   );
 }

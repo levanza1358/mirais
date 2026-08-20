@@ -22,6 +22,16 @@ function adminApp(plugin: ReturnType<typeof providerRoutes> | ReturnType<typeof 
 beforeEach(() => { db = freshDb(); });
 
 describe("model admin routes", () => {
+  test("rejects Copilot quota requests for non-Copilot accounts", async () => {
+    const repo = new ProvidersRepo(db);
+    const provider = repo.create({ name: "p", type: "openai" });
+    const account = repo.addAccount(provider.id, { label: "account", apiKey: "test" });
+    const app = adminApp(providerRoutes(db));
+    const response = await app.handle(new Request(`http://test/api/providers/accounts/${account.id}/copilot-quota`));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Quota is only available for GitHub Copilot accounts" });
+  });
+
   test("lists provider models and validates updates", async () => {
     const repo = new ProvidersRepo(db);
     const provider = repo.create({ name: "p", type: "openai" });

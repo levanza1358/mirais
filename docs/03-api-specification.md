@@ -116,7 +116,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 
 ### Providers & accounts
 
-`Provider` = an upstream service. Built-in types: `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`, `groq`, `xai`, `glm`, `blackbox`, `antigravity`, `custom` (custom = any OpenAI-compatible base URL).
+`Provider` = an upstream service. Built-in types include `openai`, `anthropic`, `deepseek`, `xai`, `glm`, `blackbox`, `codebuddy-global`, `codebuddy-cn`, `github-copilot`, and `custom` (custom = any OpenAI-compatible base URL). `github-copilot` uses a local OpenAI-compatible Copilot SDK sidecar for each account.
 
 | Method | Path | Notes |
 |--------|------|-------|
@@ -124,21 +124,27 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | POST | `/api/providers` | Create: `{ name, type, baseUrl?, enabled?, priority?, accountStrategy? }`; strategy is `priority` (default) or `round_robin` |
 | PATCH | `/api/providers/:id` | Update fields / enable-disable, including `accountStrategy` |
 | DELETE | `/api/providers/:id` | Remove (blocked if referenced by a combo) |
-| POST | `/api/providers/:id/accounts` | Add account: `{ label, apiKey, priority? }` |
+| POST | `/api/providers/:id/accounts` | Add account: `{ label, apiKey?, baseUrl?, priority? }`. GitHub Copilot accounts require a per-account local sidecar `baseUrl`; `apiKey` is optional only when that loopback sidecar has no auth. |
 | POST | `/api/providers/:id/accounts/bulk` | Bulk import: `{ apiKeys: string[], labelPrefix? }` (max 200) → `{ added, skipped }`; labels auto-generated, duplicates skipped |
 | DELETE | `/api/providers/:id/accounts` | Remove every account belonging to the provider → `{ ok: true, removed }` |
 | GET | `/api/providers/:id/accounts/usage` | Per-account usage from request logs → `[{ account, requests_today, tokens_today, requests_total, tokens_total }]` |
 | GET | `/api/providers/:id/accounts/export` | Full account export for backup/migration → account rows with **unmasked** `api_key`, `refresh_token`, `account_id`. Dashboard "Export" downloads this as CSV. Treat the response and the file as credentials |
 | GET | `/api/providers/accounts/:accId/codex-quota` | ChatGPT/Codex quota snapshot (OAuth accounts only) → `{ plan_type, email, limit_reached, primary, secondary, credits }`; each window has `used_percent, remaining_percent, window_seconds, resets_in_seconds, reset_at`. `secondary` = the 5-hour window when the plan has one |
 | POST | `/api/providers/accounts/:accId/codex-quota/reset` | Attempt ChatGPT/Codex banked reset for an OAuth account → `{ ok, message }` |
+| GET | `/api/providers/accounts/:accId/copilot-quota` | Live GitHub Copilot quota snapshots keyed by type (`premium_interactions`, `chat`, `completions`) with remaining percentage, entitlement usage, and reset date |
 | GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
 | GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, avg_latency_ms, errors, last_ts }]` |
 | POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (openai-type providers only) |
+| POST | `/api/copilot/start` | Start an isolated GitHub Copilot browser login: `{ providerId, label }` → `{ accountId, url }`. Opens GitHub's official login flow; no GitHub password is sent to Mirais. |
+| POST | `/api/copilot/:accountId/reconnect` | Restart GitHub device authorization for an existing Copilot account while preserving its ID, metadata, and usage history. |
+| GET | `/api/copilot/:accountId/login-info` | Poll the device code and terminal login result → `{ code, done, ok?, error?, url }`. |
+| DELETE | `/api/copilot/:accountId/login` | Cancel an unfinished Copilot login. Removes a new disabled placeholder account, but preserves an existing account being reconnected. |
+| GET | `/api/copilot/:accountId/status` | Poll Copilot login and local sidecar health → `{ done, ok, message? }`. |
 | GET | `/oauth/callback` | OAuth redirect target — exchanges the code (PKCE) for tokens and creates the account labeled `ChatGPT (email)`. Public route, no session |
 | PATCH | `/api/providers/:id/accounts/:accId` | Update key/priority/enabled |
 | DELETE | `/api/providers/:id/accounts/:accId` | Remove account |
 | POST | `/api/providers/:id/accounts/:accId/test` | Live test → `{ ok, latencyMs, error? }` |
-| POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, health, upstream status, latency, and detail. xAI OAuth warmup retries one transient connection failure; Blackbox warmup uses a minimal chat completion because its upstream does not expose `/models`. |
+| POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, `warmup_status`, upstream status, latency, and detail. Copilot warmup starts its local sidecar and preserves SDK errors; xAI OAuth retries one transient connection failure; Blackbox uses a minimal chat completion. |
 | POST | `/api/providers/:id/test` | Connectivity test against the upstream `/models` endpoint → `{ ok, status, latency_ms, account }`. For OAuth accounts: a token refresh stands in for the test (Codex backend has no `/models`) |
 | POST | `/api/providers/:id/sync` | Fetch full model list from upstream `/models` and register all → `{ synced, models }`. For OAuth accounts: syncs the live Codex catalog (`{codex}/models?client_version=1.0.0`) |
 | POST | `/api/providers/:id/models/:modelId/test` | Per-model test: tiny chat completion (`max_tokens: 16`) against the upstream → `{ ok, status, latency_ms, model, detail? }`. For OAuth accounts: a streaming Codex `/responses` call (backend requires `stream: true`) |

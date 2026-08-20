@@ -7,6 +7,7 @@ import { Badge, Button, Card, ConfirmModal, Skeleton, Switch, toast } from "../.
 import { presetFor } from "../../providerCatalog";
 import { AccountsCard } from "./AccountsCard";
 import { BackLink } from "./BackLink";
+import { BulkLoginCard } from "./BulkLoginCard";
 import { ModelsCard } from "./ModelsCard";
 import { ProviderModal } from "./ProviderModal";
 import { XaiAccountTestCard } from "./XaiAccountTestCard";
@@ -20,6 +21,7 @@ export function ProviderDetailPage() {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [xaiTab, setXaiTab] = useState<"accounts" | "farm-logs" | "account-test">("accounts");
+  const [copilotTab, setCopilotTab] = useState<"accounts" | "bulk-login">("accounts");
   const [warmupProgress, setWarmupProgress] = useState<{ current: number; total: number } | null>(null);
 
   const list = useQuery({ queryKey: ["providers"], queryFn: providers.list });
@@ -60,13 +62,12 @@ export function ProviderDetailPage() {
         }
         if (event === "account_result") {
           const accountId = String(data.account_id);
-          const ok = Boolean(data.ok);
           queryClient.setQueryData<Provider[]>(["providers"], (entries) => entries?.map((entry) => entry.id !== providerId ? entry : {
             ...entry,
             accounts: entry.accounts?.map((account) => account.id !== accountId ? account : {
               ...account,
               last_warmup_at: new Date().toISOString(),
-              last_warmup_status: ok ? "healthy" : (Number(data.status) === 429 ? "rate_limited" : "failing"),
+              last_warmup_status: String(data.warmup_status) as "healthy" | "rate_limited" | "failing",
               last_warmup_latency_ms: Number(data.latency_ms),
               last_warmup_detail: typeof data.detail === "string" ? data.detail : null,
             }),
@@ -156,6 +157,25 @@ export function ProviderDetailPage() {
           {xaiTab === "accounts" && <><AccountsCard provider={provider} /><XaiFarmCard provider={provider} onDone={invalidate} /></>}
           {xaiTab === "farm-logs" && <XaiFarmLogsCard />}
           {xaiTab === "account-test" && <XaiAccountTestCard provider={provider} />}
+        </>
+      ) : provider.type === "github-copilot" ? (
+        <>
+          <div className="flex w-fit rounded-lg border border-border bg-card p-1" role="tablist" aria-label="Copilot provider sections">
+            {([
+              ["accounts", "Accounts"],
+              ["bulk-login", "Bulk Login"],
+            ] as const).map(([tab, label]) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={copilotTab === tab}
+                onClick={() => setCopilotTab(tab)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${copilotTab === tab ? "bg-primary text-primary-foreground" : "text-text-muted hover:bg-muted hover:text-text"}`}
+              >{label}</button>
+            ))}
+          </div>
+          {copilotTab === "accounts" && <AccountsCard provider={provider} />}
+          {copilotTab === "bulk-login" && <BulkLoginCard providerId={provider.id} />}
         </>
       ) : <AccountsCard provider={provider} />}
       <ModelsCard provider={provider} />

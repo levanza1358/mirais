@@ -5,7 +5,8 @@ import { config } from "./config";
 import { getDb } from "./store/db";
 import { authRoutes } from "./admin/auth";
 import { oauthRoutes } from "./admin/oauth";
-import { providerRoutes } from "./admin/providers";
+import { copilotRoutes, startCopilotSidecars, waitCopilotSidecar } from "./admin/copilot";
+import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, logRoutes, healthRoutes } from "./admin/settings";
 import { proxyRoutes } from "./admin/proxies";
@@ -38,6 +39,9 @@ function classifyWarmupStatus(ok: boolean, status: number, detail?: string | nul
 setLogLevel(config.logLevel);
 
 const db = getDb(config.dbPath);
+startCopilotSidecars(db);
+let autoWarmupRunning = false;
+let lastAutoWarmupAt = 0;
 
 // ── retention purge (daily) ──
 function purgeOldLogs() {
@@ -51,6 +55,10 @@ async function runAutoWarmups() {
   const settings = new SettingsRepo(db);
   const cfg = settings.getJson<{ enabled: boolean; interval_minutes: number }>("warmup_config") ?? { enabled: false, interval_minutes: 30 };
   if (!cfg.enabled) return;
+  const intervalMs = Math.max(1, cfg.interval_minutes) * 60_000;
+  if (autoWarmupRunning || Date.now() - lastAutoWarmupAt < intervalMs) return;
+  autoWarmupRunning = true;
+  lastAutoWarmupAt = Date.now();
   try {
     const providersRepo = new ProvidersRepo(db);
     const logsRepo = new LogsRepo(db);
@@ -155,14 +163,17 @@ async function runAutoWarmups() {
               detail = "ChatGPT login active";
             }
           } else {
-            const base = baseUrlFor(p);
+            if (p.type === "github-copilot") await waitCopilotSidecar(acc.id);
+            const base = baseUrlFor(p, acc);
             const headers: Record<string, string> = p.type === "anthropic"
               ? { "x-api-key": acc.api_key, "anthropic-version": "2023-06-01" }
-              : { Authorization: `Bearer ${acc.api_key}` };
+              : acc.api_key ? { Authorization: `Bearer ${acc.api_key}` } : {};
             const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(15_000) });
             ok = res.ok;
             status = res.status;
-            detail = res.ok ? null : `HTTP ${res.status}`;
+            detail = !res.ok && p.type === "github-copilot"
+              ? copilotWarmupError(await res.json().catch(() => null), res.status)
+              : res.ok ? null : `HTTP ${res.status}`;
           }
         } catch (err) {
           ok = false;
@@ -202,15 +213,14 @@ async function runAutoWarmups() {
     }
   } catch (err) {
     log.warn("auto warmup scheduler failed", { err: err instanceof Error ? err.message : String(err) });
+  } finally {
+    autoWarmupRunning = false;
   }
 }
 purgeOldLogs();
 setInterval(purgeOldLogs, 24 * 3600 * 1000).unref();
 runAutoWarmups();
-setInterval(() => {
-  const cfg = new SettingsRepo(db).getJson<{ enabled: boolean; interval_minutes: number }>("warmup_config") ?? { enabled: false, interval_minutes: 30 };
-  if (cfg.enabled) runAutoWarmups();
-}, 60 * 1000).unref();
+setInterval(runAutoWarmups, 60 * 1000).unref();
 
 // ── dashboard static files ──
 const dashboardDist = path.join(import.meta.dir, "..", "dashboard", "dist");
@@ -242,6 +252,7 @@ const app = new Elysia()
     log.error("unhandled error", {
       err: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
+      cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
       path: new URL(request.url).pathname,
       method: request.method,
     });
@@ -251,6 +262,7 @@ const app = new Elysia()
   .use(healthRoutes(db))
   .use(authRoutes(db))
   .use(oauthRoutes(db))
+  .use(copilotRoutes(db))
   .use(providerRoutes(db))
   .use(aliasRoutes(db))
   .use(comboRoutes(db))

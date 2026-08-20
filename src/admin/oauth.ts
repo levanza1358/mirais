@@ -85,6 +85,9 @@ let callbackServerRefs = 0;
 function ensureCallbackServer(onResult: (q: URLSearchParams) => void): void {
   callbackServerRefs += 1;
   if (callbackServer) return;
+  // If a previous server instance is still holding the port, force-stop it.
+  // (callbackServer is null here because of the early return above, but
+  //  Bun.serve below will fail with EADDRINUSE if the port is stuck.)
   try {
     callbackServer = Bun.serve({
       port: CALLBACK_PORT,
@@ -111,7 +114,7 @@ function ensureCallbackServer(onResult: (q: URLSearchParams) => void): void {
 function releaseCallbackServer(): void {
   callbackServerRefs = Math.max(0, callbackServerRefs - 1);
   if (callbackServerRefs === 0 && callbackServer) {
-    callbackServer.stop();
+    callbackServer.stop(true);
     callbackServer = null;
     log.debug("oauth callback listener stopped");
   }

@@ -1,5 +1,6 @@
 node_modules/
 dashboard/node_modules/
+scripts/copilot-sidecar/node_modules/
 dashboard/dist/
 data/
 *.log

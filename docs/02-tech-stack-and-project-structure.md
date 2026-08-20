@@ -15,6 +15,7 @@
 | Logging | tiny structured JSON logger (pino-style, hand-rolled) | No native deps; write to stdout + optional file. |
 | xAI Farm | Python 3 `.venv` + Camoufox | Optional automation dependencies remain isolated under the Mirais install root. |
 | Packaging | Bun build → static dashboard embedded; optional Docker | `bun build --compile` produces a single binary per OS (win-x64, linux-x64) for v2; v1 ships source + Docker. |
+| Copilot adapter | Isolated Node 20+ sidecar using `@github/copilot-sdk` | Required by GitHub's official Copilot SDK. It is local-only and separate from the Bun gateway. |
 
 **Explicitly avoided:** Next.js (too heavy for a localhost gateway), native npm modules like `better-sqlite3` (cross-compiling pain on Windows), Redis (in-memory state is enough), ORMs (raw SQL + thin repos are simpler and auditable).
 

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { Elysia } from "elysia";
 import { dsmlToOpenAiStream } from "../src/proxy/translator/dsml";
+import { freshDb } from "./helpers";
+import { ProvidersRepo } from "../src/store/repos/providers";
+import { v1Routes } from "../src/proxy/routes";
+import { GatewayError } from "../src/shared/errors";
+import { config } from "../src/config";
 
 function upstream(events: unknown[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -51,6 +57,18 @@ describe("OpenAI chat DSML tool-call compatibility", () => {
     const argumentDeltas = calls.map((call) => (call.function as { arguments?: string }).arguments ?? "").filter(Boolean);
     expect(argumentDeltas.length).toBeGreaterThan(1);
     expect(JSON.parse(argumentDeltas.join(""))).toEqual({ command: "go build ./... with a deliberately long argument" });
+  });
+
+  test("accepts compact DSML closing tags", async () => {
+    const events = await readEvents(dsmlToOpenAiStream(upstream([
+      chunk('<|DSML|><tool_calls><|DSML|><invoke name="run_command"><|DSML|><parameter name="command">pwd</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>'),
+      finish(),
+      "data: [DONE]\n\n",
+    ])));
+    const calls = toolCalls(events);
+    expect(calls[0]).toMatchObject({ function: { name: "run_command" } });
+    expect(JSON.parse(calls.map((call) => (call.function as { arguments?: string }).arguments ?? "").join(""))).toEqual({ command: "pwd" });
+    expect(events.some((event) => event !== "[DONE]" && "error" in event)).toBe(false);
   });
 
   test("converts multiple tool calls and preserves preceding assistant text", async () => {
@@ -114,5 +132,53 @@ describe("OpenAI chat DSML tool-call compatibility", () => {
 
     const continuation = await readEvents(dsmlToOpenAiStream(upstream([chunk("All done."), finish(), "data: [DONE]\n\n"])));
     expect(continuation.some((event) => event !== "[DONE]" && (event.choices as Array<{ delta: { content?: string } }>)[0]?.delta.content === "All done.")).toBe(true);
+  });
+
+  test("converts DSML through the chat completions route when tools are present", async () => {
+    const db = freshDb();
+    const providers = new ProvidersRepo(db);
+    const provider = providers.create({ name: "deepseek", type: "openai", baseUrl: "https://deepseek.test/v1" });
+    const account = providers.addAccount(provider.id, { label: "main", apiKey: "upstream-key" });
+    providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+    providers.upsertModel(provider.id, "deepseek-chat");
+    const app = new Elysia().onError(({ error, set }) => {
+      if (error instanceof GatewayError) { set.status = error.status; return error.toJSON(); }
+      throw error;
+    }).use(v1Routes(db));
+    const originalFetch = globalThis.fetch;
+    const originalAuthRequired = config.authRequired;
+    const upstreamBodies: Array<Record<string, unknown>> = [];
+    try {
+      (config as { authRequired: boolean }).authRequired = false;
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        upstreamBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(upstream([
+          chunk('<|DSML|><tool_calls><|DSML|><invoke name="run_command"><|DSML|><parameter name="command">pwd</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>'),
+          finish(),
+          "data: [DONE]\n\n",
+        ]), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as unknown as typeof fetch;
+      const response = await app.handle(new Request("http://test/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "deepseek/deepseek-chat",
+          stream: true,
+          messages: [{ role: "user", content: "Run pwd" }],
+          tools: [{ type: "function", function: { name: "run_command", parameters: { type: "object" } } }],
+        }),
+      }));
+      expect(response.status).toBe(200);
+      expect(upstreamBodies[0]?.tools).toBeArray();
+      const events = await readEvents(response.body!);
+      const calls = toolCalls(events);
+      expect(calls[0]).toMatchObject({ type: "function", function: { name: "run_command" } });
+      expect(JSON.parse(calls.map((call) => (call.function as { arguments?: string }).arguments ?? "").join(""))).toEqual({ command: "pwd" });
+      expect((events.at(-2) as { choices: Array<{ finish_reason: string }> }).choices[0]?.finish_reason).toBe("tool_calls");
+    } finally {
+      globalThis.fetch = originalFetch;
+      (config as { authRequired: boolean }).authRequired = originalAuthRequired;
+      db.close();
+    }
   });
 });

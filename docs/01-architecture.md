@@ -38,6 +38,7 @@ flowchart LR
     UP --> P4[(OpenRouter)]
     UP --> P5[(DeepSeek / GLM / Groq / xAI…)]
     UP --> P6[(Custom OpenAI-compatible)]
+    UP --> P7[(GitHub Copilot sidecar per account)]
 
     subgraph Admin[Dashboard — React SPA served by same server]
         UI[Login + Pages:<br/>Overview/Providers/Models/<br/>Combos/API Keys/Logs/Settings]
@@ -138,7 +139,11 @@ Accounts added via **ChatGPT login** (`auth_kind = 'oauth'`) cannot call `api.op
 - **Model catalog** — synced from `GET {codex}/models?client_version=1.0.0` (the same version-gated catalog the Codex CLI uses), with a static fallback list.
 - **Paid-plan routing** — warmup and quota checks persist the Codex usage `plan_type` on each OAuth account. Models marked as requiring Plus/Pro are eligible only for an account with a matching persisted paid tier; Free and unknown tiers are excluded (fail closed) and are never attempted as fallback.
 
-## 4.3 Model Metadata & Output Limits
+## 4.3 GitHub Copilot Upstream
+
+GitHub Copilot has no public OpenAI-compatible inference endpoint. Mirais includes an isolated local Node sidecar adapter per `github-copilot` account (`scripts/copilot-sidecar/`), using GitHub's official Copilot SDK and CLI. Dashboard login opens GitHub's official browser flow; Mirais never receives the GitHub password or MFA data. Each account gets its own `COPILOT_HOME`, sidecar loopback port, and `base_url`. After login, Mirais synchronizes models from the sidecar. When the SDK account listing exposes only `auto`, the adapter uses the SDK's built-in Copilot catalog so users can select explicit model IDs; GitHub validates access when the request runs. The sidecar exposes `/v1/models`, `/v1/chat/completions`, and `/v1/quota`, including OpenAI SSE translation and the SDK's live account quota snapshots. The dashboard shows the premium-interaction quota percentage and reset time per account. Normal account priority, round-robin, cooldown, streaming, and failover apply without sharing one Copilot entitlement across accounts.
+
+## 4.4 Model Metadata & Output Limits
 
 Each model's **context length**, **max output tokens**, and **capabilities** are stored per model (migration `0002`). They are never hardcoded per account — they follow the model's own spec:
 

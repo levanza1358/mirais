@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { ProvidersRepo } from "../store/repos/providers";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
-import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema, providerModelUpdateSchema, upstreamModelsResponseSchema } from "../shared/schemas";
+import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema, providerModelUpdateSchema, upstreamModelsResponseSchema, copilotQuotaSchema } from "../shared/schemas";
 import type { z } from "zod";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
@@ -17,10 +17,26 @@ import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
 import { SseParser } from "../proxy/translator/stream";
 import { CODEBUDDY_MODELS, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
+import { copilotEntitlementError, copilotLoginForAccount, copilotResolvedLabel, waitCopilotSidecar } from "./copilot";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
   return /(rate limit|quota|429|exhausted|capacity|stream must be set to true|usage limit has been reached|limit has been reached)/i.test(detail);
+}
+
+export function copilotWarmupError(body: unknown, status: number): string {
+  const entitlement = copilotEntitlementError(body);
+  if (entitlement) return entitlement;
+  if (body && typeof body === "object" && "error" in body) {
+    const error = (body as { error?: unknown }).error;
+    if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+      if (/not authenticated|authentication (?:missing|required|expired)|login required/i.test(error.message)) {
+        return "GitHub Copilot authentication is missing or expired — re-login required";
+      }
+      return error.message.slice(0, 500);
+    }
+  }
+  return `HTTP ${status}`;
 }
 
 function mask(key: string): string {
@@ -234,18 +250,22 @@ export function providerRoutes(db: Database) {
           detail: codexQuotaDetail(usage),
         };
       } else {
-        const base = baseUrlFor(provider);
+        if (provider.type === "github-copilot") await waitCopilotSidecar(acc.id);
+        const base = baseUrlFor(provider, acc);
         const headers: Record<string, string> = provider.type === "anthropic"
           ? { "x-api-key": acc.api_key, "anthropic-version": "2023-06-01" }
-          : { Authorization: `Bearer ${acc.api_key}` };
+          : acc.api_key ? { Authorization: `Bearer ${acc.api_key}` } : {};
         const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(15_000) });
+        const detail = !res.ok && provider.type === "github-copilot"
+          ? copilotWarmupError(await res.json().catch(() => null), res.status)
+          : res.ok ? undefined : `HTTP ${res.status}`;
         result = {
           account_id: acc.id,
           ok: res.ok,
           status: res.status,
           latency_ms: Date.now() - started,
           account: acc.label,
-          detail: res.ok ? undefined : `HTTP ${res.status}`,
+          detail,
         };
       }
     } catch (err) {
@@ -262,7 +282,11 @@ export function providerRoutes(db: Database) {
     }
 
     const warmupStatus = result.ok ? "healthy" : (result.status === 429 || isRateLimitDetail(result.detail) ? "rate_limited" : "failing");
+    const label = provider.type === "github-copilot" && result.ok
+      ? copilotResolvedLabel(acc.label, copilotLoginForAccount(acc.id), repo.listAccounts(provider.id).filter((other) => other.id !== acc.id).map((other) => other.label))
+      : acc.label;
     repo.updateAccount(acc.id, {
+      ...(label !== acc.label ? { label } : {}),
       ...(planType !== undefined ? { planType } : {}),
       lastWarmupAt: new Date().toISOString(),
       lastWarmupStatus: warmupStatus,
@@ -289,7 +313,7 @@ export function providerRoutes(db: Database) {
       kind: "warmup",
     });
 
-    return result;
+    return { ...result, account: label, warmup_status: warmupStatus };
   }
 
   return new Elysia({ prefix: "/api/providers" })
@@ -325,6 +349,9 @@ export function providerRoutes(db: Database) {
       if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
       const parsed = accountCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
+      const provider = repo.get(params.id)!;
+      if (provider.type === "github-copilot" && !parsed.data.baseUrl) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
+      if (provider.type !== "github-copilot" && !parsed.data.apiKey) throw new AdminError(400, "API key is required");
       const a = repo.addAccount(params.id, parsed.data);
       log.info("account added", { provider: params.id, label: a.label });
       return { ...a, api_key: mask(a.api_key) };
@@ -332,6 +359,7 @@ export function providerRoutes(db: Database) {
     .post("/:id/accounts/bulk", ({ params, body }) => {
       const p = repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
+      if (p.type === "github-copilot") throw new AdminError(400, "Add GitHub Copilot sidecars one account at a time");
       const parsed = accountBulkCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       const existing = new Set(repo.listAccounts(p.id).map((a) => a.api_key));
@@ -370,6 +398,10 @@ export function providerRoutes(db: Database) {
     .patch("/accounts/:accId", ({ params, body }) => {
       const parsed = accountUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
+      const current = repo.getAccount(params.accId);
+      if (!current) throw new AdminError(404, "Account not found");
+      const provider = repo.get(current.provider_id);
+      if (provider?.type === "github-copilot" && parsed.data.baseUrl === null) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
       const a = repo.updateAccount(params.accId, parsed.data);
       if (!a) throw new AdminError(404, "Account not found");
       return { ...a, api_key: mask(a.api_key) };
@@ -549,6 +581,18 @@ export function providerRoutes(db: Database) {
       const accessToken = await ensureFreshToken(repo, account);
       return resetCodexBankedUsage(account, accessToken);
     })
+    .get("/accounts/:accId/copilot-quota", async ({ params }) => {
+      const account = repo.getAccount(params.accId);
+      if (!account) throw new AdminError(404, "Account not found");
+      const provider = repo.get(account.provider_id);
+      if (!provider || provider.type !== "github-copilot") throw new AdminError(400, "Quota is only available for GitHub Copilot accounts");
+      await waitCopilotSidecar(account.id);
+      const response = await fetch(`${baseUrlFor(provider, account)}/quota`, { signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw new AdminError(response.status, `GitHub Copilot quota request failed (HTTP ${response.status})`);
+      const parsed = copilotQuotaSchema.safeParse(await response.json());
+      if (!parsed.success) throw new AdminError(502, "GitHub Copilot returned an invalid quota response");
+      return parsed.data;
+    })
     // ── models ──
     .get("/:id/models", ({ params }) => {
       if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
@@ -606,8 +650,8 @@ export function providerRoutes(db: Database) {
             detail: "ChatGPT login active",
           };
         }
-        const base = baseUrlFor(p);
-        const headers = { Authorization: `Bearer ${account.api_key}` };
+        const base = baseUrlFor(p, account);
+        const headers: Record<string, string> = account.api_key ? { Authorization: `Bearer ${account.api_key}` } : {};
         const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(15_000) });
         return {
           ok: res.ok,
@@ -735,7 +779,7 @@ export function providerRoutes(db: Database) {
           });
         } else {
           const account = accounts[0]!;
-          res = await fetch(`${baseUrlFor(p)}/chat/completions`, {
+          res = await fetch(`${baseUrlFor(p, account)}/chat/completions`, {
             method: "POST",
             headers: p.type === "xai"
               ? {
@@ -747,7 +791,7 @@ export function providerRoutes(db: Database) {
               }
               : {
                 "content-type": "application/json",
-                Authorization: `Bearer ${account.api_key}`,
+                ...(account.api_key ? { Authorization: `Bearer ${account.api_key}` } : {}),
               },
             body: JSON.stringify({
               model: modelId,
@@ -888,8 +932,6 @@ export function providerRoutes(db: Database) {
         return { synced: models.length, pruned, mode, models: models.map((m) => m.id) };
       }
 
-      const base = baseUrlFor(p);
-
       // Upstream /models entries vary by provider; capture whatever metadata
       // is offered (OpenAI-style fields + OpenRouter-style top_provider /
       // supported_parameters) so the dashboard can show context length, max
@@ -919,10 +961,11 @@ export function providerRoutes(db: Database) {
       let catalogError = "Upstream returned an invalid model catalog";
       for (const candidate of accounts) {
         try {
+          const base = baseUrlFor(p, candidate);
           const res = await fetch(p.type === "anthropic" ? `${base}/v1/models` : `${base}/models`, {
             headers: p.type === "anthropic"
               ? { "x-api-key": candidate.api_key, "anthropic-version": "2023-06-01" }
-              : { Authorization: `Bearer ${candidate.api_key}` },
+              : candidate.api_key ? { Authorization: `Bearer ${candidate.api_key}` } : {},
             signal: AbortSignal.timeout(20_000),
           });
           if (!res.ok) {

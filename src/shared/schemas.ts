@@ -5,6 +5,29 @@ export const oauthCallbackUrlSchema = z.object({
   url: z.string().min(1).max(16_384),
 });
 
+export const copilotLoginSchema = z.object({
+  providerId: z.string().min(1),
+  label: z.string().max(128).default(""),
+});
+
+export const copilotBulkSchema = z.object({
+  providerId: z.string().min(1),
+  accounts: z.string().min(1),
+});
+
+export const copilotQuotaSchema = z.object({
+  quotaSnapshots: z.record(z.object({
+    isUnlimitedEntitlement: z.boolean(),
+    entitlementRequests: z.number(),
+    usedRequests: z.number(),
+    usageAllowedWithExhaustedQuota: z.boolean(),
+    remainingPercentage: z.number(),
+    overage: z.number(),
+    overageAllowedWithExhaustedQuota: z.boolean(),
+    resetDate: z.string().optional(),
+  }).optional()),
+});
+
 // ── OpenAI Chat Completions ──
 
 const contentPartSchema = z.object({
@@ -131,7 +154,7 @@ export const anthropicMessagesSchema = z.object({
 
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/, "lowercase letters, digits, dash, underscore"),
-  type: z.enum(["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "custom"]),
+  type: z.enum(["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
   baseUrl: z.string().url().optional().nullable(),
   enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
@@ -142,7 +165,8 @@ export const providerUpdateSchema = providerCreateSchema.partial();
 
 export const accountCreateSchema = z.object({
   label: z.string().min(1).max(64),
-  apiKey: z.string().min(1),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().url().optional().nullable(),
   priority: z.number().int().optional(),
 });
 
@@ -154,6 +178,7 @@ export const accountBulkCreateSchema = z.object({
 export const accountUpdateSchema = z.object({
   label: z.string().min(1).max(64).optional(),
   apiKey: z.string().min(1).optional(),
+  baseUrl: z.string().url().optional().nullable(),
   priority: z.number().int().optional(),
   enabled: z.boolean().optional(),
   sessionCookie: z.string().max(8192).nullable().optional(),

@@ -138,6 +138,10 @@ function withRequiredSystemMessage(req: CanonicalRequest): CanonicalRequest {
   };
 }
 
+function openAiHeaders(apiKey: string, accept?: string): Record<string, string> {
+  return { "content-type": "application/json", ...(accept ? { accept } : {}), ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) };
+}
+
 function codeBuddyHeaders(apiKey: string, accept: "text/event-stream" | "application/json"): Record<string, string> {
   return {
     "content-type": "application/json",
@@ -235,7 +239,7 @@ export async function executeRequest(
     const effectiveReq = clampMaxTokens(req, candidate, providersRepo);
     const started = Date.now();
     const format = upstreamFormat(candidate.provider);
-    const base = baseUrlFor(candidate.provider);
+    const base = baseUrlFor(candidate.provider, account);
     const cdKey = cooldownKey(candidate, account.id);
 
     try {
@@ -454,9 +458,7 @@ async function callUpstream(
 
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
-    headers: candidate.provider.type === "xai"
-      ? xaiHeaders(apiKey)
-      : { "content-type": "application/json", Authorization: `Bearer ${apiKey}` },
+    headers: candidate.provider.type === "xai" ? xaiHeaders(apiKey) : openAiHeaders(apiKey),
     body: JSON.stringify(toOpenAiBody({ ...req, stream: false }, candidate.modelId)),
     signal: combined,
   });
@@ -512,13 +514,7 @@ async function openUpstreamStream(
   } else {
     res = await fetch(`${base}/chat/completions`, {
       method: "POST",
-      headers: candidate.provider.type === "xai"
-        ? xaiHeaders(apiKey, true)
-        : {
-          "content-type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          accept: "text/event-stream",
-        },
+      headers: candidate.provider.type === "xai" ? xaiHeaders(apiKey, true) : openAiHeaders(apiKey, "text/event-stream"),
       body: JSON.stringify(toOpenAiBody({ ...req, stream: true }, candidate.modelId)),
       signal: combined,
     });

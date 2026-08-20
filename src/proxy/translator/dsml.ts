@@ -101,7 +101,7 @@ export function dsmlToOpenAiStream(stream: ReadableStream<Uint8Array>): Readable
         const tail = bufferedDsml.slice(end + match[0].length);
         dsmlBuffer = null;
         try {
-          const body = block.replace(toolCallsStart, "").replace(toolCallsEnd, "");
+          const body = block.replace(toolCallsStart, "").replace(ending.expression, "");
           for (const [index, call] of parseToolCalls(body).entries()) {
             emitChunk(chunk, {
               tool_calls: [{ index, id: `call_${ulid()}`, type: "function", function: { name: call.name, arguments: "" } }],

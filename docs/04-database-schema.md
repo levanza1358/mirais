@@ -50,6 +50,8 @@ ALTER-ish columns on provider_accounts: auth_kind TEXT DEFAULT 'api_key', refres
 -- 0009_plan_type: latest ChatGPT/Codex plan from the usage endpoint; used to keep
 -- Plus/Pro-gated models away from Free OAuth accounts.
 ALTER-ish column on provider_accounts: plan_type TEXT;
+-- 0025_account_base_url: optional account-specific upstream endpoint; GitHub Copilot uses one local SDK sidecar per account.
+ALTER-ish column on provider_accounts: base_url TEXT;
 
 CREATE INDEX idx_accounts_provider ON provider_accounts(provider_id, enabled);
 

@@ -33,8 +33,8 @@ export function normalizeRoutingPolicy(policy?: Partial<RoutingPolicy> | null): 
   };
 }
 
-export function baseUrlFor(provider: Provider): string {
-  return provider.base_url ?? DEFAULT_BASE_URLS[provider.type] ?? "https://api.openai.com/v1";
+export function baseUrlFor(provider: Provider, account?: ProviderAccount): string {
+  return account?.base_url ?? provider.base_url ?? DEFAULT_BASE_URLS[provider.type] ?? "https://api.openai.com/v1";
 }
 
 export function upstreamFormat(provider: Provider): "openai" | "anthropic" {
