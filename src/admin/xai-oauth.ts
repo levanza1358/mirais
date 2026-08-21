@@ -42,7 +42,7 @@ export interface XaiImapSettings {
   otp_max_retries: number;
 }
 
-export function generateFarmEmail(domain = "levanza.my.id"): string {
+export function generateFarmEmail(domain: string): string {
   const adjectives = ["swift", "brave", "clever", "mighty", "silent", "golden", "crimson", "azure", "shadow", "storm"];
   const nouns = ["fox", "wolf", "eagle", "hawk", "bear", "tiger", "lion", "dragon", "phoenix", "raven"];
   const adj = adjectives[crypto.randomInt(adjectives.length)];

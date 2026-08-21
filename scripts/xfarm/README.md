@@ -30,7 +30,7 @@ The GitHub installers create `.venv/`, install the Python packages there, and do
 3. Enter **Gmail address** (receives forwarded OTP emails)
 4. Enter **Gmail App Password** (16 characters)
    - Create at: Google Account → Security → 2-Step Verification → App passwords
-5. Set **Email domain** (e.g., `levanza.my.id`)
+5. Set **Email domain** (e.g., `example.com`)
 6. Save
 
 ### 3. Email Routing
@@ -38,7 +38,7 @@ The GitHub installers create `.venv/`, install the Python packages there, and do
 Make sure your domain forwards all emails to the Gmail address:
 
 ```
-*@levanza.my.id → your.email@gmail.com
+*@example.com → your.email@gmail.com
 ```
 
 ## Usage
@@ -63,14 +63,14 @@ python scripts/xfarm/farm.py --config settings.json
 # Or with environment variables
 export GMAIL_USERNAME="your.email@gmail.com"
 export GMAIL_APP_PASSWORD="abcd efgh ijkl mnop"
-export EMAIL_DOMAIN="levanza.my.id"
+export EMAIL_DOMAIN="example.com"
 python scripts/xfarm/farm.py
 ```
 
 ## How It Works
 
 ```
-1. Generate random email (e.g., swiftfox123@levanza.my.id)
+1. Generate random email (e.g., swiftfox123@example.com)
 2. Request OAuth device code from x.ai
 3. Launch Camoufox → accounts.x.ai/sign-up
 4. Fill registration form

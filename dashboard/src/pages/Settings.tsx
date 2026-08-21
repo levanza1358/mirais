@@ -948,7 +948,7 @@ function XaiImapSection() {
     enabled: false,
     gmail_username: "",
     gmail_app_password: "",
-    email_domain: "levanza.my.id",
+    email_domain: "",
     account_password: "",
     headless: false,
     otp_check_interval: 5,
@@ -961,7 +961,7 @@ function XaiImapSection() {
         enabled: s.data.xai_imap.enabled ?? false,
         gmail_username: s.data.xai_imap.gmail_username ?? "",
         gmail_app_password: s.data.xai_imap.gmail_app_password ?? "",
-        email_domain: s.data.xai_imap.email_domain ?? "levanza.my.id",
+        email_domain: s.data.xai_imap.email_domain ?? "",
         account_password: s.data.xai_imap.account_password ?? "",
         headless: s.data.xai_imap.headless ?? false,
         otp_check_interval: s.data.xai_imap.otp_check_interval ?? 5,
@@ -1024,7 +1024,7 @@ function XaiImapSection() {
 
         <div>
           <label className="mb-1 block text-xs text-text-muted">Email domain for farming</label>
-          <Input type="text" value={form.email_domain} onChange={(e) => updateField("email_domain", e.target.value)} placeholder="levanza.my.id" disabled={!form.enabled} />
+          <Input type="text" value={form.email_domain} onChange={(e) => updateField("email_domain", e.target.value)} placeholder="example.com" disabled={!form.enabled} />
           <p className="mt-1 text-xs text-text-muted">Random emails will be generated as {`<random>`}@{form.email_domain}</p>
         </div>
 

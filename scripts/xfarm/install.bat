@@ -58,7 +58,7 @@ echo Next steps:
 echo 1. Go to Mirais Settings → XAI IMAP Settings
 echo 2. Enable xAI farming
 echo 3. Enter your Gmail address and App Password
-echo 4. Set email domain (e.g., levanza.my.id)
+echo 4. Set email domain (e.g., example.com)
 echo 5. Click "Farm Account" on xAI provider page
 echo.
 echo Note: Python packages are stored in .venv/ and Camoufox in .camoufox/

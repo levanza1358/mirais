@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
     "enabled": False,
     "gmail_username": "",
     "gmail_app_password": "",
-    "email_domain": "levanza.my.id",
+    "email_domain": "",
     "headless": False,
     "otp_check_interval": 5,
     "otp_max_retries": 12,
