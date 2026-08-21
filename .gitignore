@@ -39,3 +39,12 @@ scripts/xfarm/result_*.json
 scripts/xfarm/config_*.json
 __pycache__/
 *.pyc
+providers.json
+copilot_bulk_result.json
+scripts/_*.py
+scripts/copilot-bulk-login/*.png
+scripts/copilot-bulk-login/*_result.json
+scripts/copilot-bulk-login/test_account.txt
+scripts/copilot-sidecar/config.json
+scripts/copilot-sidecar/session-state/
+scripts/copilot-sidecar/test-*.mjs
