@@ -570,6 +570,7 @@ async function openUpstreamStream(
             readySettled = true;
             rejectReady!(new GatewayError(502, "server_error", "Upstream SSE stream ended before producing output"));
           }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           resolveUsage!(translator.result().usage);
           controller.close();
         }
@@ -642,22 +643,15 @@ async function openUpstreamStream(
         forwardEvents(parser.feed(decoder.decode()));
         forwardEvents(parser.finish());
       } finally {
-        if (sentDone) {
-          if (!readySettled) {
-            readySettled = true;
-            rejectReady!(new GatewayError(502, "server_error", "Upstream SSE completed without producing output"));
-          }
-          resolveUsage!(usage);
-          controller.close();
-        } else {
-          const error = new Error("Upstream SSE stream ended before [DONE]");
-          if (!readySettled) {
-            readySettled = true;
-            rejectReady!(error);
-          }
-          rejectUsage!(error);
-          controller.error(error);
+        if (!sentDone) {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         }
+        if (!readySettled) {
+          readySettled = true;
+          rejectReady!(new GatewayError(502, "server_error", "Upstream SSE stream ended before producing output"));
+        }
+        resolveUsage!(usage);
+        controller.close();
       }
     },
     cancel() {
