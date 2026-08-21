@@ -117,7 +117,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oauthState, copilotAccountId]);
 
-  // Poll device-code untuk Copilot manual login (device flow, bukan web-flow)
+  // Poll device-code for Copilot manual login (device flow, not web-flow)
   useEffect(() => {
     if (!copilotAccountId) return;
     const t = setInterval(async () => {
@@ -129,7 +129,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
           if (info.ok === false) toast(info.error || "GitHub Copilot login failed", "error");
         }
       } catch {
-        // flow mungkin sudah selesai/dihapus
+        // flow may already be finished/deleted
       }
     }, 1500);
     return () => clearInterval(t);
@@ -321,7 +321,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
             <label className="mb-1 block text-xs text-text-muted">Google Workspace accounts — email|password per line ({bulk.split(/\n/).filter(Boolean).length} detected)</label>
             <textarea value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder={"user1@domain.com|password1\nuser2@domain.com|password2"} rows={8} autoFocus disabled={copilotBulk.isPending} className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none disabled:opacity-50" />
           </div>
-          <p className="text-[11px] text-text-muted">Camoufox browser akan login otomatis ke setiap akun Google Workspace. Browser akan muncul untuk setiap login.</p>
+          <p className="text-[11px] text-text-muted">The Camoufox browser signs in to each Google Workspace account automatically. A browser window appears for every login.</p>
           <div className="flex justify-between">
             <Button type="button" variant="ghost" size="sm" onClick={() => setMode("pick")} disabled={copilotBulk.isPending}>Back</Button>
             <Button type="submit" size="sm" loading={copilotBulk.isPending} disabled={bulk.trim().split(/\n/).filter(Boolean).length === 0}>Start bulk login</Button>

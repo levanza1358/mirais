@@ -266,7 +266,7 @@ export default function MusicMiniPlayer() {
             </div>
           </div>
           {player.queue.length === 0 ? (
-            <p className="text-xs text-text-muted">Queue kosong.</p>
+            <p className="text-xs text-text-muted">Queue is empty.</p>
           ) : (
             <ul className="max-h-40 space-y-1 overflow-y-auto pr-1">
               {player.queue.map((item, index) => (

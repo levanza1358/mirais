@@ -2,8 +2,8 @@
 """
 GitHub Copilot Bulk Login Bot (Camoufox)
 ========================================
-Login ke GitHub Copilot menggunakan akun Google Workspace via browser.
-Mendukung bulk: satu file CSV dengan format `email|password` per baris.
+Signs in to GitHub Copilot with Google Workspace accounts via a browser.
+Supports bulk runs: one CSV file with `email|password` per line.
 
 Usage:
     python copilot-bulk-login.py --accounts accounts.txt --output result.json
@@ -49,7 +49,7 @@ class CopilotBulkLoginBot:
         print(f"[{ts}] {msg}", flush=True)
 
     async def _fetch_github_otp_from_gmail(self, email: str, browser, password: str = "") -> str | None:
-        """Ambil kode verifikasi GitHub dari Gmail Atom feed (Basic Auth, tanpa JS UI)."""
+        """Fetch the GitHub verification code from the Gmail Atom feed (Basic Auth, no JS UI)."""
         gmail_page = await browser.new_page()
         try:
             from urllib.parse import quote
@@ -60,7 +60,7 @@ class CopilotBulkLoginBot:
                 body = await gmail_page.evaluate("document.body.innerText")
                 if attempt == 0:
                     self.log(f"[{email}] Feed content (first 600): {body[:600]}")
-                # Parse entries: cari yang dari GitHub
+                # Parse entries: look for the ones from GitHub
                 entries = re.findall(r"<entry>(.*?)</entry>", body, re.DOTALL)
                 self.log(f"[{email}] Feed entries: {len(entries)}")
                 for entry in entries:
@@ -85,14 +85,14 @@ class CopilotBulkLoginBot:
             await gmail_page.close()
 
     async def _github_signup_via_google(self, email: str, password: str, page) -> bool:
-        """Buat akun GitHub baru via 'Continue with Google' dari halaman signup.
-        Google session sudah login, jadi hanya perlu pilih akun + isi username + Create account."""
+        """Create a new GitHub account via 'Continue with Google' from the signup page.
+        The Google session is already signed in, so we only need to pick the account + fill the username + Create account."""
         try:
             await page.goto("https://github.com/signup", wait_until="load")
             await asyncio.sleep(4)
             self.log(f"[{email}] Signup page: {page.url[:120]}")
 
-            # Tunggu tombol "Continue with Google" muncul (SPA lambat render)
+            # Wait for the "Continue with Google" button to appear (the SPA renders slowly)
             google_btn = None
             for selector in ['button:has-text("Continue with Google")', 'a:has-text("Continue with Google")', 'button:has-text("Sign up with Google")', '[data-testid*="google" i]', 'button[data-provider="google"]']:
                 try:
@@ -113,7 +113,7 @@ class CopilotBulkLoginBot:
             await google_btn.click()
             self.log(f"[{email}] Clicked signup with Google")
 
-            # Tunggu redirect — bisa ke Google account chooser atau langsung balik ke GitHub
+            # Wait for the redirect — it may go to the Google account chooser or straight back to GitHub
             for _ in range(12):
                 await asyncio.sleep(2)
                 url = page.url
@@ -123,9 +123,9 @@ class CopilotBulkLoginBot:
                     break
             self.log(f"[{email}] After Google signup click: {page.url[:120]}")
 
-            # Kalau ada Google account chooser / consent, handle
+            # Handle the Google account chooser / consent screen if present
             if "accounts.google.com" in page.url:
-                # Pilih akun pertama (yang sedang login) atau klik Continue di consent
+                # Pick the first account (the one signed in) or click Continue on the consent screen
                 for selector in [f'div[data-identifier="{email}"]', 'div[role="link"]:has-text("@")', 'button:has-text("Continue")', '#submit_approve_access']:
                     try:
                         btn = page.locator(selector).first
@@ -136,14 +136,14 @@ class CopilotBulkLoginBot:
                             break
                     except Exception:
                         continue
-                # Tunggu balik ke GitHub
+                # Wait to land back on GitHub
                 for _ in range(12):
                     await asyncio.sleep(2)
                     if "github.com" in page.url:
                         break
                 self.log(f"[{email}] Back to GitHub: {page.url[:120]}")
 
-            # Sekarang di halaman "Finish creating your account" — isi username
+            # Now on the "Finish creating your account" page — fill in the username
             await asyncio.sleep(3)
             username = email.split("@")[0]
             username_input = None
@@ -162,7 +162,7 @@ class CopilotBulkLoginBot:
             else:
                 self.log(f"[{email}] No username field. Page: {(await page.evaluate('document.body.innerText'))[:250]}")
 
-            # Klik Create account / Sign up / Continue
+            # Click Create account / Sign up / Continue
             for selector in ['button:has-text("Create account")', 'button:has-text("Sign up")', 'button:has-text("Continue")', 'button[type="submit"]']:
                 try:
                     btn = page.locator(selector).first
@@ -176,7 +176,7 @@ class CopilotBulkLoginBot:
                     continue
             self.log(f"[{email}] After create account: {page.url[:120]}")
 
-            # Verifikasi login
+            # Verify the login
             await page.goto("https://github.com", wait_until="domcontentloaded")
             await asyncio.sleep(4)
             body = await page.evaluate("document.body.innerText")
@@ -191,13 +191,13 @@ class CopilotBulkLoginBot:
         if "verified-device" not in page.url:
             return True
         self.log(f"[{email}] GitHub device verification required!")
-        # Tunggu email masuk
+        # Wait for the email to arrive
         await asyncio.sleep(5)
         otp = await self._fetch_github_otp_from_gmail(email, browser, password)
         if not otp:
             self.log(f"[{email}] Could not get verification code - device verification FAILED")
             return False
-        # Isi kode di halaman verified-device
+        # Fill the code on the verified-device page
         code_input = None
         for selector in ['input[name="otp"]', 'input#otp', 'input[type="text"]:visible', 'input[inputmode="numeric"]', 'input[autocomplete="one-time-code"]']:
             try:
@@ -230,7 +230,7 @@ class CopilotBulkLoginBot:
         return ok
 
     async def _device_flow(self, email: str, page, result: dict, browser, password: str = "") -> None:
-        """Jalankan copilot login --web-flow, buka auth URL di Camoufox (bukan browser default)."""
+        """Run copilot login --web-flow and open the auth URL in Camoufox (not the default browser)."""
         import subprocess, threading, re
 
         home = self.copilot_home
@@ -238,7 +238,7 @@ class CopilotBulkLoginBot:
             **os.environ,
             "COPILOT_HOME": home,
             "GH_CONFIG_DIR": str(Path(home) / "gh"),
-            "BROWSER": "none",  # cegah CLI buka browser default
+            "BROWSER": "none",  # prevent the CLI from opening the default browser
         }
 
         proc = subprocess.Popen(
@@ -259,19 +259,19 @@ class CopilotBulkLoginBot:
             for line in proc.stdout:
                 output_lines.append(line)
                 self.log(f"[{email}] [CLI] {line.rstrip()}")
-                # Cari device code: format "enter code XXXX-XXXX" atau "one-time code: XXXX-XXXX"
+                # Look for the device code: format "enter code XXXX-XXXX" or "one-time code: XXXX-XXXX"
                 m = re.search(r"(?:one-time code|enter code)[:\s]+([A-Z0-9]{4}-[A-Z0-9]{4})", line, re.IGNORECASE)
                 if m:
                     code_holder.append(m.group(1))
                     self.log(f"[{email}] Device code found: {m.group(1)}")
-                # Cari sukses
+                # Look for success
                 if "signed in successfully" in line.lower() or "authentication complete" in line.lower():
                     done_holder.append(True)
 
         t = threading.Thread(target=reader, daemon=True)
         t.start()
 
-        # Tunggu device code muncul (max 30 detik)
+        # Wait for the device code to appear (max 30 seconds)
         code = None
         for _ in range(30):
             if code_holder:
@@ -289,12 +289,12 @@ class CopilotBulkLoginBot:
             result["device_ok"] = False
             return
 
-        # Buka device page di Camoufox (session sudah login)
+        # Open the device page in Camoufox (the session is already signed in)
         self.log(f"[{email}] Opening device page in Camoufox...")
         await page.goto("https://github.com/login/device", wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
-        # Kalau ke-redirect ke device verification, handle dulu
+        # If it redirected to device verification, handle that first
         if "verified-device" in page.url:
             if not await self._handle_device_verification(email, page, browser, password):
                 result["device_ok"] = False
@@ -303,13 +303,13 @@ class CopilotBulkLoginBot:
             await page.goto("https://github.com/login/device", wait_until="domcontentloaded")
             await asyncio.sleep(3)
 
-        # Debug: print URL dan page text
+        # Debug: print the URL and page text
         current_url = page.url
         self.log(f"[{email}] Device page URL: {current_url}")
         page_text = await page.evaluate("document.body.innerText")
         self.log(f"[{email}] Device page text (first 300): {page_text[:300]}")
 
-        # Handle select account page kalau muncul
+        # Handle the select account page if it appears
         if "select_account" in current_url:
             for selector in [
                 'input[type="submit"][value="Continue"]',
@@ -329,20 +329,20 @@ class CopilotBulkLoginBot:
                 except Exception:
                     continue
 
-        # Masukin code — device page pakai 8 input terpisah (XXXX-XXXX)
+        # Enter the code — the device page uses 8 separate inputs (XXXX-XXXX)
         self.log(f"[{email}] Entering device code {code}...")
-        # Hapus dash dari code
+        # Strip the dash from the code
         clean_code = code.replace("-", "")
-        # Cari semua input code
+        # Find all code inputs
         inputs = await page.locator('input[inputmode="text"], input[maxlength="1"], input[autocomplete="one-time-code"]').all()
         if len(inputs) >= len(clean_code):
-            # Isi satu per satu
+            # Fill them one by one
             for i, char in enumerate(clean_code):
                 await inputs[i].fill(char)
                 await asyncio.sleep(0.1)
             self.log(f"[{email}] Entered {len(clean_code)} chars into split inputs")
         else:
-            # Fallback: satu input
+            # Fallback: a single input
             code_input = None
             for selector in ['input[name="user_code"]', 'input[type="text"]:not([type="submit"])']:
                 try:
@@ -362,7 +362,7 @@ class CopilotBulkLoginBot:
                 result["device_ok"] = False
                 return
 
-        # Klik Continue/Verify
+        # Click Continue/Verify
         for selector in ['button:has-text("Continue")', 'button:has-text("Verify")', 'button[type="submit"]']:
             try:
                 btn = page.locator(selector).first
@@ -374,7 +374,7 @@ class CopilotBulkLoginBot:
             except Exception:
                 continue
 
-        # Klik Continue setelah isi code
+        # Click Continue after entering the code
         for selector in ['button:has-text("Continue")', 'button:has-text("Verify")', 'button[type="submit"]', 'input[type="submit"]']:
             try:
                 btn = page.locator(selector).first
@@ -407,7 +407,7 @@ class CopilotBulkLoginBot:
             except Exception:
                 continue
 
-        # Tunggu CLI selesai
+        # Wait for the CLI to finish
         for _ in range(30):
             if proc.poll() is not None or done_holder:
                 break
@@ -416,7 +416,7 @@ class CopilotBulkLoginBot:
         if proc.poll() is None:
             proc.kill()
 
-        # Verifikasi
+        # Verify
         output_text = "".join(output_lines).lower()
         if proc.returncode == 0 or done_holder or "signed in successfully" in output_text:
             self.log(f"[{email}] Device flow successful!")
@@ -435,7 +435,7 @@ class CopilotBulkLoginBot:
                 self.log(f"[{idx + 1}/{len(self.accounts)}] EXCEPTION: {e}")
             self.results.append(result)
             self.log(f"[{idx + 1}/{len(self.accounts)}] {'SUCCESS' if result['success'] else 'FAILED'}: {email}")
-            # Tulis hasil parsial supaya server bisa baca progress
+            # Write partial results so the server can read progress
             if self.output_path:
                 try:
                     Path(self.output_path).write_text(json.dumps(self.results, indent=2), encoding="utf-8")
@@ -446,8 +446,8 @@ class CopilotBulkLoginBot:
     async def _login_one(self, email: str, password: str) -> dict:
         result = {"email": email, "success": False, "error": None, "account_id": None}
 
-        # Jangan pakai persistent profile — menyebabkan account chooser & crash Camoufox.
-        # enable_cache=False = fresh profile bersih per akun.
+        # Do not use a persistent profile — it triggers the account chooser and crashes Camoufox.
+        # enable_cache=False = a clean fresh profile per account.
         camoufox_kwargs = dict(headless=self.headless, geoip=True, humanize=True, locale="en-US", enable_cache=False, timeout=300000)
         profile_dir = None
 
@@ -479,7 +479,7 @@ class CopilotBulkLoginBot:
                 await page.goto("https://github.com/login", wait_until="load")
                 await asyncio.sleep(5)
 
-                # Step 2: Cek apakah ada tombol "Sign in with Google"
+                # Step 2: Check whether a "Sign in with Google" button is present
                 self.log(f"[{email}] Looking for Google OAuth...")
                 google_btn = None
                 google_selectors = [
@@ -513,12 +513,12 @@ class CopilotBulkLoginBot:
                     await google_btn.click()
                     self.log(f"[{email}] Clicked Google sign-in")
                 else:
-                    # Fallback: langsung ke halaman OAuth Google resmi GitHub
+                    # Fallback: go straight to GitHub's official Google OAuth page
                     self.log(f"[{email}] No Google button, navigating to GitHub Google OAuth directly...")
                     await page.goto("https://github.com/sessions/social/google", wait_until="domcontentloaded")
                     await asyncio.sleep(3)
 
-                # Step 3: Google login flow — tunggu sampai benar-benar di accounts.google.com
+                # Step 3: Google login flow — wait until we are actually on accounts.google.com
                 await asyncio.sleep(3)
                 current_url = page.url
                 self.log(f"[{email}] Current URL: {current_url[:120]}")
@@ -537,10 +537,10 @@ class CopilotBulkLoginBot:
                         raise RuntimeError("Google OAuth page never loaded after clicking Google sign-in")
                     self.log(f"[{email}] Reached Google: {current_url[:120]}")
 
-                # Step 4: Isi email Google — handle account chooser dulu kalau ada
+                # Step 4: Fill the Google email — handle the account chooser first if present
                 self.log(f"[{email}] Filling Google email...")
                 email_input = None
-                # Kalau ini account chooser (ada daftar akun, bukan email input), pilih "Use another account"
+                # If this is the account chooser (a list of accounts rather than an email input), pick "Use another account"
                 for chooser_sel in ['div:has-text("Use another account")', 'div:has-text("Choose an account")', 'li:has-text("Use another account")']:
                     try:
                         el = page.locator(chooser_sel).last
@@ -568,7 +568,7 @@ class CopilotBulkLoginBot:
 
                 await email_input.fill(email)
                 self.log(f"[{email}] Entered email")
-                # Verifikasi field terisi
+                # Verify the field was filled
                 try:
                     val = await email_input.input_value()
                     if not val:
@@ -578,7 +578,7 @@ class CopilotBulkLoginBot:
                 except Exception:
                     pass
 
-                # Click Next — coba klik normal, Enter di field, dan JS click
+                # Click Next — try a normal click, Enter in the field, and a JS click
                 next_clicked = False
                 for selector in ['#identifierNext', 'button:has-text("Next")', 'button:has-text("Continue")']:
                     try:
@@ -590,7 +590,7 @@ class CopilotBulkLoginBot:
                             break
                     except Exception:
                         continue
-                # Verifikasi halaman pindah (password muncul); retry dengan Enter + JS click
+                # Verify the page advanced (the password field appears); retry with Enter + JS click
                 for _ in range(8):
                     await asyncio.sleep(1.5)
                     pwd_visible = False
@@ -603,7 +603,7 @@ class CopilotBulkLoginBot:
                             continue
                     if pwd_visible:
                         break
-                    # Masih di halaman email — coba Enter di email field
+                    # Still on the email page — try pressing Enter in the email field
                     try:
                         await email_input.press("Enter")
                         self.log(f"[{email}] Pressed Enter in email field")
@@ -620,14 +620,14 @@ class CopilotBulkLoginBot:
                             continue
                     if pwd_visible:
                         break
-                    # Coba JS click pada identifierNext
+                    # Try a JS click on identifierNext
                     try:
                         await page.evaluate("document.querySelector('#identifierNext')?.click()")
                         self.log(f"[{email}] JS-clicked identifierNext")
                     except Exception:
                         pass
 
-                # Step 5: Isi password Google
+                # Step 5: Fill the Google password
                 self.log(f"[{email}] Waiting for password field...")
                 await asyncio.sleep(3)
 
@@ -673,11 +673,11 @@ class CopilotBulkLoginBot:
                     except Exception:
                         continue
 
-                # Step 6: Tunggu redirect ke GitHub
+                # Step 6: Wait for the redirect to GitHub
                 self.log(f"[{email}] Waiting for redirect to GitHub...")
                 await asyncio.sleep(10)
 
-                # Step 7: Handle 2FA/MFA jika diminta
+                # Step 7: Handle 2FA/MFA if requested
                 current_url = page.url
                 self.log(f"[{email}] After login URL: {current_url}")
 
@@ -685,10 +685,10 @@ class CopilotBulkLoginBot:
                     # Handle Workspace Terms of Service speed bump
                     if "speedbump/workspacetermsofservice" in current_url:
                         self.log(f"[{email}] Workspace Terms of Service page detected! Accepting...")
-                        # Scroll ke bawah sampai tombol understand muncul
+                        # Scroll to the bottom until the understand button appears
                         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                         await asyncio.sleep(1)
-                        # Cari tombol Accept/Continue/I understand
+                        # Look for the Accept/Continue/I understand button
                         for selector in [
                             'button:has-text("I understand")',
                             'button:has-text("I agree")',
@@ -715,10 +715,10 @@ class CopilotBulkLoginBot:
                     # Handle OAuth consent page (Allow/Continue)
                     if "signin/oauth" in current_url or "oauth/consent" in current_url:
                         self.log(f"[{email}] OAuth consent page detected! Allowing...")
-                        # Screenshot dulu biar lihat
+                        # Take a screenshot first for visibility
                         await page.screenshot(path=f"debug_{email.replace('@','_')}_oauth.png", full_page=True)
                         self.log(f"[{email}] OAuth screenshot saved")
-                        # Coba klik tombol Continue/Allow dengan berbagai cara
+                        # Try clicking the Continue/Allow button in several ways
                         for selector in [
                             'button:has-text("Continue")',
                             'button:has-text("Allow")',
@@ -746,7 +746,7 @@ class CopilotBulkLoginBot:
                                 continue
                         current_url = page.url
                         self.log(f"[{email}] After OAuth consent URL: {current_url[:120]}")
-                        # Tunggu redirect ke github.com (bukan /login) — pantau tiap 2 detik
+                        # Wait for the redirect to github.com (not /login) — poll every 2 seconds
                         for _ in range(12):
                             await asyncio.sleep(2)
                             current_url = page.url
@@ -754,7 +754,7 @@ class CopilotBulkLoginBot:
                             if "github.com" in current_url and "accounts.google.com" not in current_url and "github.com/login" not in current_url:
                                 break
 
-                    # Cek apakah ada prompt 2FA
+                    # Check whether a 2FA prompt appeared
                     if "signin/challenge" in current_url or "challenge" in current_url:
                         self.log(f"[{email}] 2FA challenge detected! Waiting for manual intervention...")
                         await asyncio.sleep(30)
@@ -764,13 +764,13 @@ class CopilotBulkLoginBot:
                 if "accounts.google.com" in current_url:
                     raise RuntimeError("Still on Google accounts page - login may have failed or 2FA required")
 
-                # Handle GitHub device verification (email OTP) kalau muncul
+                # Handle GitHub device verification (email OTP) if it appears
                 if "verified-device" in current_url:
                     if not await self._handle_device_verification(email, page, browser, password):
                         raise RuntimeError("GitHub device verification failed - could not verify via Gmail OTP")
                     current_url = page.url
 
-                # Step 8: Verifikasi login GitHub berhasil — cek avatar/logged-in state, bukan sekadar URL
+                # Step 8: Verify the GitHub login succeeded — check the avatar/logged-in state, not just the URL
                 self.log(f"[{email}] Verifying GitHub login...")
                 if "github.com" not in current_url or "github.com/login" in current_url:
                     await page.goto("https://github.com", wait_until="domcontentloaded")
@@ -778,16 +778,16 @@ class CopilotBulkLoginBot:
 
                 current_url = page.url
                 self.log(f"[{email}] Final URL: {current_url[:120]}")
-                # Log isi halaman untuk debugging signup/login state
+                # Log the page content to debug the signup/login state
                 page_text = (await page.evaluate("document.body.innerText"))[:400]
                 self.log(f"[{email}] Page content: {page_text}")
 
                 # Handle GitHub signup page (new account) — auto-create account
                 if "signup" in current_url:
                     self.log(f"[{email}] GitHub signup page detected! Creating account...")
-                    # Isi username dari email (ambil sebelum @)
+                    # Derive the username from the email (the part before @)
                     username = email.split("@")[0]
-                    # Cari input username
+                    # Look for the username input
                     username_input = None
                     for selector in ['input[name="user_login"]', 'input#user_login', 'input[autocomplete="username"]', 'input:not([type="hidden"])']:
                         try:
@@ -822,8 +822,8 @@ class CopilotBulkLoginBot:
                     current_url = page.url
                     self.log(f"[{email}] After signup URL: {current_url}")
 
-                # Cek apakah benar-benar login — deteksi ketat: homepage logged-in punya
-                # link ke dashboard/notifications, bukan tombol "Sign in".
+                # Check whether we are really signed in — strict detection: a logged-in homepage has
+                # links to the dashboard/notifications, not a "Sign in" button.
                 logged_in = False
                 for probe in ['a[href="/notifications"]', 'a[href="/dashboard"]', 'summary[aria-label*="profile" i]', 'button[aria-label*="Open user navigation" i]', '[data-test-selector="nav-search-input"]']:
                     try:
@@ -833,13 +833,13 @@ class CopilotBulkLoginBot:
                     except Exception:
                         continue
                 if not logged_in:
-                    # Konfirmasi via body text: kalau ada "Sign in"/"Sign up" berarti TIDAK login
+                    # Confirm via the body text: the presence of "Sign in"/"Sign up" means we are NOT signed in
                     body = await page.evaluate("document.body.innerText")
                     if "Sign in" in body or "Username or email" in body:
                         logged_in = False
                 self.log(f"[{email}] Logged-in check: {logged_in}")
 
-                # Kalau TIDAK login → akun Google belum punya GitHub. Buat via signup flow.
+                # If NOT signed in → the Google account has no GitHub account yet. Create one via the signup flow.
                 if not logged_in:
                     self.log(f"[{email}] Not logged in — trying GitHub signup via Google...")
                     logged_in = await self._github_signup_via_google(email, password, page)
@@ -853,7 +853,7 @@ class CopilotBulkLoginBot:
                 self.log(f"[{email}] Enabling GitHub Copilot Free...")
                 await page.goto("https://github.com/settings/copilot/features", wait_until="domcontentloaded")
                 await asyncio.sleep(5)
-                # Klik "Start using Copilot Free"
+                # Click "Start using Copilot Free"
                 for selector in [
                     'a:has-text("Start using Copilot Free")',
                     'a[href*="/github-copilot/signup"]',
@@ -874,23 +874,23 @@ class CopilotBulkLoginBot:
                 current_url = page.url
                 self.log(f"[{email}] After Copilot enable URL: {current_url}")
 
-                # Step 10: Buka Copilot settings untuk verifikasi
+                # Step 10: Open the Copilot settings page to verify
                 self.log(f"[{email}] Verifying Copilot access...")
                 await page.goto("https://github.com/settings/copilot", wait_until="domcontentloaded")
                 await asyncio.sleep(5)
 
-                # Cek apakah Copilot aktif
+                # Check whether Copilot is active
                 copilot_content = await page.content()
                 if "GitHub Copilot" in copilot_content:
                     self.log(f"[{email}] Copilot page loaded")
                 else:
                     self.log(f"[{email}] Copilot page may not be accessible")
 
-                # Screenshot untuk verifikasi
+                # Screenshot for verification
                 await page.screenshot(path=f"copilot_{email.replace('@','_')}_result.png", full_page=True)
                 self.log(f"[{email}] Screenshot saved")
 
-                # Step 11: Device flow - jalankan copilot login --web-flow, masukin code ke browser
+                # Step 11: Device flow — run copilot login --web-flow and enter the code in the browser
                 if self.cli_script and self.copilot_home:
                     self.log(f"[{email}] Starting Copilot CLI device flow...")
                     await self._device_flow(email, page, result, browser, password)

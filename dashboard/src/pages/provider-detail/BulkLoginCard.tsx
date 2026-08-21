@@ -118,7 +118,7 @@ export function BulkLoginCard({ providerId }: Props) {
             </span>
           </div>
           <p className="text-[11px] text-text-muted">
-            Camoufox browser akan login otomatis ke setiap akun Google Workspace, enable Copilot Free, dan authorize CLI.
+            The Camoufox browser signs in to each Google Workspace account automatically, enables Copilot Free, and authorizes the CLI.
           </p>
         </div>
       ) : (

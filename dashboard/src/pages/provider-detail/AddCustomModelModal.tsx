@@ -48,7 +48,7 @@ export function AddCustomModelModal({
       <div className="space-y-4">
         <div>
           <label className="mb-1 block text-xs text-text-muted">Name model</label>
-          <Input value={modelId} onChange={(e) => setModelId(e.target.value)} placeholder="contoh: kimi-k3 atau gpt-5.4" />
+          <Input value={modelId} onChange={(e) => setModelId(e.target.value)} placeholder="e.g. kimi-k3 or gpt-5.4" />
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleTest} loading={testing} disabled={!modelId.trim()}>

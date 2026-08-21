@@ -1,15 +1,15 @@
 """
 xAI (Grok) Auto Register Bot
 ============================
-Alur:
-1. Load config dari Mirais settings (via env atau args)
-2. Generate random email @domain
-3. Buka x.ai signup via Camoufox (disimpan di .camoufox/)
-4. Register dengan email + password
-5. Ambil OTP dari Gmail IMAP
-6. Input OTP → complete registration
-7. Authorize OAuth device code flow
-8. Simpan tokens ke output JSON
+Flow:
+1. Load config from Mirais settings (via env or args)
+2. Generate a random email @domain
+3. Open the x.ai signup page via Camoufox (stored in .camoufox/)
+4. Register with email + password
+5. Fetch the OTP from Gmail IMAP
+6. Enter the OTP → complete registration
+7. Authorize the OAuth device code flow
+8. Save tokens to the output JSON
 
 Usage:
     python farm.py --output result.json [--config config.json]
@@ -97,7 +97,7 @@ def load_config(config_path: str = None) -> dict:
 
 
 def generate_random_email(domain: str) -> str:
-    """Generate random email dengan domain kustom."""
+    """Generate a random email on a custom domain."""
     prefix = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
     return f"{prefix}@{domain}"
 
@@ -109,7 +109,7 @@ def generate_password() -> str:
 
 
 class XaiEmailReader:
-    """Membaca email OTP dari Gmail via IMAP."""
+    """Reads OTP emails from Gmail via IMAP."""
 
     def __init__(self, username: str, app_password: str, check_interval: int = 5, max_retries: int = 12):
         self.username = username
@@ -119,7 +119,7 @@ class XaiEmailReader:
         self.imap = None
 
     def connect(self):
-        """Connect ke Gmail IMAP server."""
+        """Connect to the Gmail IMAP server."""
         import imaplib
         try:
             self.imap = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -127,15 +127,15 @@ class XaiEmailReader:
             print(f"[EMAIL] Connected to Gmail as {self.username}")
         except Exception as e:
             raise Exception(
-                f"Gmail login gagal. Pastikan:\n"
-                f"  1. App Password benar (16 karakter tanpa spasi)\n"
-                f"  2. IMAP diaktifkan di Gmail Settings\n"
-                f"  3. Username benar: {self.username}\n"
+                f"Gmail login failed. Check that:\n"
+                f"  1. The App Password is correct (16 characters, no spaces)\n"
+                f"  2. IMAP is enabled in Gmail Settings\n"
+                f"  3. The username is correct: {self.username}\n"
                 f"  Error: {e}"
             )
 
     def disconnect(self):
-        """Disconnect dari IMAP server."""
+        """Disconnect from the IMAP server."""
         if self.imap:
             try:
                 self.imap.logout()
@@ -173,8 +173,8 @@ class XaiEmailReader:
 
     def find_otp(self, target_email: str, timeout: int = 120) -> str | None:
         """
-        Cari OTP dari email x.ai.
-        Returns: OTP string atau None jika tidak ditemukan.
+        Find the OTP in the x.ai email.
+        Returns: the OTP string, or None if it was not found.
         """
         import email
         from email.header import decode_header
@@ -243,7 +243,7 @@ class XaiEmailReader:
 
 
 class XaiFarmBot:
-    """Bot untuk register xAI (Grok) otomatis."""
+    """Bot that registers xAI (Grok) accounts automatically."""
 
     def __init__(self, config: dict, email: str = None, password: str = None):
         self.config = config

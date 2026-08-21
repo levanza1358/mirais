@@ -117,9 +117,9 @@ export function copilotCredentialCandidates(current: string[], previous: Set<str
   });
 }
 
-// Baca token copilot-cli dari Windows Credential Manager via CredRead (PowerShell P/Invoke).
-// Dipakai setelah device login selesai: token dipindah ke COPILOT_HOME/token.txt agar
-// sidecar tidak tergantung pada credential store (yang gagal dibaca balik oleh SDK).
+// Read the copilot-cli token from the Windows Credential Manager via CredRead (PowerShell P/Invoke).
+// Used after device login completes: the token is moved to COPILOT_HOME/token.txt so the
+// sidecar does not depend on the credential store (which the SDK fails to read back).
 const readCredScript = String.raw`
 $sig = @'
 using System;
@@ -297,7 +297,7 @@ export function copilotRoutes(db: Database) {
       if ([...loginFlows.values()].some((flow) => !flow.done)) {
         throw new AdminError(409, "Another GitHub Copilot login is still in progress");
       }
-      // Label boleh kosong → diisi otomatis dari username GitHub setelah login sukses.
+      // The label may be empty → it is filled in automatically from the GitHub username after a successful login.
       const finalLabel = trimmedLabel || `pending-${crypto.randomUUID().slice(0, 8)}`;
       if (repo.listAccounts(provider.id).some((a) => a.label.toLowerCase() === finalLabel.toLowerCase()))
         throw new AdminError(409, `Account "${finalLabel}" already exists`);
@@ -341,9 +341,9 @@ export function copilotRoutes(db: Database) {
       if (flow && !flow.done) return { done: false, ok: false, message: "Waiting for GitHub device authorization…" };
       if (flow?.done && flow.exitCode !== 0) return { done: true, ok: false, message: flow.error ?? "GitHub Copilot login failed" };
       let status = await health(account.id);
-      // Jika login flow sudah selesai tapi sidecar bilang "Not authenticated",
-      // token baru ada di credential manager tapi SDK gagal membacanya balik.
-      // Ambil token via CredRead, simpan ke token.txt, restart sidecar.
+      // If the login flow finished but the sidecar still reports "Not authenticated",
+      // the new token is in the credential manager but the SDK failed to read it back.
+      // Fetch the token via CredRead, save it to token.txt, and restart the sidecar.
       if (!status.ok && /not authenticated/i.test(status.message ?? "")) {
         const tokenPath = path.join(homeFor(account.id), "token.txt");
         if (flow?.done && flow.exitCode === 0 && (flow.reconnect || !fs.existsSync(tokenPath))) {
@@ -378,8 +378,8 @@ export function copilotRoutes(db: Database) {
           .filter((id): id is string => Boolean(id))
           .map((id) => ({ id, contextLength: null, maxOutputTokens: null, capabilities: null }));
         repo.replaceSyncedModels(account.provider_id, models);
-        // Duplikat: username GitHub ini sudah punya akun lain → butuh konfirmasi overwrite.
-        // Akun yang sudah label=login tapi punya flow login berjalan berarti re-login → overwrite token di rumah yang sama.
+        // Duplicate: this GitHub username already has another account → overwrite confirmation is required.
+        // An account already labelled with the login but with a running login flow means a re-login → overwrite the token in the same home.
         const other = status.login
           ? repo.listAccounts(account.provider_id).find((a) => a.id !== account.id && a.label === status.login)
           : undefined;
@@ -387,15 +387,15 @@ export function copilotRoutes(db: Database) {
           repo.removeAccount(other.id);
         } else if (other && !loginFlows.has(other.id)) {
           const flow = loginFlows.get(account.id);
-          // Grace period: kalau authorize baru saja selesai (<60s), token di rumah lama mungkin
-          // belum ter-refresh → poll lagi, jangan langsung tawarkan overwrite.
+          // Grace period: if the authorization just completed (<60s), the token in the old home may
+          // not have refreshed yet → poll again instead of immediately offering an overwrite.
           if (flow?.done && flow.doneAt && Date.now() - flow.doneAt < 60_000) {
             return { done: false, ok: false, message: "Finishing sign-in…" };
           }
           if (flow) flow.dupeLogin = status.login;
           return { done: false, ok: false, duplicate: true, login: status.login, existingAccountId: other.id, message: `Account "${status.login}" already exists` };
         }
-        // Auto-rename label dari username GitHub (email-derived) kalau label masih pending/placeholder
+        // Auto-rename the label from the GitHub username (email-derived) if the label is still a pending/placeholder value
         const patch: Parameters<typeof repo.updateAccount>[1] = { enabled: true, lastWarmupStatus: "healthy", lastWarmupAt: new Date().toISOString(), lastWarmupDetail: `GitHub Copilot login active - ${models.length} models synced` };
         if (status.login && (account.label.startsWith("pending-") || /^github-copilot-\d+$/.test(account.label))) {
           patch.label = status.login;
@@ -443,7 +443,7 @@ export function copilotRoutes(db: Database) {
       bulkJobs.set(jobId, job);
       latestBulkJob.set(providerId, jobId);
 
-      // Jalankan di background — jangan await
+      // Run in the background — do not await
       runBulkJob(job, repo, lines, force).catch((err) => {
         job.error = err instanceof Error ? err.message : String(err);
         job.done = true;
@@ -515,7 +515,7 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
 
     log(`Processing: ${email}`);
 
-    // Buat account di DB dulu
+    // Create the account in the DB first
     const account = repo.addAccount(job.providerId, { label: email, baseUrl: null });
     repo.updateAccount(account.id, { baseUrl: urlFor(account.id), enabled: false });
     existing.add(email.toLowerCase());
@@ -560,7 +560,7 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
     } else {
       const errMsg = first?.error ?? `Exit ${exitCode}`;
       log(`FAILED: ${email} — ${errMsg} (removing from database)`);
-      // Gagal = jangan simpan di database. Hapus akun + foldernya.
+      // Failure = do not keep it in the database. Remove the account and its folder.
       repo.removeAccount(account.id);
       await fsp.rm(homeFor(account.id), { recursive: true, force: true }).catch(() => {});
       job.results.push({ email, success: false, error: `${errMsg}${stderr ? `: ${stderr.slice(0, 200)}` : ""}` });
