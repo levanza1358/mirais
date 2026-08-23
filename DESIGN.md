@@ -34,10 +34,10 @@ Technical and product design decisions for Mirais, each with context and consequ
 **Decision:** Retry set = {429, 500, 502, 503, 504, network, upstream-auth}; everything else returns as-is. Max 3 attempts (configurable later).
 **Consequences:** + predictable, honest errors; − some "soft" provider errors may need rule additions over time.
 
-## ADR-007: In-memory cooldowns & round-robin cursors
-**Context:** Persisting health state buys little; restart-reset is acceptable for a single-node gateway.
-**Decision:** Cooldown registry and account cursors live in process memory. Backoff 1m→5m→15m; honor `Retry-After`.
-**Consequences:** + simple, fast; − a restart clears learned health (self-heals within one request cycle).
+## ADR-007: Hybrid cooldown persistence & in-memory round-robin cursors
+**Context:** Routing cursors are disposable, but a restart must not immediately reuse an exhausted account/model pair.
+**Decision:** Round-robin cursors and short-lived attempt backoff remain in memory. Model-scoped account cooldown windows are persisted and expired state is swept every minute.
+**Consequences:** + restart-safe quota protection without persisting routing cursors; − one small state table and periodic cleanup.
 
 ## ADR-008: Token saver = rules pipeline, not ML
 **Context:** RTK-style compression proves deterministic rules (git diff/grep/ls) capture most savings.
@@ -55,10 +55,16 @@ Technical and product design decisions for Mirais, each with context and consequ
 **Consequences:** + zero-friction yet safe; − shared-password model (acceptable per PRD personas).
 **Status:** Superseded — the password + cookie flow was removed in `b550db4`; see ADR-016.
 
-## ADR-016: Dashboard has no application-level login
+## ADR-016: Dashboard has no application-level login (SUPERSEDED by ADR-018)
 **Context:** Initial design (ADR-010) added a per-install password + HMAC cookie. Real deployments showed this created a second secret to manage (the dashboard password) and was repeatedly mistaken for a network authentication layer — operators left it default or shared it with clients. Multi-user auth is explicitly a non-goal (ADR-010 itself stated so).
 **Decision:** Dashboard routes under `/api/*` are intentionally public to anyone who can reach the listener. Access control is delegated to the network boundary (loopback bind, reverse proxy, firewall, VPN, or private network — see `docs/07-deployment-windows-ubuntu.md`). The `/api/auth/login|logout|setup|session` routes are removed entirely. `AGENTS.md` §7 and `RULES.md` R1.3 are the source of truth.
 **Consequences:** + one fewer secret to rotate; + zero auth surface area in the dashboard bundle; + trivially auditable; − operators MUST be told to bind to 127.0.0.1 (or put it behind a proxy) — `config.ts` aborts startup if `HOST=0.0.0.0` and no dashboard password is set, and a startup warning is logged if `DATA_DIR` is writable by group/other on Linux.
+**Status:** Superseded — the dashboard password is back, on by default; see ADR-018.
+
+## ADR-018: Dashboard-only password, on by default, session-based
+**Context:** Removing the login entirely (ADR-016) left exposed installs with no in-app protection, and Mirais defaults to `HOST=0.0.0.0`. The counter-lesson from ADR-016 was that a mandatory second secret and a re-prompt on every page load are what actually pushed operators into unsafe workarounds.
+**Decision:** A dashboard password protects `/api/*` (except `/api/auth/*` and `/api/health`) and nothing else — `/v1/*` keeps authenticating with gateway keys, so proxy clients are never affected. It is enabled on first start with the default `12345678`, stored only as a `Bun.password` hash in `settings`; `DASHBOARD_PASSWORD` overrides the initial value. Sessions are HMAC-signed `HttpOnly SameSite=Lax` cookies signed with a random `session_secret` combined with the password hash, so changing or removing the password revokes every session. Lifetime is operator-configurable (`dashboard_session_hours`, default `SESSION_TTL_HOURS`; "remember this browser" = 30 days), so refreshes never re-prompt inside the window. Settings → General can change the password, change the lifetime, or turn the password off entirely (an empty stored hash means disabled and is never re-seeded). Login is rate-limited to 5 failures per IP per 5 minutes. Network controls remain the outer boundary.
+**Consequences:** + exposed installs are protected out of the box; + no re-prompt per page load; + proxy traffic and `/api/health` monitoring untouched; + no session table or migration needed; − the shipped default password is weak and must be changed; − a forgotten password requires clearing the `dashboard_password_hash` settings row; − single shared password (multi-user auth remains a non-goal).
 **Status:** Active.
 
 ## ADR-011: Dark-first bespoke UI, no component library

@@ -19,7 +19,7 @@ import { ProvidersRepo } from "../store/repos/providers";
 import { AliasesRepo, CombosRepo } from "../store/repos/routing";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
-import type { CanonicalRequest, CanonicalResponse, RoutingPolicy } from "../shared/types";
+import type { CanonicalRequest, CanonicalResponse, RoutingPolicy, Usage } from "../shared/types";
 import { log } from "../utils/logger";
 import { canonicalResponseToResponses, chatSseToResponses, responsesRequestToCanonical } from "./translator/responses";
 import { ulid } from "../utils/id";
@@ -54,6 +54,34 @@ export function v1Routes(db: Database) {
 
   const ponytailConfig = (): PonytailConfig => {
     return settings.getJson<PonytailConfig>("ponytail") ?? { enabled: false, strength: "moderate" };
+  };
+
+  /**
+   * Parse a JSON body while enforcing `REQUEST_BODY_LIMIT_MB`.
+   *
+   * `content-length` is only a hint — a chunked or spoofed request can omit it
+   * or understate the real size, so the decoded text is measured too. Reading
+   * as text first also keeps the limit meaningful for streaming clients.
+   */
+  const readJsonBody = async (request: Request): Promise<unknown> => {
+    const declared = Number(request.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > config.requestBodyLimit) {
+      throw new GatewayError(413, "invalid_request_error", `Request body exceeds the ${Math.floor(config.requestBodyLimit / (1024 * 1024))}MB limit`);
+    }
+    let text: string;
+    try {
+      text = await request.text();
+    } catch {
+      throw new GatewayError(400, "invalid_request_error", "Request body could not be read");
+    }
+    if (Buffer.byteLength(text) > config.requestBodyLimit) {
+      throw new GatewayError(413, "invalid_request_error", `Request body exceeds the ${Math.floor(config.requestBodyLimit / (1024 * 1024))}MB limit`);
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON");
+    }
   };
 
   app.get("/models", ({ request }) => {
@@ -103,12 +131,7 @@ export function v1Routes(db: Database) {
     const key = authenticateGatewayKey(db, request.headers.get("authorization"));
     const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
 
-    let rawBody: unknown;
-    try {
-      rawBody = await request.json();
-    } catch {
-      throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON");
-    }
+    const rawBody = await readJsonBody(request);
     const parsed = chatCompletionsSchema.safeParse(rawBody);
     if (!parsed.success) {
       throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
@@ -194,9 +217,7 @@ export function v1Routes(db: Database) {
     set.headers["x-request-id"] = `req_${ulid()}`;
     const started = Date.now();
     const key = authenticateGatewayKey(db, request.headers.get("authorization"));
-    let rawBody: unknown;
-    try { rawBody = await request.json(); }
-    catch { throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON"); }
+    const rawBody = await readJsonBody(request);
     const parsed = responsesCreateSchema.safeParse(rawBody);
     if (!parsed.success) throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
     let req = responsesRequestToCanonical(parsed.data);
@@ -269,12 +290,7 @@ export function v1Routes(db: Database) {
     const key = authenticateGatewayKey(db, request.headers.get("authorization") ?? (anthropicKey ? `Bearer ${anthropicKey}` : null));
     const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
 
-    let rawBody: unknown;
-    try {
-      rawBody = await request.json();
-    } catch {
-      throw new GatewayError(400, "invalid_request_error", "Request body must be valid JSON");
-    }
+    const rawBody = await readJsonBody(request);
     const parsed = anthropicMessagesSchema.safeParse(rawBody);
     if (!parsed.success) {
       throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
@@ -366,7 +382,7 @@ export function v1Routes(db: Database) {
     httpStatus: number,
     error: string | null,
     started: number,
-    usage?: { prompt_tokens: number; completion_tokens: number } | null,
+    usage?: Usage | null,
     tokensSaved = 0,
     attemptsDetail?: unknown[],
     payload?: { request?: string | null; response?: string | null },
@@ -400,6 +416,8 @@ export function v1Routes(db: Database) {
         error,
         inputTokens: usage?.prompt_tokens ?? null,
         outputTokens: usage?.completion_tokens ?? null,
+        cachedTokens: usage?.cached_tokens ?? null,
+        cacheWriteTokens: usage?.cache_write_tokens ?? null,
         creditUsage: creditUsage ?? estimated,
         creditSource: creditUsage !== null ? "upstream" : estimated !== null ? "estimated" : null,
         latencyMs: Date.now() - started,

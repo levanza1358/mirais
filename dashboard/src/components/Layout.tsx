@@ -9,7 +9,6 @@ import {
   ScrollText,
   BarChart3,
   Settings as SettingsIcon,
-  Globe2,
   PanelLeftClose,
   PanelLeftOpen,
   ChevronDown,
@@ -20,7 +19,6 @@ import {
 } from "lucide-react";
 import { health } from "../api";
 import { APP_BUILD } from "../main";
-import miraisLogo from "../assets/mirais-logo.svg";
 
 type NavGroup = {
   id: string;
@@ -42,7 +40,6 @@ const GROUPS: NavGroup[] = [
     label: "Infrastructure",
     items: [
       { to: "/dashboard/providers", label: "Providers", icon: Boxes },
-      { to: "/dashboard/proxies", label: "Proxy Pool", icon: Globe2 },
       { to: "/dashboard/combos", label: "Combos", icon: GitBranch },
       { to: "/dashboard/keys", label: "API Keys", icon: KeyRound },
     ],
@@ -120,7 +117,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const sidebarHidden = isMobile && !mobileOpen;
 
   return (
-    <div className="block min-h-screen md:flex md:h-screen bg-[radial-gradient(circle_at_top,#1a2030_0%,#0b0e14_45%,#090c12_100%)] text-text-primary">
+    <div className="block min-h-screen md:flex md:h-screen bg-bg-base text-text-primary">
       {/* Mobile backdrop */}
       {isMobile && mobileOpen && (
         <button
@@ -134,7 +131,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <button
         type="button"
         onClick={() => setMobileOpen(true)}
-        className="fixed left-3 top-3 z-30 flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-bg-surface/90 px-2.5 text-xs text-text-muted shadow-md backdrop-blur hover:text-text-primary md:hidden"
+        className="fixed left-3 top-3 z-30 flex h-9 items-center gap-2 rounded-lg border border-border bg-bg-surface px-2.5 text-xs text-text-muted hover:text-text-primary md:hidden"
         aria-label="Open full menu"
         title="Open full menu"
       >
@@ -145,18 +142,15 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* sidebar */}
       <aside
         aria-hidden={sidebarHidden}
-        className={`group/sidebar m-2 flex shrink-0 flex-col rounded-2xl border border-border/80 bg-bg-surface/90 shadow-[0_18px_44px_rgba(0,0,0,0.32)] backdrop-blur-xl transition-[width,transform] duration-300 ease-out md:relative md:translate-x-0 ${effectiveCollapsed ? "md:w-[68px]" : "md:w-[260px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50 w-[240px]" : ""} ${isMobile && mobileOpen ? "translate-x-0" : isMobile ? "-translate-x-[120%]" : ""} md:translate-x-0 ${sidebarHidden ? "md:flex" : ""}`}
+        className={`group/sidebar flex shrink-0 flex-col border-r border-border bg-bg-surface transition-[width,transform] duration-300 ease-out md:relative md:translate-x-0 ${effectiveCollapsed ? "md:w-[60px]" : "md:w-[240px]"} ${isMobile ? "fixed inset-y-0 left-0 z-50 w-[240px]" : ""} ${isMobile && mobileOpen ? "translate-x-0" : isMobile ? "-translate-x-[120%]" : ""} md:translate-x-0 ${sidebarHidden ? "md:flex" : ""}`}
       >
         <div className={`flex items-center gap-2.5 border-b border-border/70 px-3 py-3 ${effectiveCollapsed ? "justify-center" : ""}`}>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent shadow-inner shadow-accent/15">
-            <img src={miraisLogo} alt="Mirais" className="size-5" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+            <img src="/icon.png" alt="Mirais" className="size-6 rounded-md" />
           </div>
           {!effectiveCollapsed && (
             <div className="min-w-0 flex-1 anim-fade-in">
               <p className="truncate text-sm font-semibold tracking-tight">Mirais</p>
-              <p className="text-[11px] text-text-muted" title={`Build ${APP_BUILD.time}`}>
-                v{APP_BUILD.version} · {APP_BUILD.stamp}
-              </p>
             </div>
           )}
           {!effectiveCollapsed && !isMobile && (
@@ -222,20 +216,20 @@ export function Layout({ children }: { children: ReactNode }) {
                           onClick={() => isMobile && setMobileOpen(false)}
                           title={effectiveCollapsed ? label : undefined}
                           className={({ isActive }) =>
-                            `group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-all ${
+                            `group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-all duration-200 ${
                               isActive
-                                ? "bg-accent/15 text-text-primary shadow-[inset_0_0_0_1px_rgba(124,92,255,0.25)]"
-                                : "text-text-muted hover:bg-bg-raised/60 hover:text-text-primary"
+                                ? "bg-bg-raised text-text-primary"
+                                : "text-text-muted hover:translate-x-0.5 hover:bg-bg-raised/50 hover:text-text-primary"
                             } ${effectiveCollapsed ? "justify-center" : ""}`
                           }
                         >
                           {({ isActive }) => (
                             <>
                               <span
-                                className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
+                                className={`relative flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors duration-200 ${
                                   isActive
-                                    ? "bg-accent/25 text-accent"
-                                    : "bg-bg-raised/60 text-text-muted group-hover:text-text-primary"
+                                    ? "bg-accent/15 text-accent"
+                                    : "text-text-muted group-hover:text-accent"
                                 }`}
                               >
                                 <Icon size={14} strokeWidth={1.75} />
@@ -274,6 +268,11 @@ export function Layout({ children }: { children: ReactNode }) {
               </div>
             )}
           </div>
+          {!effectiveCollapsed && (
+            <p className="px-1 pb-0.5 text-[10px] text-text-muted/70" title={`Build ${APP_BUILD.time}`}>
+              v{APP_BUILD.version} · {APP_BUILD.stamp}
+            </p>
+          )}
         </div>
       </aside>
 
@@ -293,7 +292,7 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Mobile bottom navigation */}
       <nav
         aria-label="Primary"
-        className="fixed inset-x-2 bottom-2 z-40 flex h-14 items-stretch justify-around rounded-2xl border border-border/80 bg-bg-surface/95 px-2 shadow-[0_18px_44px_rgba(0,0,0,0.42)] backdrop-blur-xl md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 flex h-14 items-stretch justify-around border-t border-border bg-bg-surface px-2 md:hidden"
       >
         {MOBILE_NAV.map(({ to, label, icon: Icon, end }) => (
           <NavLink

@@ -47,3 +47,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+
+// Dismiss the inline boot splash from index.html once React has painted. A
+// minimum on-screen time avoids a flash of splash on a warm cache.
+const boot = document.getElementById("boot");
+if (boot) {
+  const hide = () => {
+    boot.classList.add("boot-done");
+    boot.addEventListener("transitionend", () => boot.remove(), { once: true });
+  };
+  requestAnimationFrame(() => setTimeout(hide, 450));
+}

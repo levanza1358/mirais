@@ -1,8 +1,10 @@
 import type { CanonicalRequest, CanonicalResponse, ProviderAccount, Usage } from "../shared/types";
-import { GatewayError } from "../shared/errors";
+import { AdminError, GatewayError } from "../shared/errors";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { XAI_BASE_URL, refreshAccessToken, extractEmailFromAccessToken } from "../admin/xai-oauth";
 import { SseParser } from "./translator/stream";
+import { isPermanentRefreshFailure, markReauthRequired, withRefreshLock } from "./refresh";
+import { normalizeUsage } from "./promptCache";
 import { ulid } from "../utils/id";
 
 const SESSION_TTL_MS = 30 * 60_000;
@@ -393,21 +395,28 @@ export async function fetchXaiChatCompletions(
 export async function ensureFreshXaiToken(repo: ProvidersRepo, account: ProviderAccount): Promise<string> {
   if (!account.expires_at || account.expires_at - Date.now() > REFRESH_THRESHOLD_MS) return account.api_key;
   if (!account.refresh_token) {
-    throw new GatewayError(401, "authentication_error", "Grok login has expired and cannot be refreshed. Reconnect the account.");
+    throw markReauthRequired(repo, account, "Grok login has expired and cannot be refreshed.");
   }
 
-  try {
-    const tokens = await refreshAccessToken(account.refresh_token);
-    const expiresAt = tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null;
-    repo.updateAccountOAuth(account.id, { refreshToken: tokens.refresh_token ?? account.refresh_token, expiresAt });
-    repo.updateAccount(account.id, { apiKey: tokens.access_token });
-    account.api_key = tokens.access_token;
-    account.refresh_token = tokens.refresh_token ?? account.refresh_token;
-    account.expires_at = expiresAt;
-    return tokens.access_token;
-  } catch (err) {
-    throw new GatewayError(401, "authentication_error", `Grok token refresh failed: ${err instanceof Error ? err.message : String(err)}. Reconnect the account.`);
-  }
+  return withRefreshLock(account.id, async () => {
+    try {
+      const tokens = await refreshAccessToken(account.refresh_token!);
+      const expiresAt = tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null;
+      repo.updateAccountOAuth(account.id, { refreshToken: tokens.refresh_token ?? account.refresh_token, expiresAt });
+      repo.updateAccount(account.id, { apiKey: tokens.access_token });
+      account.api_key = tokens.access_token;
+      account.refresh_token = tokens.refresh_token ?? account.refresh_token;
+      account.expires_at = expiresAt;
+      return tokens.access_token;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const status = err instanceof AdminError ? err.status : 0;
+      if (isPermanentRefreshFailure(status, detail)) {
+        throw markReauthRequired(repo, account, `Grok token refresh failed: ${detail}.`);
+      }
+      throw new GatewayError(502, "server_error", `Grok token refresh failed: ${detail}`);
+    }
+  });
 }
 
 // ── xAI Grok Responses API → Chat Completions translator ──
@@ -567,13 +576,7 @@ export class XaiStreamTranslator {
       case "response.completed":
       case "response.incomplete": {
         const r = parsed.response as ResponsesApiResponse | undefined;
-        if (r?.usage) {
-          this.usage = {
-            prompt_tokens: r.usage.input_tokens ?? 0,
-            completion_tokens: r.usage.output_tokens ?? 0,
-            total_tokens: r.usage.total_tokens ?? (r.usage.input_tokens ?? 0) + (r.usage.output_tokens ?? 0),
-          };
-        }
+        if (r?.usage) this.usage = normalizeUsage(r.usage);
         if (!this.started) out.push(startChunk());
         this.flushPendingText(out);
         out.push(this.chunk({}, this.sawToolCall ? "tool_calls" : "stop"));
@@ -582,13 +585,7 @@ export class XaiStreamTranslator {
       }
       case "response.failed": {
         const r = parsed.response as ResponsesApiResponse | undefined;
-        if (r?.usage) {
-          this.usage = {
-            prompt_tokens: r.usage.input_tokens ?? 0,
-            completion_tokens: r.usage.output_tokens ?? 0,
-            total_tokens: r.usage.total_tokens ?? (r.usage.input_tokens ?? 0) + (r.usage.output_tokens ?? 0),
-          };
-        }
+        if (r?.usage) this.usage = normalizeUsage(r.usage);
         const error = r?.error as Record<string, unknown> | undefined;
         const message = typeof error?.message === "string" ? error.message : "Grok response failed";
         out.push(`data: ${JSON.stringify({ error: { message, type: "server_error" } })}\n\n`);

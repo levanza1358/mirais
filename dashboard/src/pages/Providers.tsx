@@ -305,10 +305,10 @@ function ProviderCard({
       tabIndex={0}
       className="group cursor-pointer rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
-      <Card className={`h-full p-4 transition-all duration-150 group-hover:-translate-y-0.5 group-hover:border-accent/40 group-hover:shadow-lg ${dimmed ? "border-border/50 bg-bg-surface/45 opacity-80" : ""}`}>
+      <Card className={`hover-lift h-full p-4 ${dimmed ? "border-border/50 bg-bg-surface/45 opacity-80" : ""}`}>
         <div className="flex items-start gap-3">
           <div
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg text-xs font-bold transition-transform duration-300 group-hover:scale-105"
             style={{ backgroundColor: preset.iconSrc ? `${preset.color}22` : `${preset.color}1f`, color: preset.color }}
           >
             {preset.iconSrc ? (

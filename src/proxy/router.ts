@@ -27,6 +27,10 @@ export function normalizeRoutingPolicy(policy?: Partial<RoutingPolicy> | null): 
   return {
     ...DEFAULT_ROUTING_POLICY,
     ...policy,
+    // `sticky` was accepted by an earlier schema but never implemented — it
+    // sorted exactly like `balanced`. Coerce stored values so old settings
+    // rows keep working instead of failing validation.
+    mode: policy?.mode === "priority" ? "priority" : "balanced",
     preferProviders: policy?.preferProviders ?? [],
     denyProviders: policy?.denyProviders ?? [],
     denyModels: policy?.denyModels ?? [],
@@ -40,6 +44,9 @@ export function baseUrlFor(provider: Provider, account?: ProviderAccount): strin
 export function upstreamFormat(provider: Provider): "openai" | "anthropic" {
   return provider.type === "anthropic" ? "anthropic" : "openai";
 }
+
+/** Round-robin cursor per combo id, used by the `round_robin` combo strategy. */
+const comboCursor = new Map<string, number>();
 
 export class Router {
   constructor(
@@ -120,6 +127,19 @@ export class Router {
       if (!candidates.length) {
         throw new GatewayError(503, "server_error", `Combo '${model}' has no usable entries`);
       }
+      // `round_robin` rotates which entry leads so traffic spreads across the
+      // members instead of always hammering the first one. The remaining
+      // entries stay in order behind it, so failover still walks the whole
+      // chain.
+      if (combo.strategy === "round_robin" && candidates.length > 1) {
+        const cursor = (comboCursor.get(combo.id) ?? 0) % candidates.length;
+        comboCursor.set(combo.id, cursor + 1);
+        return {
+          kind: "combo",
+          requested: model,
+          candidates: [...candidates.slice(cursor), ...candidates.slice(0, cursor)],
+        };
+      }
       return { kind: "combo", requested: model, candidates };
     }
 
@@ -172,6 +192,9 @@ export class Router {
     }
 
     for (const account of accounts) {
+      // A permanently failed OAuth refresh needs operator action; retrying it
+      // only burns attempts and hides the real cause from the dashboard.
+      if (account.reauth_required) continue;
       const until = account.rate_limited_until;
       if (until != null && until > Date.now()) {
         // Still inside the persisted rate-limit window — keep it out of
@@ -190,6 +213,10 @@ export class Router {
     }
 
     if (!healthy.length) {
+      const reauth = accounts.filter((a) => a.reauth_required);
+      if (reauth.length === accounts.length) {
+        throw new GatewayError(401, "authentication_error", `Provider '${provider.name}' has no connected accounts. Reconnect the account from the dashboard.`);
+      }
       throw new GatewayError(503, "server_error", `Provider '${provider.name}' has no healthy accounts. Run account warmup and try again.`);
     }
     return healthy;

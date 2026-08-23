@@ -157,7 +157,7 @@ export default function Logs() {
       </PageHeader>
 
       {/* Tabs */}
-      <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-border/70 bg-bg-surface/60 p-1 shadow-[0_10px_30px_rgba(0,0,0,0.18)] backdrop-blur w-fit">
+      <div className="mb-4 flex flex-wrap items-center gap-1 rounded-lg border border-border bg-bg-surface p-1 w-fit">
         {TABS.map((t) => {
           const m = TAB_META[t];
           const TIcon = m.icon;
@@ -168,9 +168,9 @@ export default function Logs() {
               type="button"
               onClick={() => setTab(t)}
               aria-pressed={active}
-              className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium transition-colors ${
+              className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium transition-colors ${
                 active
-                  ? "bg-accent text-white shadow-[0_10px_20px_rgba(124,92,255,0.28)]"
+                  ? "bg-bg-raised text-text-primary"
                   : "text-text-muted hover:bg-bg-raised/60 hover:text-text-primary"
               }`}
             >
@@ -183,11 +183,7 @@ export default function Logs() {
 
       {/* Hero summary per tab */}
       <div className="mb-6 grid gap-4 xl:grid-cols-[1.35fr_0.95fr]">
-        <Card className={`overflow-hidden ${
-          tab === "request" ? "border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.12),rgba(18,22,31,0.92)_42%,rgba(18,22,31,0.96))]" :
-          tab === "warmup" ? "border-warning/20 bg-[linear-gradient(135deg,rgba(251,191,36,0.10),rgba(18,22,31,0.92)_40%,rgba(18,22,31,0.96))]" :
-          "border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.10),rgba(18,22,31,0.92)_40%,rgba(18,22,31,0.96))]"
-        }`}>
+        <Card className="overflow-hidden border-border">
           <div className="flex h-full flex-col justify-between gap-6">
             <div>
               <div className={`mb-3 inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.24em] ${

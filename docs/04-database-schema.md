@@ -52,8 +52,21 @@ ALTER-ish columns on provider_accounts: auth_kind TEXT DEFAULT 'api_key', refres
 ALTER-ish column on provider_accounts: plan_type TEXT;
 -- 0025_account_base_url: optional account-specific upstream endpoint; GitHub Copilot uses one local SDK sidecar per account.
 ALTER-ish column on provider_accounts: base_url TEXT;
+-- 0027_account_reauth: terminal OAuth refresh state; routing skips the account until reconnection.
+ALTER-ish columns on provider_accounts: reauth_required INTEGER NOT NULL DEFAULT 0, reauth_reason TEXT;
 
 CREATE INDEX idx_accounts_provider ON provider_accounts(provider_id, enabled);
+
+-- 0026_account_model_cooldowns: restart-safe model-scoped rate limits.
+CREATE TABLE account_model_cooldowns (
+  account_id TEXT NOT NULL REFERENCES provider_accounts(id) ON DELETE CASCADE,
+  model_id   TEXT NOT NULL,
+  until      INTEGER NOT NULL,
+  reason     TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (account_id, model_id)
+);
+CREATE INDEX idx_account_model_cooldowns_until ON account_model_cooldowns(until);
 
 -- ── Provider models ───────────────────────────────────────
 CREATE TABLE provider_models (
@@ -86,7 +99,7 @@ CREATE TABLE aliases (
 CREATE TABLE combos (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL UNIQUE,           -- used as "combo:<name>"
-  strategy   TEXT NOT NULL DEFAULT 'sequential',
+  strategy   TEXT NOT NULL DEFAULT 'sequential', -- sequential | round_robin
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -131,6 +144,8 @@ CREATE TABLE request_logs (
   error           TEXT,
   input_tokens    INTEGER,
   output_tokens   INTEGER,
+  cached_tokens   INTEGER,                     -- prompt-cache reads (0028)
+  cache_write_tokens INTEGER,                   -- prompt-cache writes (0028)
   credit_usage    REAL,                      -- provider credit units; null when unavailable
   credit_source   TEXT,                      -- 'upstream' (reported) | 'estimated' (from credit_rate)
   latency_ms      INTEGER,
@@ -150,8 +165,10 @@ CREATE TABLE settings (
   value TEXT NOT NULL                        -- JSON
 );
 
--- ── Dashboard password (bcrypt-style hash) ────────────────
--- stored in settings: key='dashboard_password_hash'
+-- ── Dashboard password + session state ────────────────────
+-- stored in settings: key='dashboard_password_hash' (empty string = turned off)
+-- stored in settings: key='session_secret'
+-- stored in settings: key='dashboard_session_hours'
 ```
 
 ## Notes & Policies
@@ -159,7 +176,7 @@ CREATE TABLE settings (
 **IDs** — ULIDs generated in code (`Bun.randomUUIDv7()` is fine too). Time-sortable, URL-safe.
 
 **Usage accounting flow**
-1. Request finishes (or aborts) → count tokens (from upstream `usage` when provided; otherwise local estimate).
+1. Request finishes (or aborts) → normalize upstream usage, including cache reads/writes when reported; otherwise estimate ordinary input/output tokens locally.
 2. Insert one `request_logs` row. Aggregation queries in `usage/aggregate.ts` read only this table.
 
 **Migration note** — `0008_remove_pricing.sql` removes the legacy `pricing` table and old money-related columns from existing databases.
@@ -170,13 +187,15 @@ CREATE TABLE settings (
 
 **Secrets at rest** — `provider_accounts.api_key` is plaintext by design (needed to call upstreams). `DATA_DIR` must be `chmod 700` on Ubuntu and ACL-restricted on Windows. Gateway keys are stored plaintext (migration 0021+) so operators can recover them; the legacy `key_hash` column remains for lookup fallback on pre-0021 databases.
 
-**Account selection** — each provider owns an `account_strategy`. `priority` always starts with the lowest-priority healthy account (use account priorities to express Free → Plus → Pro). `round_robin` rotates the first healthy account independently per provider/model. Retriable failures continue through the remaining accounts; persisted quota cooldowns remove exhausted accounts until their window expires. `routing_policy.maxAttempts` limits account attempts per model candidate, so later combo entries are still reachable.
+**Account selection** — each provider owns an `account_strategy`. `priority` always starts with the lowest-priority healthy account (use account priorities to express Free → Plus → Pro). `round_robin` rotates the first healthy account independently per provider/model. Persisted cooldowns are keyed by account and model, so one model's rate limit does not disable unrelated models. Terminal OAuth failures persist `reauth_required`; those accounts are skipped until reconnection. `routing_policy.maxAttempts` limits account attempts per model candidate, so later combo entries remain reachable.
 
 **Settings keys**
 
 | key | JSON value |
 |-----|------------|
-| `dashboard_password_hash` | string (scrypt via `Bun.password`) |
+| `dashboard_password_hash` | string (`Bun.password` hash); seeded with `12345678` on first start, empty string means turned off |
+| `session_secret` | string (random hex; combined with the password hash to sign session cookies) |
+| `dashboard_session_hours` | number (how long a login lasts before the password is asked again) |
 | `token_saver` | `{ enabled: bool, rules: { gitDiff: bool, grep: bool, ls: bool, longOutputMaxLines: int } }` |
 | `terse_mode` | `{ enabled: bool, prompt: string }` |
 | `log_retention_days` | number |

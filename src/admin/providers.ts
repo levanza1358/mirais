@@ -762,44 +762,50 @@ export function providerRoutes(db: Database) {
             break;
           }
         } else if (upstreamFormat(p) === "anthropic") {
-        const account = accounts[0]!;
-          res = await fetch(`${baseUrlFor(p)}/v1/messages`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-api-key": account.api_key,
-              "anthropic-version": "2023-06-01",
-            },
-            body: JSON.stringify({
-              model: modelId,
-              max_tokens: 48,
-              messages: [{ role: "user", content: testPrompt }],
-            }),
-            signal: AbortSignal.timeout(30_000),
-          });
-        } else {
-          const account = accounts[0]!;
-          res = await fetch(`${baseUrlFor(p, account)}/chat/completions`, {
-            method: "POST",
-            headers: p.type === "xai"
-              ? {
+          for (const account of eligibleAccounts) {
+            usedAccount = account;
+            res = await fetch(`${baseUrlFor(p, account)}/v1/messages`, {
+              method: "POST",
+              headers: {
                 "content-type": "application/json",
-                Authorization: `Bearer ${account.api_key}`,
-                "User-Agent": "xai-grok-cli",
-                "x-grok-client-version": "0.2.103",
-                "x-grok-client-identifier": "grok-shell",
-              }
-              : {
-                "content-type": "application/json",
-                ...(account.api_key ? { Authorization: `Bearer ${account.api_key}` } : {}),
+                "x-api-key": account.api_key,
+                "anthropic-version": "2023-06-01",
               },
-            body: JSON.stringify({
-              model: modelId,
-              max_tokens: 48,
-              messages: [{ role: "user", content: testPrompt }],
-            }),
-            signal: AbortSignal.timeout(30_000),
-          });
+              body: JSON.stringify({
+                model: modelId,
+                max_tokens: 48,
+                messages: [{ role: "user", content: testPrompt }],
+              }),
+              signal: AbortSignal.timeout(30_000),
+            });
+            if (res.ok) break;
+          }
+        } else {
+          for (const account of eligibleAccounts) {
+            usedAccount = account;
+            res = await fetch(`${baseUrlFor(p, account)}/chat/completions`, {
+              method: "POST",
+              headers: p.type === "xai"
+                ? {
+                  "content-type": "application/json",
+                  Authorization: `Bearer ${account.api_key}`,
+                  "User-Agent": "xai-grok-cli",
+                  "x-grok-client-version": "0.2.103",
+                  "x-grok-client-identifier": "grok-shell",
+                }
+                : {
+                  "content-type": "application/json",
+                  ...(account.api_key ? { Authorization: `Bearer ${account.api_key}` } : {}),
+                },
+              body: JSON.stringify({
+                model: modelId,
+                max_tokens: 48,
+                messages: [{ role: "user", content: testPrompt }],
+              }),
+              signal: AbortSignal.timeout(30_000),
+            });
+            if (res.ok) break;
+          }
         }
         if (!res) throw new AdminError(500, "Model test did not produce a response");
         const latency = Date.now() - started;

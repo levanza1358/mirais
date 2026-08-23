@@ -19,6 +19,11 @@ const envSchema = z.object({
   // the operator is confident the listener is only reachable from a trusted
   // network (loopback bind, reverse proxy, VPN, private network).
   MIRAIS_AUTH_REQUIRED: z.enum(["on", "off"]).default("on"),
+  // Optional dashboard password. When set (or once a password is saved from
+  // the dashboard), every /api/* route except /api/auth/* and /api/health
+  // requires a session cookie.
+  DASHBOARD_PASSWORD: z.string().min(8).optional(),
+  SESSION_TTL_HOURS: z.coerce.number().positive().max(24 * 365).default(12),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -56,6 +61,8 @@ export const config = {
   codexClientVersion: parsed.CODEX_CLIENT_VERSION,
   logLevel: parsed.LOG_LEVEL,
   authRequired: parsed.MIRAIS_AUTH_REQUIRED === "on",
+  dashboardPassword: parsed.DASHBOARD_PASSWORD,
+  sessionTtlHours: parsed.SESSION_TTL_HOURS,
   version: "1.0.0",
   startedAt: Date.now(),
 } as const;

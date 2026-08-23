@@ -156,6 +156,8 @@ export interface RequestLog {
   error: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  cached_tokens: number | null;
+  cache_write_tokens: number | null;
   credit_usage: number | null;
   credit_source: "upstream" | "estimated" | null;
   latency_ms: number | null;
@@ -172,6 +174,8 @@ export interface UsageRow {
   requests: number;
   input_tokens: number;
   output_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
   avg_latency_ms: number;
   errors: number;
   last_ts: string;
@@ -221,12 +225,38 @@ export const healthInfo = {
   detailed: () => req<HealthInfo>("/api/health"),
 };
 
+export interface AutostartStatus {
+  platform: string;
+  method: "windows-startup" | "systemd" | "unsupported";
+  enabled: boolean;
+  manageable: boolean;
+  detail: string;
+}
+
+export const autostart = {
+  get: () => req<AutostartStatus>("/api/autostart"),
+  set: (enabled: boolean) =>
+    req<AutostartStatus>("/api/autostart", { method: "POST", body: JSON.stringify({ enabled }) }),
+};
+
 export interface HealthInfo {
   status: string;
   version: string;
   uptime_sec: number;
   providers: { total: number; enabled: number; accounts: number };
   storage: { data_dir: string; db_path: string; db_exists: boolean; size_bytes: number };
+  /** Only present on /api/health, not on the public /health probe. */
+  runtime?: {
+    memory: {
+      rss_bytes: number;
+      heap_used_bytes: number;
+      heap_total_bytes: number;
+      external_bytes: number;
+      array_buffers_bytes: number;
+    };
+    in_flight: number;
+    active_cooldowns: number;
+  };
 }
 
 export interface Settings {
@@ -491,7 +521,7 @@ export const keys = {
   create: (input: { label: string; allowedModels?: string[]; rateLimitRpm?: number; concurrency?: number; dailyTokenBudget?: number; expiresAt?: string }) =>
     req<GatewayKey & { plaintext: string }>("/api/keys", { method: "POST", body: JSON.stringify(input) }),
   rotate: (id: string) => req<GatewayKey & { plaintext: string }>(`/api/keys/${id}/rotate`, { method: "POST" }),
-  update: (id: string, patch: Partial<{ label: string; enabled: boolean; rateLimitRpm: number | null; concurrency: number | null; dailyTokenBudget: number | null; expiresAt: string | null }>) =>
+  update: (id: string, patch: Partial<{ label: string; enabled: boolean; allowedModels: string[] | null; rateLimitRpm: number | null; concurrency: number | null; dailyTokenBudget: number | null; expiresAt: string | null }>) =>
     req<GatewayKey>(`/api/keys/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 };
 
@@ -555,87 +585,27 @@ export const settings = {
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");
 
-// ── proxies ──
-export type ProxyStatus = "pending" | "healthy" | "slow" | "failing" | "disabled";
-
-export interface ProxyRecord {
-  id: string;
-  scheme: "http";
-  host: string;
-  port: number;
-  country: string | null;
-  source: string;
-  status: ProxyStatus;
-  latency_ms: number | null;
-  last_checked: string | null;
-  last_error: string | null;
-  failure_streak: number;
-  success_count: number;
-  failure_count: number;
-  username: string | null;
-  password: string | null;
-  tags: string | null;
-  created_at: string;
-  updated_at: string;
+export interface AuthState {
+  password_set: boolean;
+  authenticated: boolean;
+  session_hours: number;
 }
 
-export interface ProxyScrapeRun {
-  id: string;
-  source: string;
-  started_at: string;
-  finished_at: string | null;
-  fetched: number;
-  added: number;
-  skipped: number;
-  error: string | null;
-  triggered_by: "manual" | "interval" | "auto-warmup";
-}
-
-export interface ProxyAssignment {
-  provider_id: string;
-  mode: "direct" | "pool" | "scored";
-  enabled: boolean;
-}
-
-export interface ProxySource {
-  name: string;
-  url: string;
-}
-
-export interface ProxyBundle {
-  sources: ProxySource[];
-  proxies: ProxyRecord[];
-  page: number;
-  page_size: number;
-  total: number;
-  total_pages: number;
-  assignments: ProxyAssignment[];
-  scrape_runs: ProxyScrapeRun[];
-  config: { enabled: boolean; interval_minutes: number };
-}
-
-export const proxies = {
-  list: (params: { page?: number; pageSize?: number } = {}) => {
-    const q = new URLSearchParams();
-    if (params.page) q.set("page", String(params.page));
-    if (params.pageSize) q.set("page_size", String(params.pageSize));
-    const suffix = q.toString() ? `?${q.toString()}` : "";
-    return req<ProxyBundle>(`/api/proxies${suffix}`);
-  },
-  scrape: () => req<{ results: Array<{ source: string; fetched: number; added: number; skipped: number; error?: string; durationMs: number }>; probed: string[] }>("/api/proxies/scrape", { method: "POST" }),
-  probe: (id?: string) => req<{ ok: boolean; probed: string[] }>("/api/proxies/probe", { method: "POST", body: JSON.stringify({ id }) }),
-  create: (input: { host: string; port: number; country?: string; username?: string; password?: string; source?: string }) =>
-    req<ProxyRecord>("/api/proxies", { method: "POST", body: JSON.stringify(input) }),
-  bulkAdd: (input: { lines: string[]; source?: string }) =>
-    req<{ received: number; added: number; skipped: number; invalid: number }>("/api/proxies/bulk", { method: "POST", body: JSON.stringify(input) }),
-  remove: (id: string) => req<{ ok: boolean }>(`/api/proxies/${id}`, { method: "DELETE" }),
-  clear: () => req<{ removed: number }>("/api/proxies/clear", { method: "POST" }),
-  toggle: (id: string) => req<ProxyRecord>(`/api/proxies/${id}/toggle`, { method: "POST" }),
-  setAssignment: (provider_id: string, mode: "direct" | "pool" | "scored") =>
-    req<{ mode: "direct" | "pool" | "scored"; enabled: boolean }>("/api/proxies/assignments", { method: "POST", body: JSON.stringify({ provider_id, mode }) }),
-  getConfig: () => req<{ enabled: boolean; interval_minutes: number }>("/api/proxies/config"),
-  saveConfig: (input: { enabled: boolean; interval_minutes: number }) =>
-    req<{ enabled: boolean; interval_minutes: number }>("/api/proxies/config", { method: "POST", body: JSON.stringify(input) }),
+export const auth = {
+  check: () => req<AuthState>("/api/auth/check"),
+  login: (password: string, remember: boolean) =>
+    req<{ ok: boolean }>("/api/auth/login", { method: "POST", body: JSON.stringify({ password, remember }) }),
+  logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  setPassword: (newPassword: string | null, currentPassword?: string) =>
+    req<{ ok: boolean; password_set: boolean }>("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ new_password: newPassword, current_password: currentPassword }),
+    }),
+  setSessionHours: (hours: number) =>
+    req<{ ok: boolean; session_hours: number }>("/api/auth/session-hours", {
+      method: "POST",
+      body: JSON.stringify({ hours }),
+    }),
 };
 
 // -- music --

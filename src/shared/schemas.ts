@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { upstreamBaseUrlSchema } from "../utils/upstreamUrl";
 
 /** Browser URL returned by OpenAI's fixed Codex localhost OAuth callback. */
 export const oauthCallbackUrlSchema = z.object({
@@ -155,7 +156,7 @@ export const anthropicMessagesSchema = z.object({
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/, "lowercase letters, digits, dash, underscore"),
   type: z.enum(["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
-  baseUrl: z.string().url().optional().nullable(),
+  baseUrl: upstreamBaseUrlSchema.optional().nullable(),
   enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
   accountStrategy: z.enum(["priority", "round_robin"]).optional(),
@@ -166,7 +167,7 @@ export const providerUpdateSchema = providerCreateSchema.partial();
 export const accountCreateSchema = z.object({
   label: z.string().min(1).max(64),
   apiKey: z.string().optional(),
-  baseUrl: z.string().url().optional().nullable(),
+  baseUrl: upstreamBaseUrlSchema.optional().nullable(),
   priority: z.number().int().optional(),
 });
 
@@ -178,7 +179,7 @@ export const accountBulkCreateSchema = z.object({
 export const accountUpdateSchema = z.object({
   label: z.string().min(1).max(64).optional(),
   apiKey: z.string().min(1).optional(),
-  baseUrl: z.string().url().optional().nullable(),
+  baseUrl: upstreamBaseUrlSchema.optional().nullable(),
   priority: z.number().int().optional(),
   enabled: z.boolean().optional(),
   sessionCookie: z.string().max(8192).nullable().optional(),
@@ -219,12 +220,13 @@ export const upstreamModelsResponseSchema = z.object({
 
 export const comboCreateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
-  strategy: z.enum(["sequential"]).default("sequential"),
+  strategy: z.enum(["sequential", "round_robin"]).default("sequential"),
   chain: z.array(z.string().min(1)).min(1).max(10),
 });
 
 export const comboUpdateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/).optional(),
+  strategy: z.enum(["sequential", "round_robin"]).optional(),
   chain: z.array(z.string().min(1)).min(1).max(10).optional(),
 });
 
@@ -290,7 +292,7 @@ export const settingsUpdateSchema = z.object({
   }).optional(),
   model_sync_mode: z.enum(["curated", "all"]).optional(),
   routing_policy: z.object({
-    mode: z.enum(["balanced", "priority", "sticky"]).optional(),
+    mode: z.enum(["balanced", "priority"]).optional(),
     preferProviders: z.array(z.string().min(1)).max(20).optional(),
     denyProviders: z.array(z.string().min(1)).max(50).optional(),
     denyModels: z.array(z.string().min(1)).max(200).optional(),

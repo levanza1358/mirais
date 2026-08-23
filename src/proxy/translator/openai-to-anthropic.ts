@@ -1,5 +1,6 @@
 import { ulid } from "../../utils/id";
 import type { CanonicalResponse, Usage, ChatMessage, ToolCall } from "../../shared/types";
+import { cacheTokensFrom } from "../promptCache";
 
 // ── Anthropic Messages response → Canonical (OpenAI) response ──
 
@@ -27,6 +28,7 @@ export function anthropicToOpenaiResponse(body: Record<string, unknown>, request
         prompt_tokens: usageIn.input_tokens ?? 0,
         completion_tokens: usageIn.output_tokens ?? 0,
         total_tokens: (usageIn.input_tokens ?? 0) + (usageIn.output_tokens ?? 0),
+        ...cacheTokensFrom(usageIn),
       }
     : undefined;
 

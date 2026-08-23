@@ -3,17 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
 import { getDb } from "./store/db";
-import { authRoutes } from "./admin/auth";
+import { authRoutes, passwordEnabled, sessionGuard } from "./admin/auth";
 import { oauthRoutes } from "./admin/oauth";
 import { copilotRoutes, startCopilotSidecars, waitCopilotSidecar } from "./admin/copilot";
 import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
-import { settingsRoutes, statsRoutes, logRoutes, healthRoutes } from "./admin/settings";
-import { proxyRoutes } from "./admin/proxies";
+import { settingsRoutes, statsRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
 import { backupRoutes } from "./admin/backups";
 import { musicRoutes } from "./admin/musicRoutes";
 import { xaiAdminRoutes } from "./admin/xai-routes";
 import { v1Routes } from "./proxy/routes";
+import { sweepCooldowns } from "./proxy/executor";
 import { GatewayError, AdminError } from "./shared/errors";
 import { LogsRepo } from "./store/repos/logs";
 import { SettingsRepo } from "./store/repos/settings";
@@ -217,8 +217,26 @@ async function runAutoWarmups() {
     autoWarmupRunning = false;
   }
 }
+// ── cooldown recovery sweep (1 min) ──
+//
+// `isCoolingDown` prunes lazily, so a key that is never routed to again keeps
+// its expired entry forever. Sweeping proactively also lets persisted
+// per-model cooldowns recover without waiting for a request to select them.
+function sweepExpiredCooldowns() {
+  const inMemory = sweepCooldowns();
+  let persisted = 0;
+  try {
+    persisted = new ProvidersRepo(db).purgeExpiredModelCooldowns();
+  } catch { /* best-effort — DB may be mid-restart */ }
+  if (inMemory > 0 || persisted > 0) {
+    log.debug("swept expired cooldowns", { in_memory: inMemory, persisted });
+  }
+}
+
 purgeOldLogs();
 setInterval(purgeOldLogs, 24 * 3600 * 1000).unref();
+sweepExpiredCooldowns();
+setInterval(sweepExpiredCooldowns, 60 * 1000).unref();
 runAutoWarmups();
 setInterval(runAutoWarmups, 60 * 1000).unref();
 
@@ -261,6 +279,7 @@ const app = new Elysia()
   })
   .use(healthRoutes(db))
   .use(authRoutes(db))
+  .use(sessionGuard(db))
   .use(oauthRoutes(db))
   .use(copilotRoutes(db))
   .use(providerRoutes(db))
@@ -268,7 +287,7 @@ const app = new Elysia()
   .use(comboRoutes(db))
   .use(keyRoutes(db))
   .use(settingsRoutes(db))
-  .use(proxyRoutes(db))
+  .use(autostartRoutes())
   .use(backupRoutes(db))
   .use(musicRoutes(db))
   .use(xaiAdminRoutes(db))
@@ -317,14 +336,20 @@ log.info("mirais started", {
   url: `http://${config.host}:${config.port}`,
   dashboard: hasDashboard ? "serving built dashboard" : "not built",
   db: config.dbPath,
-  dashboard_auth: "disabled",
+  dashboard_auth: passwordEnabled(db) ? "password" : "disabled",
 });
 
-// Dashboard authentication has been removed entirely. All administrative
-// endpoints are exposed without a password or session. The operator is
-// expected to gate network access (reverse proxy, firewall, VPN) instead
-// of relying on app-level authentication. The /api/auth/* endpoints remain
-// in place as no-ops for backwards compatibility with the dashboard build.
+if (!passwordEnabled(db) && config.host !== "127.0.0.1" && config.host !== "localhost") {
+  log.warn("dashboard has no password while bound to a non-loopback host", {
+    host: config.host,
+    fix: "set a dashboard password in Settings → General, or restrict access with a proxy/firewall/VPN",
+  });
+}
+
+// The dashboard is passwordless until an operator sets a password (env
+// DASHBOARD_PASSWORD or Settings → General). Once set, every /api/* route
+// except /api/auth/* and /api/health requires a session cookie. Network-level
+// controls (reverse proxy, firewall, VPN) remain the recommended outer layer.
 
 export type App = typeof app;
 export { app };

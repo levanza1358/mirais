@@ -4,7 +4,7 @@
 
 ## What this project is
 
-**Mirais** — a self-hosted AI gateway & router. One local endpoint (`http://localhost:1463`) that routes LLM requests across multiple providers, translates OpenAI ↔ Anthropic API shapes on the fly, compresses tokens, tracks usage, and is managed through a passwordless dashboard.
+**Mirais** — a self-hosted AI gateway & router. One local endpoint (`http://localhost:1463`) that routes LLM requests across multiple providers, translates OpenAI ↔ Anthropic API shapes on the fly, compresses tokens, tracks usage, and is managed through a password-protected dashboard.
 
 The single source of truth is the documentation set:
 
@@ -46,12 +46,12 @@ bun run smoke          # post-deploy verification
 4. **Every DB change = new migration** in `src/store/migrations/` (never edit applied migrations).
 5. **Errors follow the spec.** Client API → OpenAI-shaped errors (doc 03). Admin API → `{ "error": "…" }`.
 6. **Streaming is first-class.** Never buffer full SSE responses in the proxy path.
-7. **Security invariants (never break):** the gateway key is a plaintext credential stored in the local DB (single-user install, recoverable — see RULES.md R1.2). The Mirais dashboard has no application-level password or login; control external access with a reverse proxy, firewall, VPN, or private network.
+7. **Security invariants (never break):** the gateway key is a plaintext credential stored in the local DB (single-user install, recoverable — see RULES.md R1.2). The dashboard password is stored only as a hash, guards the dashboard alone (never `/v1/*`), and never replaces network-level access control (reverse proxy, firewall, VPN, private network).
 8. **Cross-platform always.** No hardcoded path separators, no OS-specific APIs; if it can't run on both Windows and Ubuntu, it doesn't merge.
 9. **Tests:** translators and token saver require golden-fixture unit tests; new endpoints require integration tests. See doc 02 §6.
 10. **Update docs in the same PR** when behavior, API, schema, or UI changes.
 11. **Only commit and push after verification and user confirmation.** First run the relevant tests and checks, then report the results and wait for the user to confirm that the fix is correct. Do not commit or push before that confirmation. After confirmation, commit and push the verified fix to GitHub.
-12. **Respect exposure safety rules.** The dashboard is passwordless. When Mirais is exposed beyond a trusted network, restrict access with a reverse proxy, firewall, VPN, or private network. Never rely on an application-level dashboard login.
+12. **Respect exposure safety rules.** The dashboard password is on by default (`12345678` until changed) and can be turned off in Settings. When Mirais is exposed beyond a trusted network, restrict access with a reverse proxy, firewall, VPN, or private network — never rely on the dashboard login alone.
 
 ## Do NOT
 

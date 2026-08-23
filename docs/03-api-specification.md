@@ -3,8 +3,8 @@
 Base URL: `http://localhost:1463`
 
 Two API surfaces:
-- **Client API** (`/v1/*`) — used by AI tools; authenticated with gateway API keys (`Authorization: Bearer mirais-…`).
-- **Admin API** (`/api/*`) — used by the dashboard; intentionally passwordless, with external access controlled by a reverse proxy, firewall, VPN, or private network.
+- **Client API** (`/v1/*`) — used by AI tools; authenticated with gateway API keys (`Authorization: Bearer mirais-…`). The dashboard password never applies here.
+- **Admin API** (`/api/*`) — used by the dashboard; session-protected by the dashboard password (on by default, can be turned off), with external access controlled by a reverse proxy, firewall, VPN, or private network.
 
 ### Payload logging
 
@@ -65,7 +65,7 @@ Anthropic Messages shape (`model`, `max_tokens`, `messages`, optional `system`, 
 Unified catalog in OpenAI list format: policy-allowed enabled models from enabled providers plus aliases and combos that currently resolve (`id`, `object: "model"`, `owned_by`). Key model ACLs are applied to the exposed catalog ID.
 
 ### GET `/health`
-`200 { "status": "ok", "uptime": 12345, "version": "0.1.0" }` — no auth.
+`200 { "status": "ok", "uptime_sec": 12345, "version": "0.1.0" }` — no auth.
 
 ### Client error shape
 ```json
@@ -78,6 +78,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | 403 | Key's model ACL denies this model |
 | 429 | Key rate/concurrency/token-budget exceeded, or all upstreams rate-limited |
 | 400 | Bad request payload (validated with zod) |
+| 413 | Request body exceeds `REQUEST_BODY_LIMIT_MB` (default 25 MB) |
 | 502 | All upstream candidates failed |
 | 503 | No healthy account is available, or a Plus/Pro-gated Codex model has no eligible paid ChatGPT account |
 
@@ -85,15 +86,17 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 
 ## B. Admin API (`/api`)
 
-All `/api/*` routes are passwordless. Do not expose them directly to untrusted networks; use a reverse proxy, firewall, VPN, or private network as the access-control layer.
+`/api/*` routes require the `mirais_session` cookie (`HttpOnly`, `SameSite=Lax`, HMAC-signed) except `/api/auth/*` and `/api/health`. The password is enabled on first start (default `12345678` — change it) and can be turned off in Settings → General. Session lifetime is operator-configurable (default `SESSION_TTL_HOURS`, 30 days with "remember"), so refreshing a page does not re-prompt. Changing or removing the password invalidates existing sessions. The **client API (`/v1/*`) is never affected** — it authenticates with gateway keys. Do not expose these routes directly to untrusted networks; use a reverse proxy, firewall, VPN, or private network as the outer access-control layer.
 
 ### Auth
 
 | Method | Path | Body → Response |
 |--------|------|-----------------|
-| GET | `/api/auth/check` | Compatibility endpoint → `{ authenticated: true, setup_required: false, passwordless: true }` |
-| POST | `/api/auth/login` | Compatibility no-op → `{ ok: true, passwordless: true }` |
-| POST | `/api/auth/logout` | Compatibility no-op → `{ ok: true }` |
+| GET | `/api/auth/check` | `{ password_set, authenticated, session_hours, setup_required: false, passwordless }` |
+| POST | `/api/auth/login` | `{ password, remember? }` → sets the session cookie; `401` on a wrong password, `429` after 5 failures per IP within 5 minutes |
+| POST | `/api/auth/logout` | Clears the session cookie → `{ ok: true }` |
+| POST | `/api/auth/session-hours` | `{ hours }` (1–720) → how long a login lasts before the password is asked again |
+| POST | `/api/auth/password` | `{ new_password, current_password? }` → change the password (requires the current password and a valid session) or turn it off with `new_password: null`/`""`. Minimum 8 characters |
 | POST | `/api/oauth/openai/callback` | `{ "url": "http://localhost:1455/auth/callback?code=…&state=…" }` → accepts the OpenAI Codex callback URL pasted from a remote/VPS browser and completes the pending PKCE login |
 
 ### Overview / analytics
@@ -104,6 +107,9 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | GET | `/api/stats/timeseries?range=…&bucket=hour\|day` | `[{ t, requests, tokens, cost }]` for charts |
 | GET | `/api/stats/by-model?range=…` | `[{ model, requests, tokens, cost, errors }]` |
 | GET | `/api/stats/by-provider?range=…` | `[{ provider, requests, tokens, cost, errors, avgLatencyMs }]` |
+| GET | `/api/health` | Runtime health: version, uptime, provider/account counts, storage, memory, in-flight requests, and active cooldowns |
+| GET | `/api/autostart` | Start-on-boot state → `{ platform, method: "windows-startup" \| "systemd" \| "unsupported", enabled, manageable, detail }` |
+| POST | `/api/autostart` | `{ enabled: boolean }` → enable/disable start-on-boot. Windows uses the per-user Startup folder; Linux writes a systemd unit and needs root or passwordless sudo (`400` with an actionable message otherwise) |
 
 ### Music
 
@@ -133,7 +139,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | POST | `/api/providers/accounts/:accId/codex-quota/reset` | Attempt ChatGPT/Codex banked reset for an OAuth account → `{ ok, message }` |
 | GET | `/api/providers/accounts/:accId/copilot-quota` | Live GitHub Copilot quota snapshots keyed by type (`premium_interactions`, `chat`, `completions`) with remaining percentage, entitlement usage, and reset date |
 | GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
-| GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, avg_latency_ms, errors, last_ts }]` |
+| GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, cached_tokens, cache_write_tokens, avg_latency_ms, errors, last_ts }]` |
 | POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (openai-type providers only) |
 | POST | `/api/copilot/start` | Start an isolated GitHub Copilot browser login: `{ providerId, label }` → `{ accountId, url }`. Opens GitHub's official login flow; no GitHub password is sent to Mirais. |
 | POST | `/api/copilot/:accountId/reconnect` | Restart GitHub device authorization for an existing Copilot account while preserving its ID, metadata, and usage history. |
@@ -141,7 +147,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | DELETE | `/api/copilot/:accountId/login` | Cancel an unfinished Copilot login. Removes a new disabled placeholder account, but preserves an existing account being reconnected. |
 | GET | `/api/copilot/:accountId/status` | Poll Copilot login and local sidecar health → `{ done, ok, message? }`. |
 | GET | `/oauth/callback` | OAuth redirect target — exchanges the code (PKCE) for tokens and creates the account labeled `ChatGPT (email)`. Public route, no session |
-| PATCH | `/api/providers/:id/accounts/:accId` | Update key/priority/enabled |
+| PATCH | `/api/providers/:id/accounts/:accId` | Update key/priority/enabled. Accounts with a permanent OAuth refresh failure expose persisted `reauth_required`/`reauth_reason` and remain unroutable until reconnection. |
 | DELETE | `/api/providers/:id/accounts/:accId` | Remove account |
 | POST | `/api/providers/:id/accounts/:accId/test` | Live test → `{ ok, latencyMs, error? }` |
 | POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, `warmup_status`, upstream status, latency, and detail. Copilot warmup starts its local sidecar and preserves SDK errors; xAI OAuth retries one transient connection failure; Blackbox uses a minimal chat completion. |
@@ -166,8 +172,8 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/combos` | List combos with their chains |
-| POST | `/api/combos` | `{ name, strategy: "sequential", chain: ["anthropic/claude-opus-4-7", "openai/gpt-5.2", "glm/glm-5.1"] }` |
-| PATCH | `/api/combos/:id` | Rename / reorder chain |
+| POST | `/api/combos` | `{ name, strategy?: "sequential" | "round_robin", chain: [...] }`; round-robin rotates the leading entry while preserving ordered fallback |
+| PATCH | `/api/combos/:id` | Rename, change strategy, or reorder chain |
 | DELETE | `/api/combos/:id` | Remove |
 | POST | `/api/combos/:id/test` | Sends a tiny inference request to every resolved provider/model candidate in order and returns per-candidate status, latency, account, and error detail |
 
@@ -177,7 +183,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 |--------|------|-------|
 | GET | `/api/keys` | List (includes plaintext `key` field; also shows prefix, limits, usage) |
 | POST | `/api/keys` | `{ label, allowedModels?: [], rateLimitRpm?, concurrency?, dailyTokenBudget?, expiresAt? }` → returns the key record plus a `plaintext` field; the plaintext is **persisted** (recoverable) |
-| PATCH | `/api/keys/:id` | Update limits, enable/disable |
+| PATCH | `/api/keys/:id` | Update label, model ACL, RPM, concurrency, daily budget, expiry, or enabled state |
 | DELETE | `/api/keys/:id` | Revoke |
 | GET | `/api/keys/:id/usage?range=…` | Per-key stats |
 
@@ -185,7 +191,7 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, thinking mode, tokens, latency, cost, error). Only the requested thinking setting is stored; reasoning content is never logged. |
+| GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, thinking mode, tokens, cache-read/cache-write tokens, latency, cost, error). Only the requested thinking setting is stored; reasoning content is never logged. |
 | GET | `/api/logs/:id` | Detail incl. payloads if `TRACK_PAYLOADS=full` |
 | DELETE | `/api/logs` | Purge (body: `{ before: "ISO-date" }`) |
 
@@ -214,8 +220,10 @@ All `/api/*` routes are passwordless. Do not expose them directly to untrusted n
 
 ### Dashboard exposure and auth behavior
 
-- The dashboard has no application-level login. Restrict exposed instances with a reverse proxy, firewall, VPN, or private network.
-- The dashboard Settings page can toggle network binding, but switching to exposed mode still requires a password before the server can successfully start.
+- The dashboard login is on by default (`12345678` until changed) and can be turned off in Settings → General. It protects the dashboard only — `/v1/*` gateway traffic is unaffected.
+- Restrict exposed instances with a reverse proxy, firewall, VPN, or private network regardless of the login.
+- A startup warning is logged when Mirais binds to a non-loopback host without a dashboard password.
+- The dashboard Settings page can toggle network binding; restart Mirais to apply the change.
 
 ---
 

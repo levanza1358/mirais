@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type { CanonicalRequest, CanonicalResponse, ChatMessage, Usage } from "../../shared/types";
 import type { responsesCreateSchema } from "../../shared/schemas";
 import { SseParser } from "./stream";
+import { normalizeUsage } from "../promptCache";
 import { ulid } from "../../utils/id";
 
 export type ResponsesCreateRequest = z.infer<typeof responsesCreateSchema>;
@@ -114,7 +115,7 @@ export function chatSseToResponses(source: ReadableStream<Uint8Array>, requested
         if (parsed.data === "[DONE]") return;
         let chunk: Record<string, unknown>;
         try { chunk = JSON.parse(parsed.data) as Record<string, unknown>; } catch { return; }
-        const u = chunk.usage as Usage | undefined;
+        const u = normalizeUsage(chunk.usage);
         if (u) usage = u;
         const choices = chunk.choices as Array<{ delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> | undefined;
         const delta = choices?.[0]?.delta;

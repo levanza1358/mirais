@@ -139,13 +139,12 @@ mirais/
 ```bash
 # ── Server ──
 PORT=1463
-HOST=127.0.0.1                 # use 0.0.0.0 to expose on LAN/Tailscale; requires DASHBOARD_PASSWORD
+HOST=127.0.0.1                 # use 0.0.0.0 to expose on LAN/Tailscale
 DATA_DIR=./data                # SQLite + logs live here
 
 # ── Dashboard auth ──
-DASHBOARD_PASSWORD=change-me    # required for any non-loopback HOST
-SESSION_SECRET=replace-with-64-random-hex
-SESSION_TTL_HOURS=12
+DASHBOARD_PASSWORD=change-me    # presets the initial password (default 12345678); dashboard only, never /v1/*
+SESSION_TTL_HOURS=12            # default login lifetime; configurable in Settings, 30 days with "remember"
 
 # ── Behaviour ──
 TOKEN_SAVER=on                 # on | off
@@ -161,6 +160,8 @@ LOG_LEVEL=info                 # debug | info | warn | error
 # HTTPS_PROXY=http://proxy:8080
 ```
 
+`REQUEST_BODY_LIMIT_MB` is enforced against both declared `Content-Length` and received body size; oversized requests return `413`.
+
 ## 5. Cross-Platform Notes (Windows & Ubuntu)
 
 | Concern | Approach |
@@ -174,7 +175,7 @@ LOG_LEVEL=info                 # debug | info | warn | error
 
 ## 6. Testing Strategy
 
-- **Unit**: translators (golden fixture pairs OpenAI↔Anthropic incl. streaming event sequences), token saver rules, combo resolution, cooldown logic.
-- **Integration**: spin the app on an ephemeral port with a mock upstream (Bun HTTP server returning canned SSE), run real client requests through failover paths.
+- **Unit**: translators (golden fixture pairs OpenAI↔Anthropic incl. streaming event sequences), token saver rules, combo rotation, cooldown persistence, OAuth refresh single-flight, prompt-cache mapping, and redirect safety.
+- **Integration**: spin the app on an ephemeral port with a mock upstream (Bun HTTP server returning canned SSE), run real client requests through failover and request-size paths.
 - **Smoke**: `scripts/smoke.ts` hits `/health`, logs in, lists models, and does one completion against a configured provider.
 - Dashboard: typecheck + build in CI; manual UI pass per the checklist in doc 06.

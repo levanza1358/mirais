@@ -1,5 +1,6 @@
 import { ulid } from "../../utils/id";
 import type { Usage } from "../../shared/types";
+import { cacheTokensFrom } from "../promptCache";
 
 // ── Anthropic SSE stream → OpenAI chat.completion.chunk SSE lines ──
 // State machine over Anthropic event types: message_start, content_block_start,
@@ -43,6 +44,7 @@ export class AnthropicToOpenAIStreamTranslator {
             prompt_tokens: usageIn.input_tokens ?? 0,
             completion_tokens: usageIn.output_tokens ?? 0,
             total_tokens: (usageIn.input_tokens ?? 0) + (usageIn.output_tokens ?? 0),
+            ...cacheTokensFrom(usageIn),
           };
         }
         if (msg?.id) this.id = `chatcmpl-${msg.id as string}`;
@@ -181,6 +183,7 @@ export class OpenAIToAnthropicStreamTranslator {
         prompt_tokens: usageIn.prompt_tokens ?? 0,
         completion_tokens: usageIn.completion_tokens ?? 0,
         total_tokens: (usageIn.prompt_tokens ?? 0) + (usageIn.completion_tokens ?? 0),
+        ...cacheTokensFrom(usageIn),
       };
     }
 

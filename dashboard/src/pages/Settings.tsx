@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, CheckCircle2, Loader2, XCircle, Globe2 } from "lucide-react";
-import { settings, backups, healthInfo, providers, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, CheckCircle2, Loader2, XCircle, Globe2, Lock, Power } from "lucide-react";
+import { settings, backups, healthInfo, providers, auth, autostart, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
 import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
@@ -21,7 +21,6 @@ const ACCENT_STORAGE_KEY = "mirais.ui.accent";
 function applyAccentColor(value: string) {
   if (typeof document === "undefined") return;
   document.documentElement.style.setProperty("--color-accent", value);
-  document.documentElement.style.setProperty("--color-accent-rgb", hexToRgb(value));
 }
 
 function hexToRgb(hex: string): string {
@@ -90,6 +89,8 @@ export default function Settings() {
           <>
             <GatewaySection />
             <NetworkSection />
+            <AutostartSection />
+            <SecuritySection />
             <div className="lg:col-span-2">
               <DatabaseSection />
             </div>
@@ -267,6 +268,154 @@ function NetworkSection() {
 }
 
 // ── gateway (retention) ──
+
+function AutostartSection() {
+  const qc = useQueryClient();
+  const s = useQuery({ queryKey: ["autostart"], queryFn: autostart.get });
+
+  const save = useMutation({
+    mutationFn: (next: boolean) => autostart.set(next),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["autostart"] });
+      toast(r.enabled ? "Mirais will start automatically on boot" : "Automatic startup disabled");
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const method = s.data?.method;
+  const label = method === "systemd"
+    ? "systemd service — starts at boot without logging in"
+    : method === "windows-startup"
+      ? "Windows Startup folder — starts after you log in"
+      : "not supported on this platform";
+
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Power size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Start on boot</h3>
+      </div>
+      <p className="mb-4 text-xs text-text-muted">Keeps the gateway running after a reboot, on a VPS or a desktop. Method: {label}.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-xs text-text-primary">Start Mirais automatically</p>
+          <p className="mt-0.5 break-all text-xs text-text-muted">{s.data?.detail ?? "Checking…"}</p>
+        </div>
+        <Switch
+          checked={s.data?.enabled ?? false}
+          onChange={(v) => save.mutate(v)}
+          disabled={save.isPending || !s.data?.manageable}
+          aria-label="Start Mirais on boot"
+        />
+      </div>
+      {s.data && !s.data.manageable && (
+        <p className="mt-3 text-xs text-amber-300">Cannot be changed from here. Run <code className="font-mono">mirais autostart on</code> in a terminal.</p>
+      )}
+    </Card>
+  );
+}
+
+function SecuritySection() {
+  const qc = useQueryClient();
+  const state = useQuery({ queryKey: ["auth"], queryFn: auth.check });
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [hours, setHours] = useState("12");
+  const passwordSet = state.data?.password_set ?? false;
+
+  useEffect(() => {
+    if (state.data) setHours(String(state.data.session_hours));
+  }, [state.data]);
+
+  const save = useMutation({
+    mutationFn: () => auth.setPassword(next, passwordSet ? current : undefined),
+    onSuccess: () => {
+      setCurrent("");
+      setNext("");
+      qc.invalidateQueries({ queryKey: ["auth"] });
+      toast("Dashboard password saved — other sessions were signed out");
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const saveHours = useMutation({
+    mutationFn: () => auth.setSessionHours(Number(hours)),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["auth"] });
+      toast(`Password will be asked again after ${r.session_hours}h`);
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => auth.setPassword(null, current),
+    onSuccess: () => {
+      setCurrent("");
+      qc.invalidateQueries({ queryKey: ["auth"] });
+      toast("Dashboard password disabled");
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  const signOut = useMutation({
+    mutationFn: auth.logout,
+    onSuccess: () => qc.invalidateQueries(),
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Lock size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Dashboard password</h3>
+      </div>
+      <p className="mb-4 text-xs text-text-muted">
+        Protects the dashboard only. Gateway traffic on <code className="font-mono">/v1/*</code> keeps using gateway API keys and is never affected.
+        {passwordSet ? " Default password is 12345678 — change it." : " Currently disabled: anyone who can reach this port has full dashboard access."}
+      </p>
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }} className="space-y-3">
+        {passwordSet && (
+          <div>
+            <label className="mb-1 block text-xs text-text-muted">Current password</label>
+            <Input type="password" value={current} autoComplete="current-password" onChange={(e) => setCurrent(e.target.value)} />
+          </div>
+        )}
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">New password (min 8 characters)</label>
+          <Input type="password" value={next} autoComplete="new-password" onChange={(e) => setNext(e.target.value)} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" size="sm" disabled={next.length < 8 || save.isPending}>
+            {passwordSet ? "Change password" : "Enable password"}
+          </Button>
+          {passwordSet && (
+            <>
+              <Button type="button" size="sm" variant="outline" onClick={() => remove.mutate()} disabled={remove.isPending || current.length === 0}>
+                Turn password off
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
+                Sign out
+              </Button>
+            </>
+          )}
+        </div>
+      </form>
+      {passwordSet && (
+        <form
+          onSubmit={(e) => { e.preventDefault(); saveHours.mutate(); }}
+          className="mt-5 border-t border-border/70 pt-4"
+        >
+          <label className="mb-1 block text-xs text-text-muted">Ask for the password again after (hours)</label>
+          <div className="flex items-center gap-2">
+            <Input type="number" min={1} max={720} value={hours} onChange={(e) => setHours(e.target.value)} className="w-28" />
+            <Button type="submit" size="sm" variant="outline" disabled={saveHours.isPending || !state.data}>Save</Button>
+          </div>
+          <p className="mt-2 text-xs text-text-muted">Refreshing the page never asks again inside this window. "Remember this browser" at login extends it to 30 days.</p>
+        </form>
+      )}
+    </Card>
+  );
+}
 
 function GatewaySection() {
   const qc = useQueryClient();

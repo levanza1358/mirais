@@ -1,6 +1,8 @@
 # Mirais
 
-**Mirais** is a self-hosted AI gateway & router: one local endpoint that routes LLM requests across multiple providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — with a beautiful dashboard that can run password-protected or passwordless on loopback only.
+<img src="assets/icon.png" alt="Mirais icon" width="96" align="right" />
+
+**Mirais** is a self-hosted AI gateway & router: one local endpoint that routes LLM requests across multiple providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — with a beautiful dashboard behind an optional password that never gets in the way of API clients.
 
 - **Default address:** `http://0.0.0.0:1463` (exposed by default)
 - **Dashboard:** `http://localhost:1463/` (password protected)
@@ -42,14 +44,16 @@ Inspired by [9Router](https://github.com/decolua/9router) (token saving, tiered 
 git clone <your-repo> mirais && cd mirais
 bun install
 cd dashboard && bun install && cd ..
-cp .env.example .env      # set DASHBOARD_PASSWORD
+cp .env.example .env      # optional: preset DASHBOARD_PASSWORD
 bun run dev
 ```
 
 Open `http://localhost:1463`.
 
-- If `HOST=127.0.0.1` or `localhost`, passwordless dashboard mode is allowed.
-- If `HOST=0.0.0.0`, you must set `DASHBOARD_PASSWORD` before Mirais will start.
+- The dashboard asks for a password on first use. Default: `12345678` — change it in Settings → General.
+- A login lasts for a configurable number of hours (default 12; "remember this browser" = 30 days), so refreshing never re-prompts.
+- The password can be turned off entirely in Settings → General.
+- It guards the dashboard only. `/v1/*` API clients keep using gateway API keys and are never affected.
 
 ## One-shot install
 
@@ -89,7 +93,7 @@ mirais doctor --json   # machine-readable health report
 
 # Linux/macOS
 ./mirais start|status|restart|stop
-mirais autostart on|off
+mirais autostart on|off|status
 mirais update     # clears package/build caches, then updates and restarts
 mirais expose on|off
 
@@ -99,14 +103,14 @@ bun run svc:status   # svc:start / svc:stop / svc:restart also available
 ```
 
 State is tracked via `data/mirais.pid`; server output goes to `data/mirais.log`.
-For a real always-on service (auto-start on boot), use `mirais autostart on`. See [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md).
+For a real always-on service (auto-start on boot), use `mirais autostart on` or the **Start on boot** switch in Settings → General. On Windows this starts Mirais after you log in; on Linux it installs a systemd unit that starts at boot without a login. See [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md).
 
 ### Exposure and dashboard safety
 
 - `mirais expose on` sets `HOST=0.0.0.0` so Mirais is reachable from LAN, Tailscale, or any interface allowed by your firewall.
 - `mirais expose off` sets `HOST=127.0.0.1` for localhost-only access.
-- When exposed (`HOST=0.0.0.0`), Mirais refuses to start unless `DASHBOARD_PASSWORD` is configured.
-- Passwordless mode is supported only on loopback (`127.0.0.1`, `::1`, or `localhost`).
+- When exposed (`HOST=0.0.0.0`) without a dashboard password, Mirais logs a startup warning — keep the password on, or restrict access at the network layer.
+- The dashboard password is not a network boundary: use a reverse proxy, firewall, VPN, or private network for anything reachable from the internet.
 
 ## Quick Start (client usage)
 

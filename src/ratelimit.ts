@@ -54,6 +54,13 @@ export function releaseSlot(keyId: string): void {
   else inFlight.set(keyId, n);
 }
 
+/** Total requests currently in flight across all keys, for the health endpoint. */
+export function totalInFlight(): number {
+  let total = 0;
+  for (const n of inFlight.values()) total += n;
+  return total;
+}
+
 function secondsUntilMidnight(): number {
   const now = new Date();
   const midnight = new Date(now);

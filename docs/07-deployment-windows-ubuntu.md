@@ -2,7 +2,7 @@
 
 Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. By default it binds to **`0.0.0.0`** so it is reachable from LAN / Tailscale / internet depending on your firewall.
 
-> The Mirais dashboard is intentionally passwordless. When exposed beyond a trusted network, bind it to `127.0.0.1` and protect access with an authenticated reverse proxy, VPN, firewall, or private network. Do not expose port `1463` directly to the internet.
+> The Mirais dashboard is password-protected by default (`12345678` — change it in Settings → General, or preset it with `DASHBOARD_PASSWORD`). It guards the dashboard only; gateway clients on `/v1/*` keep using gateway API keys. Even with a password, when exposed beyond a trusted network bind it to `127.0.0.1` and protect access with an authenticated reverse proxy, VPN, firewall, or private network. Do not expose port `1463` directly to the internet.
 
 ---
 
@@ -41,6 +41,19 @@ The Windows installer automatically opens a UAC prompt and relaunches itself
 with administrator access. Administrator access is used to install the global
 `mirais` command in `C:\Windows`; no manually elevated PowerShell window is
 required.
+
+**Install locations.** Windows installs to `%USERPROFILE%\Mirais`
+(`C:\Users\<you>\Mirais`); Ubuntu uses `$HOME/mirais`, or `/opt/mirais` when run
+as root. Set `MIRAIS_INSTALL_DIR` to override:
+
+```powershell
+$env:MIRAIS_INSTALL_DIR = 'D:\Mirais'
+irm https://raw.githubusercontent.com/levanza1358/mirais/main/install.ps1 | iex
+```
+
+Since the UAC relaunch starts a fresh process, pass an override as a machine or
+user environment variable (`setx MIRAIS_INSTALL_DIR D:\Mirais`) rather than a
+session variable, or run the installer from an already-elevated shell.
 
 Both one-shot installers create an isolated Python environment at
 `<install-root>/.venv` and store the Camoufox browser at
@@ -94,6 +107,7 @@ mirais restart
 mirais stop
 mirais autostart on
 mirais autostart off
+mirais autostart status
 mirais update     # shows old → new version, clears caches, updates, rebuilds, and restarts
 mirais fix          # force update/install/build/start from remembered install root
 mirais doctor       # diagnose and repair safe installation issues
@@ -115,6 +129,8 @@ nssm start Mirais
 ```
 Alternative without extra tools: **Task Scheduler** → trigger "At log on", action `bun.exe run start`, start-in = project folder.
 
+**From the dashboard:** Settings → General → "Start on boot" toggles the same mechanism (`mirais autostart`). On Windows it writes a launcher to the per-user Startup folder, so Mirais starts after you log in — no elevation needed. On Linux it writes the systemd unit, which starts at boot with no login; the toggle is disabled with an explanation when the server has neither root nor passwordless sudo.
+
 **Firewall:** first listen may prompt — allow "Private networks". If you keep `HOST=127.0.0.1` no inbound rule is needed.
 
 **Data location:** `%CD%\data` (contains `mirais.db` + logs). Back it up with the dashboard's "Backup now" or by copying the folder while stopped.
@@ -129,6 +145,7 @@ Alternative without extra tools: **Task Scheduler** → trigger "At log on", act
 ./mirais stop
 mirais autostart on
 mirais autostart off
+mirais autostart status
 mirais update
 mirais doctor
 mirais uninstall --yes  # permanently removes the install, data, backups, and autostart entry

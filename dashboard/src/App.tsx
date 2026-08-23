@@ -2,6 +2,8 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 import { music as musicApiClient, settings as settingsApi } from "./api";
 import { Layout } from "./components/Layout";
+import { AuthGate } from "./components/AuthGate";
+import { Splash } from "./components/Splash";
 import { ToastHost } from "./components/ui";
 import { MusicPlayerProvider } from "./hooks/useMusicPlayer";
 import MusicMiniPlayer from "./components/MusicMiniPlayer";
@@ -18,7 +20,6 @@ const WarmupLogsRedirect = lazy(() => import("./pages/WarmupLogs"));
 const TestLogsRedirect = lazy(() => import("./pages/TestLogs"));
 const UsageLog = lazy(() => import("./pages/UsageLog"));
 const Settings = lazy(() => import("./pages/Settings"));
-const Proxy = lazy(() => import("./pages/Proxy"));
 const Music = lazy(() => import("./pages/Music"));
 
 const ACCENT_STORAGE_KEY = "mirais.ui.accent";
@@ -27,7 +28,6 @@ const ACCENT_DEFAULT = "#7c5cff";
 function applyAccentColor(value: string) {
   if (typeof document === "undefined") return;
   document.documentElement.style.setProperty("--color-accent", value);
-  document.documentElement.style.setProperty("--color-accent-rgb", hexToRgb(value));
 }
 
 function hexToRgb(hex: string): string {
@@ -91,35 +91,36 @@ export default function App() {
   return (
     <>
       <AccentBoot />
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/dashboard/*" element={
-          <MusicPlayerProvider streamUrlFor={musicApiClient.streamUrl}>
-            <Layout>
-              <Suspense fallback={<div className="p-8 text-sm text-muted">Loading…</div>}>
-                <Routes>
-                  <Route index element={<Overview />} />
-                  <Route path="chat" element={<Chat />} />
-                  <Route path="providers" element={<Providers />} />
-                  <Route path="providers/:id" element={<ProviderDetail />} />
-                  <Route path="combos" element={<Combos />} />
-                  <Route path="keys" element={<Keys />} />
-                  <Route path="logs" element={<Logs />} />
-                  <Route path="warmup-logs" element={<WarmupLogsRedirect />} />
-                  <Route path="test-logs" element={<TestLogsRedirect />} />
-                  <Route path="usage" element={<UsageLog />} />
-                  <Route path="settings" element={<Settings />} />
-                  <Route path="proxies" element={<Proxy />} />
-                  <Route path="music" element={<Music />} />
-                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
-                </Routes>
-              </Suspense>
-            </Layout>
-            <DashboardMusicMiniPlayer />
-          </MusicPlayerProvider>
-        } />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <AuthGate>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/dashboard/*" element={
+            <MusicPlayerProvider streamUrlFor={musicApiClient.streamUrl}>
+              <Layout>
+                <Suspense fallback={<Splash />}>
+                  <Routes>
+                    <Route index element={<Overview />} />
+                    <Route path="chat" element={<Chat />} />
+                    <Route path="providers" element={<Providers />} />
+                    <Route path="providers/:id" element={<ProviderDetail />} />
+                    <Route path="combos" element={<Combos />} />
+                    <Route path="keys" element={<Keys />} />
+                    <Route path="logs" element={<Logs />} />
+                    <Route path="warmup-logs" element={<WarmupLogsRedirect />} />
+                    <Route path="test-logs" element={<TestLogsRedirect />} />
+                    <Route path="usage" element={<UsageLog />} />
+                    <Route path="settings" element={<Settings />} />
+                    <Route path="music" element={<Music />} />
+                    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                  </Routes>
+                </Suspense>
+              </Layout>
+              <DashboardMusicMiniPlayer />
+            </MusicPlayerProvider>
+          } />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AuthGate>
       <ToastHost />
     </>
   );

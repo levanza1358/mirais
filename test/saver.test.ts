@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { compressToolOutput, estimateTokens, isCommandTool, type TokenSaverConfig } from "../src/proxy/saver/compress";
 import { applyTokenSaver } from "../src/proxy/saver/rules";
+import { applyHeadroom } from "../src/proxy/saver/headroom";
 import type { CanonicalRequest } from "../src/shared/types";
 
 const cfg = (over: Partial<TokenSaverConfig> = {}): TokenSaverConfig => ({
@@ -14,6 +15,85 @@ describe("estimateTokens", () => {
     expect(estimateTokens("abcd")).toBe(1);
     expect(estimateTokens("a".repeat(100))).toBe(25);
     expect(estimateTokens("")).toBe(0);
+  });
+});
+
+describe("applyHeadroom", () => {
+  const call = (id: string) => ({ id, type: "function" as const, function: { name: "bash", arguments: "{}" } });
+  const convo = (): CanonicalRequest => ({
+    model: "m",
+    messages: [
+      { role: "system", content: "sys" },
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "", tool_calls: [call("c1")] },
+      { role: "tool", tool_call_id: "c1", content: "r1" },
+      { role: "user", content: "q2" },
+      { role: "assistant", content: "", tool_calls: [call("c2")] },
+      { role: "tool", tool_call_id: "c2", content: "r2" },
+      { role: "user", content: "NEWEST" },
+    ],
+  });
+
+  const orphans = (req: CanonicalRequest) => {
+    const ids = new Set(req.messages.flatMap((m) => m.tool_calls?.map((tc) => tc.id) ?? []));
+    return req.messages.filter((m) => m.role === "tool" && m.tool_call_id && !ids.has(m.tool_call_id));
+  };
+
+  test("disabled → identity", () => {
+    const req = convo();
+    const r = applyHeadroom(req, { enabled: false, keepRecent: 2, summarize: true, maxChars: 100 });
+    expect(r.request.messages).toBe(req.messages);
+    expect(r.tokensSaved).toBe(0);
+  });
+
+  test("never leaves a tool result without its tool call", () => {
+    for (const keepRecent of [2, 3, 4, 5]) {
+      const r = applyHeadroom(convo(), { enabled: true, keepRecent, summarize: true, maxChars: 1_000_000 });
+      expect(orphans(r.request)).toEqual([]);
+    }
+  });
+
+  test("keeps the system prompt and the newest turn when truncating", () => {
+    const req: CanonicalRequest = {
+      model: "m",
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "user", content: "OLD".repeat(2000) },
+        { role: "assistant", content: "ANSWER".repeat(2000) },
+        { role: "user", content: "NEWEST" },
+      ],
+    };
+    const r = applyHeadroom(req, { enabled: true, keepRecent: 2, summarize: false, maxChars: 3000 });
+    expect(r.request.messages[0]).toMatchObject({ role: "system", content: "sys" });
+    expect(r.request.messages.at(-1)).toMatchObject({ content: "NEWEST" });
+    expect(r.tokensSaved).toBeGreaterThan(0);
+  });
+
+  test("keeps an oversized newest turn rather than sending nothing", () => {
+    const req: CanonicalRequest = {
+      model: "m",
+      messages: [
+        { role: "user", content: "OLD".repeat(1000) },
+        { role: "assistant", content: "MID".repeat(1000) },
+        { role: "user", content: "HUGE".repeat(1000) },
+      ],
+    };
+    const r = applyHeadroom(req, { enabled: true, keepRecent: 2, summarize: false, maxChars: 100 });
+    expect(r.request.messages.at(-1)?.content).toBe("HUGE".repeat(1000));
+  });
+
+  test("truncation drops orphaned tool results", () => {
+    const req: CanonicalRequest = {
+      model: "m",
+      messages: [
+        { role: "user", content: "q".repeat(4000) },
+        { role: "assistant", content: "", tool_calls: [call("c1")] },
+        { role: "tool", tool_call_id: "c1", content: "r".repeat(4000) },
+        { role: "user", content: "NEWEST" },
+      ],
+    };
+    const r = applyHeadroom(req, { enabled: true, keepRecent: 4, summarize: false, maxChars: 4200 });
+    expect(orphans(r.request)).toEqual([]);
   });
 });
 

@@ -67,13 +67,13 @@ export class CombosRepo {
     return this.db.query("SELECT * FROM combos WHERE id = ?").get(id) as Combo;
   }
 
-  update(id: string, patch: { name?: string; chain?: string[] }): Combo | null {
+  update(id: string, patch: { name?: string; strategy?: string; chain?: string[] }): Combo | null {
     const cur = this.db.query("SELECT * FROM combos WHERE id = ?").get(id) as Combo | null;
     if (!cur) return null;
     const tx = this.db.transaction(() => {
       this.db
-        .query("UPDATE combos SET name = ?, updated_at = ? WHERE id = ?")
-        .run(patch.name ?? cur.name, new Date().toISOString(), id);
+        .query("UPDATE combos SET name = ?, strategy = ?, updated_at = ? WHERE id = ?")
+        .run(patch.name ?? cur.name, patch.strategy ?? cur.strategy, new Date().toISOString(), id);
       if (patch.chain) {
         this.db.query("DELETE FROM combo_entries WHERE combo_id = ?").run(id);
         patch.chain.forEach((target, i) => {

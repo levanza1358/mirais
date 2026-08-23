@@ -14,6 +14,7 @@ import { Database } from "bun:sqlite";
 import { config } from "../src/config";
 import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
+import { autostartStatus, setAutostart } from "./autostart";
 import { readInstallRoot } from "./install-path";
 import { ensureExtras, ensureExtrasQuiet, ensureYtDlp } from "./extras";
 
@@ -25,7 +26,6 @@ const serverEntry = path.join(installRoot, "src", "server.ts");
 const healthHost = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
 const baseUrl = `http://${healthHost}:${config.port}`;
 const displayUrl = `http://${config.host}:${config.port}`;
-const serviceName = "mirais";
 
 function readPid(): number | null {
   try {
@@ -212,48 +212,9 @@ async function restart(): Promise<void> {
 }
 
 async function autostart(mode: "on" | "off"): Promise<void> {
-  ensureEnvFile();
-  if (process.platform === "win32") {
-    // Use the per-user Startup folder instead of Task Scheduler: creating a
-    // scheduled task requires admin elevation, but dropping a launcher into
-    // the Startup folder does not. Runs after login in the user's session so
-    // bun resolves from PATH.
-    const startupDir = path.join(
-      process.env.APPDATA ?? path.join(process.env.USERPROFILE ?? "", "AppData", "Roaming"),
-      "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
-    );
-    const launcher = path.join(startupDir, "Mirais.cmd");
-    if (mode === "on") {
-      try { fs.mkdirSync(startupDir, { recursive: true }); } catch { /* already exists */ }
-      // `start` already redirects its own output to the log file, so the
-      // launcher needs no redirect — keeping the cmd /c string free of
-      // nested quotes (which would break when repoRoot contains spaces).
-      fs.writeFileSync(
-        launcher,
-        `@echo off\r\ncd /d "${repoRoot}"\r\nstart "" /min cmd /c "bun run scripts\\cli.ts start"\r\n`,
-      );
-      console.log(`mirais autostart enabled (Startup folder: ${launcher})`);
-    } else {
-      try { fs.unlinkSync(launcher); } catch { /* already gone */ }
-      console.log("mirais autostart disabled");
-    }
-    return;
-  }
-
-  const servicePath = `/etc/systemd/system/${serviceName}.service`;
-  if (mode === "on") {
-    const bunPath = process.env.BUN_BIN ?? `${process.env.HOME ?? "/root"}/.bun/bin/bun`;
-    const unit = `[Unit]\nDescription=Mirais AI Gateway\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${repoRoot}\nExecStart=${bunPath} run start\nRestart=on-failure\nRestartSec=3\nEnvironment=NODE_ENV=production\n\n[Install]\nWantedBy=multi-user.target\n`;
-    fs.writeFileSync(servicePath, unit);
-    await shell("sudo", ["systemctl", "daemon-reload"]);
-    await shell("sudo", ["systemctl", "enable", "--now", serviceName]);
-    console.log("mirais autostart enabled (systemd)");
-  } else {
-    await shell("sudo", ["systemctl", "disable", "--now", serviceName]);
-    try { fs.unlinkSync(servicePath); } catch { /* ignore */ }
-    await shell("sudo", ["systemctl", "daemon-reload"]);
-    console.log("mirais autostart disabled");
-  }
+  const status = await setAutostart(mode);
+  if (status.enabled) console.log(`mirais autostart enabled (${status.method}: ${status.detail})`);
+  else console.log("mirais autostart disabled");
 }
 
 async function expose(mode: "on" | "off"): Promise<void> {
@@ -394,8 +355,13 @@ switch (cmd) {
   case "update": await updateApp(); break;
   case "autostart": {
     const mode = process.argv[3];
+    if (mode === undefined || mode === "status") {
+      const s = await autostartStatus();
+      console.log(`mirais autostart ${s.enabled ? "enabled" : "disabled"} (${s.method}: ${s.detail})`);
+      break;
+    }
     if (mode !== "on" && mode !== "off") {
-      console.log("Usage: mirais autostart <on|off>");
+      console.log("Usage: mirais autostart <on|off|status>");
       process.exitCode = 1;
       break;
     }
@@ -420,6 +386,6 @@ switch (cmd) {
   case "fix": await fix(); break;
   case "extras": await ensureExtras(); break;
   default:
-    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix|--json]|fix|update|extras|autostart on|off|expose on|off|uninstall --yes>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix|--json]|fix|update|extras|autostart on|off|status|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }

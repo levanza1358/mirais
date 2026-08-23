@@ -7,6 +7,8 @@ import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/strea
 import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
 import { aggregateXaiChatCompletionsStream, aggregateXaiResponsesStream, ensureFreshXaiToken, fetchXaiChatCompletions, fetchXaiResponses, supportsReasoningEffort, xaiChatCompletionsBody, xaiChatCompletionsStreamToChat, xaiHeaders, xaiRequestBody, xaiRequestContext, xaiResponsesStreamToChat } from "./xai";
 import { metaForModel } from "./modelMeta";
+import { isCacheable, normalizeUsage, promptCacheKey, withAnthropicCacheControl } from "./promptCache";
+import { fetchNoCrossHostRedirect as upstreamFetch } from "../utils/upstreamUrl";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { config } from "../config";
 import { log } from "../utils/logger";
@@ -17,12 +19,17 @@ import { log } from "../utils/logger";
  * (`reasoning_effort`). Providers that don't understand the field simply
  * ignore it, but we still send it for the ones that do.
  */
-function toOpenAiBody(req: CanonicalRequest, modelId: string): Record<string, unknown> {
+function toOpenAiBody(req: CanonicalRequest, modelId: string, sessionId?: string): Record<string, unknown> {
   const body: Record<string, unknown> = { ...req, model: modelId };
   // Don't leak our canonical name back upstream; the upstream already knows the model.
   delete (body as { reasoning?: unknown }).reasoning;
   if (req.reasoning?.effort) {
     body.reasoning_effort = req.reasoning.effort;
+  }
+  // A stable cache key keeps turns of one conversation on the same cache shard.
+  // Providers that don't implement prompt caching ignore the field.
+  if (isCacheable(req)) {
+    body.prompt_cache_key = promptCacheKey(req, sessionId);
   }
   return body;
 }
@@ -63,10 +70,28 @@ export function markSuccess(key: string): void {
   cooldowns.delete(key);
 }
 
-/** Clear a persisted rate-limit window after a successful call. */
-function clearAccountRateLimit(repo: ProvidersRepo | undefined, accountId: string): void {
+/**
+ * Drop cooldown entries whose window has already passed. `isCoolingDown`
+ * prunes lazily, but only for keys that happen to be queried again — a key
+ * that is never routed to stays in the map forever.
+ */
+export function sweepCooldowns(): number {
+  const now = Date.now();
+  let removed = 0;
+  for (const [key, entry] of cooldowns) {
+    if (entry.until <= now) {
+      cooldowns.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/** Clear persisted cooldown windows after a successful call. */
+function clearAccountRateLimit(repo: ProvidersRepo | undefined, accountId: string, modelId?: string): void {
   if (!repo) return;
   try {
+    if (modelId) repo.clearModelCooldown(accountId, modelId);
     repo.updateAccount(accountId, {
       rateLimitedUntil: null,
       lastWarmupStatus: "healthy",
@@ -155,7 +180,7 @@ function codeBuddyHeaders(apiKey: string, accept: "text/event-stream" | "applica
   };
 }
 
-export function buildAccountPlan(candidates: RouteCandidate[]): AccountPlanEntry[] {
+export function buildAccountPlan(candidates: RouteCandidate[], providersRepo?: ProvidersRepo): AccountPlanEntry[] {
   const plan: AccountPlanEntry[] = [];
   for (const candidate of candidates) {
     const rrKey = `${candidate.provider.id}:${candidate.modelId}`;
@@ -164,7 +189,9 @@ export function buildAccountPlan(candidates: RouteCandidate[]): AccountPlanEntry
     const ordered = [...candidate.accounts.slice(start), ...candidate.accounts.slice(0, start)];
     if (roundRobin) rrCursor.set(rrKey, start + 1);
     for (const account of ordered) {
-      if (!isCoolingDown(cooldownKey(candidate, account.id))) plan.push({ candidate, account });
+      if (isCoolingDown(cooldownKey(candidate, account.id))) continue;
+      if (providersRepo?.isModelCoolingDown(account.id, candidate.modelId)) continue;
+      plan.push({ candidate, account });
     }
   }
   return plan;
@@ -193,7 +220,7 @@ export async function executeRequest(
 
   // Flatten candidates × accounts. Priority mode always starts at the lowest
   // account priority; round-robin rotates the first account per model pool.
-  const plan = buildAccountPlan(candidates);
+  const plan = buildAccountPlan(candidates, providersRepo);
 
   if (!plan.length) {
     const next = nextCoolingCandidate(candidates);
@@ -266,7 +293,7 @@ export async function executeRequest(
             ? await openXaiStream(effectiveReq, candidate, accessToken, account, ctx)
             : await openCodexStream(effectiveReq, candidate, account, accessToken, ctx.signal);
           markSuccess(cdKey);
-          clearAccountRateLimit(providersRepo, account.id);
+          clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
           attempts.push({
             provider: candidate.provider.name,
             model: candidate.modelId,
@@ -283,7 +310,7 @@ export async function executeRequest(
           ? await callXai(effectiveReq, candidate, accessToken, account, ctx)
           : await callCodex(effectiveReq, candidate, account, accessToken, ctx.signal);
         markSuccess(cdKey);
-        clearAccountRateLimit(providersRepo, account.id);
+        clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -297,7 +324,7 @@ export async function executeRequest(
       }
 
       if (req.stream) {
-        const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
+        const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId);
         try {
           await result.ready;
         } catch (err) {
@@ -306,7 +333,7 @@ export async function executeRequest(
           throw err;
         }
         markSuccess(cdKey);
-        clearAccountRateLimit(providersRepo, account.id);
+        clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -326,9 +353,9 @@ export async function executeRequest(
         };
       }
 
-      const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal);
+      const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId);
       markSuccess(cdKey);
-      clearAccountRateLimit(providersRepo, account.id);
+      clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
       attempts.push({
         provider: candidate.provider.name,
         model: candidate.modelId,
@@ -376,15 +403,22 @@ export async function executeRequest(
         // loops that replay the same answer.
         if (!payloadTooLarge) markCooldown(cdKey, cooldownMs);
         if (cooldownMs && providersRepo) {
-          // Persist the rate-limit window so the account is skipped on the next
-          // request (not just in-memory), and recovers to healthy automatically
-          // once the window passes — no warmup required.
-          providersRepo.updateAccount(account.id, {
-            rateLimitedUntil: Date.now() + cooldownMs,
-            lastWarmupStatus: "rate_limited",
-            lastWarmupDetail: gErr.message.slice(0, 300),
-            lastWarmupAt: new Date().toISOString(),
-          });
+          // Persist the window so the account is skipped on the next request
+          // (not just in-memory) and recovers automatically once it passes.
+          //
+          // Scope matters: a plain rate limit applies to the model that was
+          // called, so it must not remove the account from rotation for every
+          // other model it serves. Quota exhaustion is account-wide.
+          if (quotaExhausted) {
+            providersRepo.updateAccount(account.id, {
+              rateLimitedUntil: Date.now() + cooldownMs,
+              lastWarmupStatus: "rate_limited",
+              lastWarmupDetail: gErr.message.slice(0, 300),
+              lastWarmupAt: new Date().toISOString(),
+            });
+          } else {
+            providersRepo.setModelCooldown(account.id, candidate.modelId, Date.now() + cooldownMs, gErr.message.slice(0, 300));
+          }
         }
         lastError = gErr;
         log.warn("upstream attempt failed, failing over", {
@@ -421,13 +455,14 @@ async function callUpstream(
   base: string,
   format: "openai" | "anthropic",
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<CanonicalResponse> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
   if (isCodeBuddyProvider(candidate.provider.type)) {
     const forced = withRequiredSystemMessage(req);
-    const res = await fetch(`${base}/chat/completions`, {
+    const res = await upstreamFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
       body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
@@ -441,14 +476,15 @@ async function callUpstream(
 
   if (format === "anthropic") {
     const body = openaiToAnthropicRequest({ ...req, stream: false }, candidate.modelId);
-    const res = await fetch(`${base}/v1/messages`, {
+    const cached = isCacheable(req) ? withAnthropicCacheControl(body as unknown as Record<string, unknown>) : body;
+    const res = await upstreamFetch(`${base}/v1/messages`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(cached),
       signal: combined,
     });
     if (!res.ok) throw await upstreamError(res);
@@ -456,14 +492,18 @@ async function callUpstream(
     return anthropicToOpenaiResponse(data, req.model);
   }
 
-  const res = await fetch(`${base}/chat/completions`, {
+  const res = await upstreamFetch(`${base}/chat/completions`, {
     method: "POST",
     headers: candidate.provider.type === "xai" ? xaiHeaders(apiKey) : openAiHeaders(apiKey),
-    body: JSON.stringify(toOpenAiBody({ ...req, stream: false }, candidate.modelId)),
+    body: JSON.stringify(toOpenAiBody({ ...req, stream: false }, candidate.modelId, sessionId)),
     signal: combined,
   });
   if (!res.ok) throw await upstreamError(res);
-  return (await res.json()) as CanonicalResponse;
+  const data = (await res.json()) as CanonicalResponse;
+  // Cache counters are nested (`prompt_tokens_details`), so normalize rather
+  // than forwarding the upstream usage object verbatim.
+  const usage = normalizeUsage(data.usage);
+  return usage ? { ...data, usage } : data;
 }
 
 /** Cap max_tokens at the model's documented output limit (never hardcoded per
@@ -485,6 +525,7 @@ async function openUpstreamStream(
   base: string,
   format: "openai" | "anthropic",
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null>; ready: Promise<void> }> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -492,7 +533,7 @@ async function openUpstreamStream(
   let res: Response;
   if (isCodeBuddyProvider(candidate.provider.type)) {
     const forced = withRequiredSystemMessage(req);
-    res = await fetch(`${base}/chat/completions`, {
+    res = await upstreamFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
       body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
@@ -500,7 +541,8 @@ async function openUpstreamStream(
     });
   } else if (format === "anthropic") {
     const body = openaiToAnthropicRequest({ ...req, stream: true }, candidate.modelId);
-    res = await fetch(`${base}/v1/messages`, {
+    const cached = isCacheable(req) ? withAnthropicCacheControl(body as unknown as Record<string, unknown>) : body;
+    res = await upstreamFetch(`${base}/v1/messages`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -508,14 +550,14 @@ async function openUpstreamStream(
         "anthropic-version": "2023-06-01",
         accept: "text/event-stream",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(cached),
       signal: combined,
     });
   } else {
-    res = await fetch(`${base}/chat/completions`, {
+    res = await upstreamFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: candidate.provider.type === "xai" ? xaiHeaders(apiKey, true) : openAiHeaders(apiKey, "text/event-stream"),
-      body: JSON.stringify(toOpenAiBody({ ...req, stream: true }, candidate.modelId)),
+      body: JSON.stringify(toOpenAiBody({ ...req, stream: true }, candidate.modelId, sessionId)),
       signal: combined,
     });
   }
@@ -625,7 +667,7 @@ async function openUpstreamStream(
               rejectReady!(new GatewayError(502, "server_error", "Upstream SSE returned an error before producing output"));
             }
             obj.model = req.model;
-            const u = obj.usage as Usage | undefined;
+            const u = normalizeUsage(obj.usage);
             if (u) usage = u;
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
           } catch {
@@ -674,7 +716,7 @@ async function callCodex(
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   // The Codex backend requires stream=true even for non-streaming callers —
   // stream internally and aggregate the events into one chat completion.
-  const res = await fetch(codexUrl("/responses"), {
+  const res = await upstreamFetch(codexUrl("/responses"), {
     method: "POST",
     headers: codexHeaders(account, accessToken, true),
     body: JSON.stringify(codexRequestBody(req, candidate.modelId, true)),
@@ -694,7 +736,7 @@ async function openCodexStream(
 ): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const res = await fetch(codexUrl("/responses"), {
+  const res = await upstreamFetch(codexUrl("/responses"), {
     method: "POST",
     headers: codexHeaders(account, accessToken, true),
     body: JSON.stringify(codexRequestBody(req, candidate.modelId, true)),

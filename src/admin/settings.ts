@@ -9,12 +9,31 @@ import { AdminError } from "../shared/errors";
 import { config } from "../config";
 import { log } from "../utils/logger";
 import { normalizeRoutingPolicy } from "../proxy/router";
+import { cooldownSnapshot } from "../proxy/executor";
+import { totalInFlight } from "../ratelimit";
+import { autostartStatus, setAutostart } from "../../scripts/autostart";
 
 function fsSyncExists(p: string): boolean {
   try { return fs.statSync(p).isFile(); } catch { return false; }
 }
 function fsSyncSize(p: string): number {
   try { return fs.statSync(p).size; } catch { return 0; }
+}
+
+/**
+ * Process memory. `rss` is what the OS accounts for; `heap_used` is what the JS
+ * heap holds. A growing `external`/`array_buffers` with a flat heap points at
+ * stream buffers rather than a JS leak.
+ */
+function memorySnapshot() {
+  const m = process.memoryUsage();
+  return {
+    rss_bytes: m.rss,
+    heap_used_bytes: m.heapUsed,
+    heap_total_bytes: m.heapTotal,
+    external_bytes: m.external,
+    array_buffers_bytes: m.arrayBuffers,
+  };
 }
 
 export function settingsRoutes(db: Database) {
@@ -114,6 +133,20 @@ export function logRoutes(db: Database) {
     });
 }
 
+export function autostartRoutes() {
+  return new Elysia({ prefix: "/api/autostart" })
+    .get("/", () => autostartStatus())
+    .post("/", async ({ body }) => {
+      const enabled = (body as { enabled?: unknown } | null)?.enabled;
+      if (typeof enabled !== "boolean") throw new AdminError(400, "Body must be { enabled: boolean }");
+      try {
+        return await setAutostart(enabled ? "on" : "off");
+      } catch (err) {
+        throw new AdminError(400, err instanceof Error ? err.message : "Could not change autostart");
+      }
+    });
+}
+
 export function healthRoutes(db: Database) {
   const providers = new ProvidersRepo(db);
   return new Elysia()
@@ -142,6 +175,14 @@ export function healthRoutes(db: Database) {
           db_path: config.dbPath,
           db_exists: fsSyncExists(config.dbPath),
           size_bytes: fsSyncSize(config.dbPath),
+        },
+        // Runtime health. In-flight counts were already tracked for per-key
+        // concurrency limits but never exposed, which made it impossible to
+        // tell a hung stream apart from an idle gateway.
+        runtime: {
+          memory: memorySnapshot(),
+          in_flight: totalInFlight(),
+          active_cooldowns: cooldownSnapshot().length,
         },
       };
     });

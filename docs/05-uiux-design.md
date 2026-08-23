@@ -72,6 +72,7 @@ Centered card on a subtle aurora-gradient background: logo mark, "Mirais" wordma
 ```
 - Range switcher persists in localStorage. Empty state: friendly illustration + "Send your first request" with copyable curl.
 - **Connect your app card:** copyable gateway Base URL (`http://localhost:1463/v1`) + the single default API key, always visible with a copy button (optional eye toggle to mask). If no key exists, one `default` key is auto-created. The server stores the key plaintext (recoverable, single-user local install); the plaintext is also mirrored in the browser's `localStorage` so it stays copyable across sessions. Keys created on the API keys page are remembered the same way and forgotten on delete.
+- **Runtime health card:** polls `/api/health` every 10 seconds and shows in-flight requests, active cooldowns, RSS, heap usage, and array-buffer memory.
 
 ### 3.2.1 Chat (`/chat`)
 **Purpose:** talk to any routed model without leaving the dashboard.
@@ -114,13 +115,13 @@ Header: back link, provider icon tile, name + type badge + disabled badge, "Get 
 ### 3.5 Combos (`/combos`)
 - List of combos as cards; each card = vertical chain with numbered steps and connector line.
 - **Editor modal:** name + drag-and-drop sortable list of targets (autocomplete from all enabled models/aliases), remove buttons, "add step".
-- Strategy selector: `sequential` (v1 only; UI hints "parallel/judge — coming soon" disabled).
+- Strategy selector: `sequential` or `round_robin`; round-robin rotates the leading target while preserving the rest as ordered fallbacks.
 - "Test" button → sends a tiny live inference request to every provider/model candidate in order and shows success/failure, HTTP status, latency, selected account, and error detail.
 - Empty state with sample `never-stop` template one-click create.
 
 ### 3.6 API Keys (`/keys`)
 Table: Label, Key (prefix + copy-disabled note), Created, Last used, Limits (rpm/concurrency/budget chips), Usage today (bar), Enabled, Actions.
-- **Create modal:** label; optional allowed-models multi-select; optional limits (numeric inputs with "∞" placeholder); expiry date picker. On success → **one-time reveal screen**: full key in mono, copy button, "you won't see this again" warning, curl snippet ready to paste into Claude Code/Cursor settings.
+- **Create/edit modal:** label, newline-separated allowed models, RPM, maximum concurrent requests, daily token budget, and expiry. An empty allowed-model list means unrestricted.
 - Disable → row greys out; revoke → confirm modal ("existing clients will break").
 
 ### 3.7 Logs (`/logs`)
@@ -135,7 +136,8 @@ Tabbed page (`General · Token Saver · Security · Data · About`):
 1. **General** — port/host display (from env, read-only), theme (dark/light/system), accent color picker, and session TTL.
 2. **XAI IMAP** — a dedicated System navigation page for the optional xAI farming workflow: Gmail recipient, app password, email domain, headless Camoufox option, and OTP polling controls.
 2. **Token Saver** — master switch; per-rule toggles (git diff, grep, ls/tree, long-output) with live demo panel: paste tool output → shows compressed result + token delta.
-3. **Security** — "Never ask password by default" toggle (pre-checks the login checkbox; remember-me sessions last 30 days, standard sessions `SESSION_TTL_HOURS`); change dashboard password; view active sessions (revoke); note about `DATA_DIR` permissions.
+3. **Dashboard password** (General tab) — change the password (min 8 characters), set how many hours a login lasts before the password is asked again, turn the password off entirely, or sign out. Enabled by default with `12345678`; changing or turning it off signs out every other session. Login offers "remember this browser for 30 days". It guards the dashboard only — `/v1/*` gateway traffic is unaffected.
+4. **Start on boot** (General tab) — a switch that enables or disables automatic startup: the Windows Startup folder (starts after login) or a systemd unit (starts at boot without a login). The switch is disabled with an explanatory note when the server cannot write the unit (no root / no passwordless sudo).
 4. **Data** — DB size, retention days slider, "backup now", export/import config JSON, danger zone: wipe logs / factory reset (type-to-confirm).
 5. **About** — version, uptime, links to docs, license.
 
@@ -147,7 +149,8 @@ Tabbed page (`General · Token Saver · Security · Data · About`):
 - **Copy-to-clipboard** everywhere a key/endpoint appears; check-mark feedback.
 - **Keyboard:** ⌘K palette, `g o/p/m/c/k/l/s` go-to shortcuts, `Esc` closes modals/drawers.
 - **Accessibility:** full focus rings, aria-labels on icon buttons, contrast AA on both themes.
-- **Realtime:** Overview & Logs poll every 5s (SSE upgrade path in v2); health dot polls `/health` every 10s.
+- **Realtime:** Overview activity and Logs poll every 5s; runtime health and the health dot poll every 10s.
+- **Reduced motion:** `prefers-reduced-motion` disables page/fade animations and smooth scrolling and removes transition duration.
 
 ## 5. Component Inventory (build once, reuse)
 

@@ -172,7 +172,7 @@ export default function Chat() {
   }
 
   const composer = (
-    <div className="rounded-3xl border border-border/80 bg-bg-surface/90 shadow-[0_10px_40px_rgba(0,0,0,0.28)] backdrop-blur">
+    <div className="rounded-xl border border-border bg-bg-surface">
       <textarea
         value={input}
         onChange={(e) => setInput(e.target.value)}

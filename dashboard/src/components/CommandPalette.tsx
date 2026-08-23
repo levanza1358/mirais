@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import {
   Boxes,
   GitBranch,
-  Globe2,
   KeyRound,
   LayoutDashboard,
   Music,
@@ -26,7 +25,6 @@ const COMMANDS: Command[] = [
   { id: "nav-overview", label: "Open Overview", hint: "Dashboard", icon: LayoutDashboard, run: ({ navigate, close }) => { navigate("/dashboard"); close(); } },
   { id: "nav-chat", label: "Open Chat", icon: LayoutDashboard, run: ({ navigate, close }) => { navigate("/dashboard/chat"); close(); } },
   { id: "nav-providers", label: "Open Providers", icon: Boxes, run: ({ navigate, close }) => { navigate("/dashboard/providers"); close(); } },
-  { id: "nav-proxies", label: "Open Proxy Pool", icon: Globe2, run: ({ navigate, close }) => { navigate("/dashboard/proxies"); close(); } },
   { id: "nav-combos", label: "Open Combos", icon: GitBranch, run: ({ navigate, close }) => { navigate("/dashboard/combos"); close(); } },
   { id: "nav-keys", label: "Open API Keys", icon: KeyRound, run: ({ navigate, close }) => { navigate("/dashboard/keys"); close(); } },
   { id: "nav-logs", label: "Open Logs", icon: ScrollText, run: ({ navigate, close }) => { navigate("/dashboard/logs"); close(); } },

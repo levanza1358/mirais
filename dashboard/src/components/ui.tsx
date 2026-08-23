@@ -1,49 +1,57 @@
-import { Children, isValidElement, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { Check, ChevronDown, X, Loader2 } from "lucide-react";
+import { isValidElement, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { Button as ShadcnButton } from "@/components/ui/button";
+import { Input as ShadcnInput } from "@/components/ui/input";
+import { Badge as ShadcnBadge } from "@/components/ui/badge";
+import { Card as ShadcnCard } from "@/components/ui/card";
+import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select as ShadcnSelect,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch as ShadcnSwitch } from "@/components/ui/switch";
 
-// ── Button ──
+// ── Button (legacy API → shadcn) ──
 export function Button({
   variant = "primary",
   size = "md",
   loading,
   className = "",
   children,
+  disabled,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "ghost" | "danger" | "outline";
   size?: "sm" | "md" | "lg";
   loading?: boolean;
 }) {
-  const base = "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none shadow-sm";
-  const sizes = { sm: "h-9 px-3.5 text-xs", md: "h-10 px-4.5 text-sm", lg: "h-14 px-10 text-base" };
-  const variants = {
-    primary: "bg-accent text-white hover:bg-accent/85 hover:shadow-[0_10px_30px_rgba(124,92,255,0.28)]",
-    ghost: "text-text-muted hover:text-text-primary hover:bg-bg-raised/80",
-    danger: "bg-danger/15 text-danger hover:bg-danger/25",
-    outline: "border border-border/80 bg-bg-surface/70 text-text-primary hover:bg-bg-raised/80 hover:border-accent/30",
-  };
+  const shadcnVariant = variant === "primary" ? "default" : variant === "danger" ? "destructive" : variant;
+  const shadcnSize = size === "sm" ? "sm" : size === "lg" ? "lg" : "default";
   return (
-    <button className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} disabled={loading || props.disabled} {...props}>
-      {loading && <Loader2 size={14} className="animate-spin" />}
+    <ShadcnButton variant={shadcnVariant} size={shadcnSize} className={className} disabled={loading || disabled} {...props}>
+      {loading && <Loader2 className="animate-spin" />}
       {children}
-    </button>
+    </ShadcnButton>
   );
 }
 
 // ── Input ──
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      className={`h-9 w-full rounded-lg border border-border bg-bg-surface px-3 text-sm text-text-primary placeholder:text-text-muted/60 focus:border-accent focus:outline-none ${className}`}
-      {...props}
-    />
-  );
+  return <ShadcnInput className={className} {...props} />;
 }
 
+// ── Select (legacy <option> API → Radix) ──
 type SelectChangeEvent = { target: { value: string }; currentTarget: { value: string } };
-type SelectOption = { value: string; label: ReactNode; disabled: boolean };
-
 export function Select({
   className = "",
   children,
@@ -69,222 +77,80 @@ export function Select({
   title?: string;
   "aria-label"?: string;
 }) {
-  const options: SelectOption[] = Children.toArray(children).flatMap((child) => {
-    if (!isValidElement<{ value?: string | number; disabled?: boolean; children?: ReactNode }>(child) || child.type !== "option") return [];
-    return [{ value: String(child.props.value ?? ""), label: child.props.children, disabled: child.props.disabled ?? false }];
-  });
+  const options = (Array.isArray(children) ? children : [children]).flatMap((child) =>
+    isValidElement<{ value?: string | number; disabled?: boolean; children?: ReactNode }>(child) && child.type === "option"
+      ? [child]
+      : [],
+  );
   const initial = Array.isArray(defaultValue) ? defaultValue[0] : defaultValue;
-  const [internalValue, setInternalValue] = useState(String(initial ?? options[0]?.value ?? ""));
+  const [internalValue, setInternalValue] = useState(String(initial ?? options[0]?.props.value ?? ""));
   const selectedValue = String((Array.isArray(value) ? value[0] : value) ?? internalValue);
-  const selected = options.find((option) => option.value === selectedValue);
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [position, setPosition] = useState({ left: 0, top: 0, width: 0 });
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const listboxId = useId();
 
-  function positionMenu() {
-    const rect = buttonRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setPosition({ left: rect.left, top: rect.bottom + 6, width: rect.width });
-  }
-
-  function choose(option: SelectOption) {
-    if (option.disabled) return;
-    if (value === undefined) setInternalValue(option.value);
-    const target = { value: option.value };
+  const choose = (next: string) => {
+    if (value === undefined) setInternalValue(next);
+    const target = { value: next };
     onChange?.({ target, currentTarget: target });
-    setOpen(false);
-    buttonRef.current?.focus();
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    positionMenu();
-    setActiveIndex(Math.max(0, options.findIndex((option) => option.value === selectedValue)));
-    const close = (event: MouseEvent) => {
-      const node = event.target as Node;
-      if (!buttonRef.current?.contains(node) && !menuRef.current?.contains(node)) setOpen(false);
-    };
-    const reposition = () => positionMenu();
-    document.addEventListener("mousedown", close);
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", reposition, true);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-    };
-  }, [open, selectedValue]);
+  };
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        id={id}
-        title={title}
-        role="combobox"
-        aria-label={ariaLabel}
-        aria-controls={listboxId}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        disabled={disabled}
-        onClick={() => { positionMenu(); setOpen((current) => !current); }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") return setOpen(false);
-          if (event.key === "Tab") return setOpen(false);
-          if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          if (!options.length) return;
-          if (!open) return setOpen(true);
-          if (event.key === "Enter" || event.key === " ") return options[activeIndex] && choose(options[activeIndex]);
-          const direction = event.key === "ArrowDown" ? 1 : -1;
-          setActiveIndex((current) => (current + direction + options.length) % options.length);
-        }}
-        className={`flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm text-text-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:pointer-events-none disabled:opacity-50 ${className}`}
-      >
-        <span className="min-w-0 truncate">{selected?.label ?? "Select…"}</span>
-        <ChevronDown size={14} className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-      {name && <input type="hidden" name={name} value={selectedValue} required={required} />}
-      {open && createPortal(
-        <div
-          ref={menuRef}
-          id={listboxId}
-          role="listbox"
-          aria-label={ariaLabel}
-          style={{ left: position.left, top: position.top, minWidth: position.width }}
-          className="fixed z-[300] max-h-64 max-w-[min(32rem,calc(100vw-1rem))] overflow-y-auto rounded-xl border border-border/90 bg-bg-raised/98 p-1.5 shadow-[0_18px_55px_rgba(0,0,0,0.45)] backdrop-blur-xl"
-        >
-          {options.map((option, index) => (
-            <button
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === selectedValue}
-              disabled={option.disabled}
-              onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => choose(option)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors disabled:opacity-40 ${index === activeIndex ? "bg-accent/15 text-text-primary" : "text-text-muted hover:bg-bg-surface hover:text-text-primary"}`}
-            >
-              <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              {option.value === selectedValue && <Check size={14} className="shrink-0 text-accent" />}
-            </button>
+      <ShadcnSelect value={selectedValue} onValueChange={choose} disabled={disabled} required={required}>
+        <SelectTrigger id={id} title={title} aria-label={ariaLabel} className={`w-full ${className}`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          {options.map((option) => (
+            <SelectItem key={String(option.props.value)} value={String(option.props.value)} disabled={option.props.disabled}>
+              {option.props.children}
+            </SelectItem>
           ))}
-        </div>,
-        document.body,
-      )}
+        </SelectContent>
+      </ShadcnSelect>
+      {name && <input type="hidden" name={name} value={selectedValue} required={required} />}
     </>
   );
 }
 
 // ── Switch ──
 export function Switch({ checked, onChange, disabled, "aria-label": ariaLabel }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; "aria-label"?: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label={ariaLabel}
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-all duration-200 disabled:opacity-40 ${checked ? "border-accent bg-accent/90" : "border-border bg-bg-raised"}`}
-    >
-      <span
-        className={`absolute left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${checked ? "translate-x-5" : "translate-x-0"}`}
-      />
-    </button>
-  );
+  return <ShadcnSwitch checked={checked} onCheckedChange={onChange} disabled={disabled} aria-label={ariaLabel} />;
 }
 
 // ── Badge ──
 export function Badge({ tone = "muted", children }: { tone?: "muted" | "success" | "warning" | "danger" | "accent"; children: ReactNode }) {
+  if (tone === "muted") return <ShadcnBadge variant="secondary">{children}</ShadcnBadge>;
+  if (tone === "danger") return <ShadcnBadge variant="destructive">{children}</ShadcnBadge>;
   const tones = {
-    muted: "bg-bg-raised text-text-muted",
     success: "bg-success/15 text-success",
     warning: "bg-warning/15 text-warning",
-    danger: "bg-danger/15 text-danger",
     accent: "bg-accent/15 text-accent",
-  };
-  return <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${tones[tone]}`}>{children}</span>;
+  } as const;
+  return <ShadcnBadge className={tones[tone]}>{children}</ShadcnBadge>;
 }
 
 // ── Card ──
 export function Card({ className = "", children }: { className?: string; children: ReactNode }) {
-  return <div className={`rounded-2xl border border-border/80 bg-bg-surface/90 p-5 shadow-[0_10px_30px_rgba(0,0,0,0.18)] backdrop-blur ${className}`}>{children}</div>;
+  return <ShadcnCard className={`gap-4 p-5 ${className}`}>{children}</ShadcnCard>;
 }
 
-// ── Modal ──
+// ── Modal (legacy open/onClose API → Radix Dialog) ──
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCloseRef.current();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
-
-    // Lock background scroll while the modal is open.
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    // Focus the panel so keyboard users start inside the modal.
-    const panel = panelRef.current;
-    panel?.focus();
-
-    // Simple focus trap: keep Tab cycling within the panel.
-    const onTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !panel) return;
-      const focusables = panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), textarea, input:not([disabled]), select, [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      const active = document.activeElement as HTMLElement | null;
-      if (e.shiftKey && (active === first || active === panel)) { last.focus(); e.preventDefault(); }
-      else if (!e.shiftKey && active === last) { first.focus(); e.preventDefault(); }
-    };
-    window.addEventListener("keydown", onTab);
-
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("keydown", onTab);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open]);
-  if (!open) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-[200]">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="absolute inset-0 overflow-y-auto">
-        <div className="flex min-h-full items-center justify-center px-4 py-8 sm:px-6">
-          <div
-            ref={panelRef}
-            tabIndex={-1}
-            role="dialog"
-            aria-modal="true"
-            aria-label={title}
-            className={`relative my-auto w-full ${wide ? "max-w-2xl" : "max-w-md"} rounded-2xl border border-border/90 bg-bg-surface/96 p-6 shadow-[0_24px_90px_rgba(0,0,0,0.42)] backdrop-blur-xl focus:outline-none`}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-base font-semibold">{title}</h2>
-              <button onClick={onClose} className="text-text-muted hover:text-text-primary" aria-label="Close">
-                <X size={18} />
-              </button>
-            </div>
-            {children}
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className={wide ? "sm:max-w-2xl" : "sm:max-w-md"}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="sr-only">{title}</DialogDescription>
+        </DialogHeader>
+        {children}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -331,7 +197,7 @@ export function EmptyState({ icon, title, hint, action }: { icon?: ReactNode; ti
 
 // ── Skeleton ──
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-bg-raised ${className}`} />;
+  return <ShadcnSkeleton className={className} />;
 }
 
 // ── CopyButton ──
@@ -388,31 +254,29 @@ export function ToastHost() {
       {items.map((t) => (
         <div
           key={t.id}
-          className={`pointer-events-auto overflow-hidden rounded-2xl border shadow-2xl backdrop-blur ${
-            t.tone === "error"
-              ? "border-danger/35 bg-[#221214]/95 text-danger"
-              : "border-accent/30 bg-[#0d1b1a]/95 text-text-primary"
+          className={`pointer-events-auto overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg ${
+            t.tone === "error" ? "border-destructive/35" : "border-border"
           }`}
         >
-          <div className="flex items-start gap-3 px-4 py-3.5">
-            <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-xs font-semibold ${
-              t.tone === "error" ? "bg-danger/15 text-danger" : "bg-success/15 text-success"
+          <div className="flex items-start gap-3 px-4 py-3">
+            <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold ${
+              t.tone === "error" ? "bg-destructive/15 text-destructive" : "bg-success/15 text-success"
             }`}>
               {t.tone === "error" ? "!" : "AI"}
             </div>
             <div className="min-w-0 flex-1">
               <div className="mb-1 flex items-center justify-between gap-2">
-                <span className={`text-xs font-semibold uppercase tracking-[0.18em] ${t.tone === "error" ? "text-danger" : "text-success"}`}>
+                <span className={`text-xs font-semibold uppercase tracking-[0.18em] ${t.tone === "error" ? "text-destructive" : "text-success"}`}>
                   {t.title ?? (t.tone === "error" ? "Model error" : "Model reply")}
                 </span>
                 <span className="text-[11px] text-text-muted">just now</span>
               </div>
-              <p className={`line-clamp-5 whitespace-pre-wrap text-sm leading-5 ${t.tone === "error" ? "text-danger" : "text-text-primary"}`}>
+              <p className={`line-clamp-5 whitespace-pre-wrap text-sm leading-5 ${t.tone === "error" ? "text-destructive" : "text-text-primary"}`}>
                 {t.msg}
               </p>
             </div>
           </div>
-          <div className={`h-1 w-full ${t.tone === "error" ? "bg-danger/40" : "bg-success/40"}`} />
+          <div className={`h-px w-full ${t.tone === "error" ? "bg-destructive/40" : "bg-success/40"}`} />
         </div>
       ))}
     </div>

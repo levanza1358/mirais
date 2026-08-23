@@ -1,9 +1,8 @@
-import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, KeyRound, Radio, Terminal } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { keys, stats } from "../api";
-import { Button, Card, CopyButton, Skeleton } from "../components/ui";
+import { Button, CopyButton, Skeleton } from "../components/ui";
 import { storedKeyFor } from "../keyStore";
 
 function fmtNum(n: number | undefined): string {
@@ -21,11 +20,6 @@ export default function Landing() {
     queryFn: () => stats.summary(30),
     staleTime: 60_000,
   });
-  const byModelQ = useQuery({
-    queryKey: ["stats", "by-model", 30],
-    queryFn: () => stats.byModel(30),
-    staleTime: 60_000,
-  });
   const keysQ = useQuery({
     queryKey: ["keys"],
     queryFn: keys.list,
@@ -35,10 +29,6 @@ export default function Landing() {
   const totalRequests = summaryQ.data?.requests ?? 0;
   const totalTokens = (summaryQ.data?.input_tokens ?? 0) + (summaryQ.data?.output_tokens ?? 0);
   const successRate = summaryQ.data?.success_rate;
-  const topModels = useMemo(
-    () => (byModelQ.data ?? []).slice().sort((a, b) => b.requests - a.requests).slice(0, 5),
-    [byModelQ.data],
-  );
 
   const primaryKey = keysQ.data?.[0];
   const visibleKey = primaryKey?.key ?? storedKeyFor(primaryKey?.key_prefix ?? "") ?? (primaryKey ? `${primaryKey.key_prefix}${"•".repeat(18)}` : "mirais-••••••••••••••••");
@@ -48,108 +38,55 @@ export default function Landing() {
     : "http://127.0.0.1:1463/v1";
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,#1a2030_0%,#0b0e14_45%,#090c12_100%)] text-text-primary">
-      <main className="mx-auto max-w-5xl px-5 pb-16 pt-16 sm:pt-24">
-        <section className="mb-10 text-center">
-          <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-            Welcome to <span className="text-accent">Mirais Proxy</span>
-          </h1>
-        </section>
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
+      <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 py-16">
+        <img src="/icon.png" alt="" className="mb-6 size-11 rounded-lg rise-in" />
+        <h1 className="text-3xl font-semibold tracking-tight rise-in" style={{ "--rise-delay": "60ms" } as React.CSSProperties}>
+          Mirais
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground rise-in" style={{ "--rise-delay": "120ms" } as React.CSSProperties}>
+          Self-hosted AI gateway. One endpoint for every provider.
+        </p>
 
-        <section className="mb-8 grid gap-3 sm:grid-cols-3">
-          <StatCard label="Total requests · 30d" value={summaryQ.isLoading ? null : fmtNum(totalRequests)} loading={summaryQ.isLoading} />
-          <StatCard label="Total tokens · 30d" value={summaryQ.isLoading ? null : fmtNum(totalTokens)} loading={summaryQ.isLoading} />
-          <StatCard
-            label="Success rate"
+        <dl className="group mt-10 grid grid-cols-3 gap-6 border-y border-border py-6 rise-in" style={{ "--rise-delay": "180ms" } as React.CSSProperties}>
+          <Stat label="Requests" value={summaryQ.isLoading ? null : fmtNum(totalRequests)} />
+          <Stat label="Tokens" value={summaryQ.isLoading ? null : fmtNum(totalTokens)} />
+          <Stat
+            label="Success"
             value={summaryQ.isLoading ? null : successRate === undefined ? "—" : `${(successRate * 100).toFixed(1)}%`}
-            loading={summaryQ.isLoading}
           />
-        </section>
+        </dl>
 
-        <section className="mb-8 grid gap-4 md:grid-cols-2">
-          <Card>
-            <div className="mb-3 flex items-center gap-2">
-              <Terminal size={14} className="text-accent" />
-              <h3 className="text-sm font-semibold">Base URL</h3>
-            </div>
-            <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-bg-base/70 px-3 py-2.5">
-              <code className="flex-1 truncate font-mono text-xs text-accent">{baseUrl}</code>
-              <CopyButton text={baseUrl} />
-            </div>
-          </Card>
-          <Card>
-            <div className="mb-3 flex items-center gap-2">
-              <KeyRound size={14} className="text-accent" />
-              <h3 className="text-sm font-semibold">API key</h3>
-            </div>
-            <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-bg-base/70 px-3 py-2.5">
-              <code className="flex-1 truncate font-mono text-xs text-accent">{visibleKey}</code>
-              {primaryKey?.key ? <CopyButton text={primaryKey.key} /> : <CopyButton text="no-key-yet" disabled />}
-            </div>
-          </Card>
-        </section>
+        <div className="mt-8 space-y-3 rise-in" style={{ "--rise-delay": "240ms" } as React.CSSProperties}>
+          <Field label="Base URL" value={baseUrl} copy={baseUrl} />
+          <Field label="API key" value={visibleKey} copy={primaryKey?.key ?? undefined} />
+        </div>
 
-        <section className="mb-10">
-          <div className="mb-3 flex items-center gap-2">
-            <Radio size={14} className="text-accent" />
-            <h3 className="text-sm font-semibold">Top 5 models used · 30d</h3>
-          </div>
-          {byModelQ.isLoading ? (
-            <Card>
-              <div className="space-y-2">
-                {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
-              </div>
-            </Card>
-          ) : topModels.length === 0 ? (
-            <Card>
-              <p className="py-6 text-center text-xs text-text-muted">No usage yet. Send a request through the gateway to see your top models here.</p>
-            </Card>
-          ) : (
-            <Card className="p-0">
-              <ol className="divide-y divide-border">
-                {topModels.map((row, idx) => {
-                  const pct = totalRequests ? Math.max(2, Math.round((row.requests / totalRequests) * 100)) : 0;
-                  return (
-                    <li key={`${row.model}-${idx}`} className="flex items-center gap-3 px-4 py-3">
-                      <span className="w-6 text-center font-mono text-[11px] text-text-muted">{idx + 1}</span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-mono text-xs text-text-primary">{row.model ?? "—"}</p>
-                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-bg-raised">
-                          <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-xs font-semibold text-text-primary">{fmtNum(row.requests)}</p>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            </Card>
-          )}
-        </section>
-
-        <section className="flex flex-col items-center gap-3 pt-2">
-          <Button size="lg" variant="primary" onClick={() => navigate("/dashboard")}>
-            Dashboard <ArrowRight size={16} />
-          </Button>
-        </section>
+        <Button size="lg" className="group mt-10 self-start" onClick={() => navigate("/dashboard")}>
+          Open dashboard <ArrowRight className="transition-transform duration-300 group-hover:translate-x-1" />
+        </Button>
       </main>
-
-      <footer className="mx-auto flex max-w-5xl items-center justify-center px-5 py-5 text-[11px] text-text-muted">
-        <span>© {new Date().getFullYear()} Mirais · local AI gateway</span>
-      </footer>
     </div>
   );
 }
 
-function StatCard({ label, value, loading }: { label: string; value: string | null; loading: boolean }) {
+function Stat({ label, value, delay = 0 }: { label: string; value: string | null; delay?: number }) {
   return (
-    <Card className="border-accent/15 bg-[linear-gradient(160deg,rgba(124,92,255,0.12),rgba(18,22,31,0.92)_42%,rgba(18,22,31,0.96))]">
-      <p className="text-[10px] uppercase tracking-[0.22em] text-accent/80">{label}</p>
-      <p className="mt-2 text-3xl font-semibold tracking-tight">
-        {loading ? <Skeleton className="h-8 w-24" /> : value}
-      </p>
-    </Card>
+    <div className="hover-nudge" style={{ transitionDelay: `${delay}ms` }}>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">
+        {value === null ? <Skeleton className="h-7 w-16" /> : value}
+      </dd>
+    </div>
+  );
+}
+
+function Field({ label, value, copy }: { label: string; value: string; copy?: string }) {
+  return (
+    <div className="hover-lift group flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+      <span className="w-16 shrink-0 text-xs text-muted-foreground">{label}</span>
+      <code className="min-w-0 flex-1 truncate font-mono text-xs">{value}</code>
+      <CopyButton text={copy ?? ""} disabled={!copy} />
+    </div>
   );
 }

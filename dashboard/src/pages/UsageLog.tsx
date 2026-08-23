@@ -33,6 +33,7 @@ export default function UsageLog() {
   const totalReq = rows.reduce((n, r) => n + r.requests, 0);
   const totalIn = rows.reduce((n, r) => n + r.input_tokens, 0);
   const totalOut = rows.reduce((n, r) => n + r.output_tokens, 0);
+  const totalCached = rows.reduce((n, r) => n + (r.cached_tokens ?? 0), 0);
   const totalErrors = rows.reduce((n, r) => n + r.errors, 0);
   const avgLatency = rows.length ? Math.round(rows.reduce((n, r) => n + r.avg_latency_ms, 0) / rows.length) : 0;
   const chartData = useMemo(
@@ -59,6 +60,8 @@ export default function UsageLog() {
         errors: r.errors,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,
+        cached_tokens: r.cached_tokens ?? 0,
+        cache_write_tokens: r.cache_write_tokens ?? 0,
         avg_latency_ms: Math.round(r.avg_latency_ms),
         last_used: r.last_ts,
       })),
@@ -80,7 +83,7 @@ export default function UsageLog() {
       </PageHeader>
 
       <div className="mb-6 grid gap-4 xl:grid-cols-[1.35fr_0.95fr]">
-        <Card className="overflow-hidden border-accent/20 bg-[linear-gradient(135deg,rgba(124,92,255,0.12),rgba(18,22,31,0.92)_42%,rgba(18,22,31,0.96))]">
+        <Card className="overflow-hidden border-accent/20">
           <div className="flex h-full flex-col justify-between gap-6">
             <div>
               <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-accent">
@@ -91,9 +94,10 @@ export default function UsageLog() {
                 This page focuses on requests, tokens, errors, and latency. All cost or currency displays have been removed from this dashboard.
               </p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-5">
               <Stat label="Requests" value={fmtNum(totalReq)} />
               <Stat label="Input tokens" value={fmtNum(totalIn)} />
+              <Stat label="Cached tokens" value={totalCached ? fmtNum(totalCached) : "—"} />
               <Stat label="Output tokens" value={fmtNum(totalOut)} />
               <Stat label="Errors" value={fmtNum(totalErrors)} />
             </div>
@@ -141,9 +145,9 @@ export default function UsageLog() {
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={chartData}>
                   <XAxis dataKey="name" hide />
-                  <YAxis tick={{ fontSize: 11, fill: "#8B94A7" }} stroke="#232A3A" width={40} />
-                  <Tooltip contentStyle={{ background: "#12161F", border: "1px solid #232A3A", borderRadius: 8, fontSize: 12 }} />
-                  <Bar dataKey="requests" fill="#7C5CFF" radius={[8, 8, 0, 0]} />
+                  <YAxis tick={{ fontSize: 11, fill: "#85858f" }} stroke="#232328" width={40} />
+                  <Tooltip contentStyle={{ background: "#17171b", border: "1px solid #232328", borderRadius: 8, fontSize: 12 }} />
+                  <Bar dataKey="requests" fill="#7C5CFF" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </Card>
@@ -163,8 +167,8 @@ export default function UsageLog() {
                     </linearGradient>
                   </defs>
                   <XAxis dataKey="name" hide />
-                  <YAxis tick={{ fontSize: 11, fill: "#8B94A7" }} stroke="#232A3A" width={40} />
-                  <Tooltip contentStyle={{ background: "#12161F", border: "1px solid #232A3A", borderRadius: 8, fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 11, fill: "#85858f" }} stroke="#232328" width={40} />
+                  <Tooltip contentStyle={{ background: "#17171b", border: "1px solid #232328", borderRadius: 8, fontSize: 12 }} />
                   <Area type="monotone" dataKey="input" stroke="#7C5CFF" fill="url(#usageInput)" strokeWidth={2} />
                   <Area type="monotone" dataKey="output" stroke="#34D399" fill="url(#usageOutput)" strokeWidth={2} />
                 </AreaChart>
@@ -182,6 +186,7 @@ export default function UsageLog() {
                   <th className="px-4 py-3 text-right font-medium">Requests</th>
                   <th className="px-4 py-3 text-right font-medium">Errors</th>
                   <th className="px-4 py-3 text-right font-medium">Input</th>
+                  <th className="px-4 py-3 text-right font-medium" title="Prompt tokens served from the provider's cache">Cached</th>
                   <th className="px-4 py-3 text-right font-medium">Output</th>
                   <th className="px-4 py-3 text-right font-medium">Avg latency</th>
                   <th className="px-4 py-3 text-right font-medium">Last used</th>
@@ -197,6 +202,14 @@ export default function UsageLog() {
                       {r.errors > 0 ? <Badge tone="danger">{r.errors}</Badge> : <span className="text-text-muted">0</span>}
                     </td>
                     <td className="px-4 py-2.5 text-right text-xs">{fmtNum(r.input_tokens)}</td>
+                    <td
+                      className="px-4 py-2.5 text-right text-xs"
+                      title={r.cache_write_tokens ? `${fmtNum(r.cache_write_tokens)} cache write tokens` : undefined}
+                    >
+                      {r.cached_tokens
+                        ? <span className="text-success">{fmtNum(r.cached_tokens)}</span>
+                        : <span className="text-text-muted">—</span>}
+                    </td>
                     <td className="px-4 py-2.5 text-right text-xs">{fmtNum(r.output_tokens)}</td>
                     <td className="px-4 py-2.5 text-right text-xs text-text-muted">{fmtMs(Math.round(r.avg_latency_ms))}</td>
                     <td className="px-4 py-2.5 text-right text-xs text-text-muted">{fmtTime(r.last_ts)}</td>

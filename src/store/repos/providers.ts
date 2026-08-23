@@ -67,11 +67,11 @@ export class ProvidersRepo {
     return this.getAccount(id)!;
   }
 
-  updateAccount(accId: string, patch: Partial<{ label: string; apiKey: string; baseUrl: string | null; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null; planType: string | null; rateLimitedUntil: number | null; lastWarmupAt: string | null; lastWarmupStatus: string | null; lastWarmupLatencyMs: number | null; lastWarmupDetail: string | null }>): ProviderAccount | null {
+  updateAccount(accId: string, patch: Partial<{ label: string; apiKey: string; baseUrl: string | null; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null; planType: string | null; rateLimitedUntil: number | null; reauthRequired: boolean; reauthReason: string | null; lastWarmupAt: string | null; lastWarmupStatus: string | null; lastWarmupLatencyMs: number | null; lastWarmupDetail: string | null }>): ProviderAccount | null {
     const cur = this.getAccount(accId);
     if (!cur) return null;
     this.db
-      .query("UPDATE provider_accounts SET label=?, api_key=?, base_url=?, priority=?, enabled=?, notes=?, tags=?, session_cookie=?, plan_type=?, rate_limited_until=?, last_warmup_at=?, last_warmup_status=?, last_warmup_latency_ms=?, last_warmup_detail=?, updated_at=? WHERE id=?")
+      .query("UPDATE provider_accounts SET label=?, api_key=?, base_url=?, priority=?, enabled=?, notes=?, tags=?, session_cookie=?, plan_type=?, rate_limited_until=?, reauth_required=?, reauth_reason=?, last_warmup_at=?, last_warmup_status=?, last_warmup_latency_ms=?, last_warmup_detail=?, updated_at=? WHERE id=?")
       .run(
         patch.label ?? cur.label,
         patch.apiKey ?? cur.api_key,
@@ -83,6 +83,8 @@ export class ProvidersRepo {
         patch.sessionCookie !== undefined ? patch.sessionCookie : (cur.session_cookie ?? null),
         patch.planType !== undefined ? patch.planType : (cur.plan_type ?? null),
         patch.rateLimitedUntil !== undefined ? patch.rateLimitedUntil : (cur.rate_limited_until ?? null),
+        patch.reauthRequired !== undefined ? (patch.reauthRequired ? 1 : 0) : (cur.reauth_required ?? 0),
+        patch.reauthReason !== undefined ? patch.reauthReason : (cur.reauth_reason ?? null),
         patch.lastWarmupAt !== undefined ? patch.lastWarmupAt : (cur.last_warmup_at ?? null),
         patch.lastWarmupStatus !== undefined ? patch.lastWarmupStatus : (cur.last_warmup_status ?? null),
         patch.lastWarmupLatencyMs !== undefined ? patch.lastWarmupLatencyMs : (cur.last_warmup_latency_ms ?? null),
@@ -91,6 +93,46 @@ export class ProvidersRepo {
         accId,
       );
     return this.getAccount(accId);
+  }
+
+  // ── per-(account, model) cooldowns ──
+
+  /** Model ids still cooling down for an account. Expired rows are pruned lazily. */
+  listModelCooldowns(accountId: string): Array<{ model_id: string; until: number }> {
+    return this.db
+      .query("SELECT model_id, until FROM account_model_cooldowns WHERE account_id = ? AND until > ?")
+      .all(accountId, Date.now()) as Array<{ model_id: string; until: number }>;
+  }
+
+  isModelCoolingDown(accountId: string, modelId: string): boolean {
+    const row = this.db
+      .query("SELECT until FROM account_model_cooldowns WHERE account_id = ? AND model_id = ?")
+      .get(accountId, modelId) as { until: number } | null;
+    if (!row) return false;
+    if (row.until <= Date.now()) {
+      this.clearModelCooldown(accountId, modelId);
+      return false;
+    }
+    return true;
+  }
+
+  setModelCooldown(accountId: string, modelId: string, until: number, reason?: string | null): void {
+    this.db
+      .query(
+        `INSERT INTO account_model_cooldowns (account_id, model_id, until, reason, updated_at)
+         VALUES (?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(account_id, model_id) DO UPDATE SET until=excluded.until, reason=excluded.reason, updated_at=excluded.updated_at`,
+      )
+      .run(accountId, modelId, until, reason ?? null);
+  }
+
+  clearModelCooldown(accountId: string, modelId: string): void {
+    this.db.query("DELETE FROM account_model_cooldowns WHERE account_id = ? AND model_id = ?").run(accountId, modelId);
+  }
+
+  /** Drop every expired cooldown row. Returns how many were removed. */
+  purgeExpiredModelCooldowns(): number {
+    return this.db.query("DELETE FROM account_model_cooldowns WHERE until <= ?").run(Date.now()).changes;
   }
 
   removeAccount(accId: string) {
@@ -106,7 +148,7 @@ export class ProvidersRepo {
     const cur = this.getAccount(accId) as (ProviderAccount & { auth_kind?: string; refresh_token?: string | null; id_token?: string | null; account_id?: string | null; expires_at?: number | null }) | null;
     if (!cur) return;
     this.db
-      .query("UPDATE provider_accounts SET auth_kind=?, refresh_token=?, id_token=?, account_id=?, expires_at=?, updated_at=? WHERE id=?")
+      .query("UPDATE provider_accounts SET auth_kind=?, refresh_token=?, id_token=?, account_id=?, expires_at=?, reauth_required=0, reauth_reason=NULL, updated_at=? WHERE id=?")
       .run(
         patch.authKind ?? cur.auth_kind ?? "api_key",
         (patch.refreshToken !== undefined ? patch.refreshToken : cur.refresh_token) ?? null,

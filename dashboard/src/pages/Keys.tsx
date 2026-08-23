@@ -13,6 +13,17 @@ function fmtDateTime(value: string | null | undefined): string {
   return d.toLocaleString();
 }
 
+/** `allowed_models` is stored as a JSON array; a malformed value means "no restriction". */
+function parseAllowedModels(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function Stat({ label, value, tone = "muted" }: { label: string; value: string; tone?: "muted" | "success" | "warning" | "danger" }) {
   const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "danger" ? "text-danger" : "text-text-primary";
   return (
@@ -102,7 +113,7 @@ export default function Keys() {
         </Card>
       ) : (
         <div className="space-y-4">
-          <Card className="overflow-hidden border-accent/15 bg-[linear-gradient(135deg,rgba(124,92,255,0.14),rgba(18,22,31,0.92)_46%,rgba(18,22,31,0.96))]">
+          <Card className="overflow-hidden border-accent/20">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0 flex-1 space-y-4">
                 <div className="flex items-start gap-3">
@@ -220,17 +231,26 @@ function KeyModal({ key0, onClose }: { key0?: GatewayKey; onClose: () => void })
   const [form, setForm] = useState({
     label: key0?.label ?? "",
     rateLimitRpm: key0?.rate_limit_rpm?.toString() ?? "",
+    concurrency: key0?.concurrency?.toString() ?? "",
     dailyTokenBudget: key0?.daily_token_budget?.toString() ?? "",
+    allowedModels: parseAllowedModels(key0?.allowed_models).join("\n"),
     expiresAt: key0?.expires_at?.slice(0, 10) ?? "",
   });
   const [error, setError] = useState("");
 
   const save = useMutation({
     mutationFn: async () => {
+      const models = form.allowedModels
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
       const body = {
         label: form.label.trim(),
         rateLimitRpm: form.rateLimitRpm ? Number(form.rateLimitRpm) : null,
+        concurrency: form.concurrency ? Number(form.concurrency) : null,
         dailyTokenBudget: form.dailyTokenBudget ? Number(form.dailyTokenBudget) : null,
+        // An empty list means "no restriction" rather than "deny everything".
+        allowedModels: models.length ? models : null,
         expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
       };
       if (!key0) throw new Error("Key not found");
@@ -260,6 +280,22 @@ function KeyModal({ key0, onClose }: { key0?: GatewayKey; onClose: () => void })
             <label className="mb-1 block text-xs text-text-muted">Daily token budget</label>
             <Input type="number" min={1} value={form.dailyTokenBudget} onChange={(e) => setForm({ ...form, dailyTokenBudget: e.target.value })} placeholder="unlimited" />
           </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Max concurrent requests</label>
+          <Input type="number" min={1} value={form.concurrency} onChange={(e) => setForm({ ...form, concurrency: e.target.value })} placeholder="unlimited" />
+          <p className="mt-1 text-xs text-text-muted">Requests beyond this limit get a 429 with a short retry-after.</p>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Allowed models <span className="text-text-muted/50">(one per line)</span></label>
+          <textarea
+            value={form.allowedModels}
+            onChange={(e) => setForm({ ...form, allowedModels: e.target.value })}
+            placeholder={"leave empty to allow every model\nopenai/gpt-5\ncombo:fallback\nanthropic/*"}
+            rows={4}
+            className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none"
+          />
+          <p className="mt-1 text-xs text-text-muted">Accepts exact ids, aliases, <code>combo:name</code>, and <code>*</code> wildcards. Models not listed are rejected and hidden from <code>/v1/models</code>.</p>
         </div>
         <div>
           <label className="mb-1 block text-xs text-text-muted">Expires at <span className="text-text-muted/50">(optional)</span></label>

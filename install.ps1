@@ -1,4 +1,15 @@
+param(
+  # Resolved before the UAC relaunch and forwarded to the elevated process:
+  # elevation can switch to a different admin account, and $env:USERPROFILE
+  # would then point at that account instead of the person installing.
+  [string]$InstallDir
+)
+
 $ErrorActionPreference = 'Stop'
+
+if (-not $InstallDir) {
+  $InstallDir = if ($env:MIRAIS_INSTALL_DIR) { $env:MIRAIS_INSTALL_DIR } else { Join-Path $env:USERPROFILE 'Mirais' }
+}
 
 function Test-Administrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -20,12 +31,14 @@ if (-not (Test-Administrator)) {
     Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $scriptPath
   }
 
+  Write-Output "Installing to $InstallDir"
   Write-Output 'Administrator access is required. Opening the Windows UAC prompt...'
   $shell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
   $process = Start-Process -FilePath $shell -Verb RunAs -Wait -PassThru -ArgumentList @(
     '-NoProfile',
     '-ExecutionPolicy', 'Bypass',
-    '-File', "`"$scriptPath`""
+    '-File', "`"$scriptPath`"",
+    '-InstallDir', "`"$InstallDir`""
   )
   if ($process.ExitCode -ne 0) {
     throw "Elevated installer failed with exit code $($process.ExitCode)."
@@ -35,7 +48,6 @@ if (-not (Test-Administrator)) {
 }
 
 $RepoUrl = if ($env:MIRAIS_REPO_URL) { $env:MIRAIS_REPO_URL } else { 'https://github.com/levanza1358/mirais.git' }
-$InstallDir = if ($env:MIRAIS_INSTALL_DIR) { $env:MIRAIS_INSTALL_DIR } else { 'C:\Mirais' }
 
 function Test-ExecutableAvailable($name) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
@@ -88,6 +100,9 @@ New-Item -ItemType Directory -Force -Path 'data\backups' | Out-Null
 $infoDir = Join-Path ($env:ProgramData ?? 'C:\ProgramData') 'Mirais'
 New-Item -ItemType Directory -Force -Path $infoDir | Out-Null
 Set-Content -Path (Join-Path $infoDir 'install.json') -Value (@{ root = $InstallDir } | ConvertTo-Json)
+# The shim lives in C:\Windows (the one step that needs admin); everything else
+# is per-user. It only forwards to the CLI, which resolves the install root
+# from install.json — so the app itself never writes outside the user profile.
 $shim = @(
   '@echo off'
   'setlocal'

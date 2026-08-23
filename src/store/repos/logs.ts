@@ -15,6 +15,8 @@ export interface LogInsert {
   error: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  cachedTokens?: number | null;
+  cacheWriteTokens?: number | null;
   creditUsage?: number | null;
   creditSource?: RequestLog["credit_source"];
   latencyMs: number | null;
@@ -35,8 +37,8 @@ export class LogsRepo {
       .query(
         `INSERT INTO request_logs
          (id, ts, key_id, endpoint, requested_model, provider, model, attempts, status, http_status, error,
-         input_tokens, output_tokens, credit_usage, credit_source, latency_ms, tokens_saved, reasoning_effort, request_body, response_body, attempts_detail, account_label, kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         input_tokens, output_tokens, cached_tokens, cache_write_tokens, credit_usage, credit_source, latency_ms, tokens_saved, reasoning_effort, request_body, response_body, attempts_detail, account_label, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         ulid(),
@@ -52,6 +54,8 @@ export class LogsRepo {
         entry.error,
         entry.inputTokens,
         entry.outputTokens,
+        entry.cachedTokens ?? null,
+        entry.cacheWriteTokens ?? null,
         entry.creditUsage ?? null,
         entry.creditSource ?? null,
         entry.latencyMs,
@@ -91,7 +95,7 @@ export class LogsRepo {
     const items = this.db
       .query(
         `SELECT rl.id, rl.ts, rl.ts AS created_at, rl.key_id, gk.label AS key_label, rl.endpoint, rl.requested_model, rl.provider, rl.model, rl.attempts, rl.status, rl.http_status, rl.error,
-                rl.input_tokens, rl.output_tokens, rl.credit_usage, rl.credit_source, rl.latency_ms, rl.tokens_saved, rl.reasoning_effort, rl.request_body, rl.response_body, rl.account_label, rl.kind
+                rl.input_tokens, rl.output_tokens, rl.cached_tokens, rl.cache_write_tokens, rl.credit_usage, rl.credit_source, rl.latency_ms, rl.tokens_saved, rl.reasoning_effort, rl.request_body, rl.response_body, rl.account_label, rl.kind
          FROM request_logs rl
          LEFT JOIN gateway_keys gk ON gk.id = rl.key_id
          ${whereSql} ORDER BY rl.ts DESC LIMIT ? OFFSET ?`,
@@ -108,6 +112,8 @@ export class LogsRepo {
     requests: number;
     input_tokens: number;
     output_tokens: number;
+    cached_tokens: number;
+    cache_write_tokens: number;
     avg_latency_ms: number;
     errors: number;
     last_ts: string;
@@ -118,6 +124,8 @@ export class LogsRepo {
                 COUNT(*) as requests,
                 COALESCE(SUM(input_tokens), 0) as input_tokens,
                 COALESCE(SUM(output_tokens), 0) as output_tokens,
+                COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens,
                 COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
                 SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) as errors,
                 MAX(ts) as last_ts

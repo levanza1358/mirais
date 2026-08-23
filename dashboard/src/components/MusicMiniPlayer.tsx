@@ -102,7 +102,7 @@ export default function MusicMiniPlayer() {
             if (suppressDockClick.current) { suppressDockClick.current = false; return; }
             player.show();
           }}
-          className="flex max-w-[260px] items-center gap-2 rounded-full border border-border/80 bg-bg-surface/95 px-3 py-2 text-left shadow-[0_18px_44px_rgba(0,0,0,0.42)] backdrop-blur-xl"
+          className="flex max-w-[260px] items-center gap-2 rounded-full border border-border bg-bg-surface px-3 py-2 text-left shadow-lg"
           aria-label="Show music player"
         >
           <span className={`flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-accent ${player.isPlaying ? "animate-[spin_4s_linear_infinite]" : ""}`}>
@@ -122,7 +122,7 @@ export default function MusicMiniPlayer() {
     <div
       role="region"
       aria-label="Music player"
-      className="fixed inset-x-3 z-[150] flex max-h-[calc(100dvh-7.5rem)] flex-col overflow-hidden rounded-2xl border border-border/80 bg-bg-surface/95 backdrop-blur-xl shadow-[0_18px_44px_rgba(0,0,0,0.42)] transition-all bottom-20 p-2 md:bottom-3 md:p-3"
+      className="fixed inset-x-3 z-[150] flex max-h-[calc(100dvh-7.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-bg-surface shadow-lg transition-all bottom-20 p-2 md:bottom-3 md:p-3"
     >
       {player.error ? (
         <div className="mb-2 flex items-start gap-2 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
@@ -159,7 +159,7 @@ export default function MusicMiniPlayer() {
               <button type="button" onClick={player.previous} disabled={player.history.length === 0} className="flex h-9 w-9 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary disabled:opacity-40" aria-label="Previous track">
                 <SkipBack size={15} />
               </button>
-              <button type="button" onClick={player.toggle} disabled={!track} className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white shadow-[0_10px_22px_rgba(124,92,255,0.35)] transition-transform active:scale-95 disabled:opacity-40" aria-label={player.isPlaying ? "Pause" : "Play"}>
+              <button type="button" onClick={player.toggle} disabled={!track} className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-white transition-transform active:scale-95 disabled:opacity-40" aria-label={player.isPlaying ? "Pause" : "Play"}>
                 {player.isPlaying ? <Pause size={16} /> : <Play size={16} />}
               </button>
               <button type="button" onClick={player.next} className="flex h-9 w-9 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary" aria-label="Next track">
@@ -180,7 +180,7 @@ export default function MusicMiniPlayer() {
               <button type="button" onClick={player.previous} disabled={player.history.length === 0} className="flex h-9 w-9 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary disabled:opacity-40" aria-label="Previous track">
                 <SkipBack size={14} />
               </button>
-              <button type="button" onClick={player.toggle} disabled={!track} className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white shadow-[0_10px_22px_rgba(124,92,255,0.35)] transition-transform active:scale-95 disabled:opacity-40" aria-label={player.isPlaying ? "Pause" : "Play"}>
+              <button type="button" onClick={player.toggle} disabled={!track} className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white transition-transform active:scale-95 disabled:opacity-40" aria-label={player.isPlaying ? "Pause" : "Play"}>
                 {player.isPlaying ? <Pause size={16} /> : <Play size={16} />}
               </button>
               <button type="button" onClick={player.next} className="flex h-9 w-9 items-center justify-center rounded-xl text-text-muted transition-colors hover:bg-bg-raised hover:text-text-primary" aria-label="Next track">

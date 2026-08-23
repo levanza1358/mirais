@@ -84,7 +84,7 @@ export interface CanonicalRequest {
 }
 
 export interface RoutingPolicy {
-  mode: "balanced" | "priority" | "sticky";
+  mode: "balanced" | "priority";
   preferProviders: string[];
   denyProviders: string[];
   denyModels: string[];
@@ -96,6 +96,10 @@ export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /** Prompt tokens served from a provider-side prompt cache. */
+  cached_tokens?: number;
+  /** Prompt tokens written into a provider-side prompt cache. */
+  cache_write_tokens?: number;
 }
 
 export interface ChatChoice {
@@ -164,6 +168,9 @@ export interface ProviderAccount {
   session_cookie?: string | null;
   /** Epoch ms until which this account is kept out of rotation after a rate limit / quota exhaustion. */
   rate_limited_until?: number | null;
+  /** 1 when an OAuth refresh failed permanently — the operator must reconnect the account. */
+  reauth_required?: number;
+  reauth_reason?: string | null;
   last_warmup_at?: string | null;
   last_warmup_status?: string | null;
   last_warmup_latency_ms?: number | null;
@@ -197,6 +204,11 @@ export interface Alias {
 export interface Combo {
   id: string;
   name: string;
+  /**
+   * `sequential` tries entries in order (fallback chain). `round_robin`
+   * rotates which entry is tried first so load spreads across the members,
+   * while still falling through to the rest on failure.
+   */
   strategy: string;
   created_at: string;
   updated_at: string;

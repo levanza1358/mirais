@@ -3,6 +3,8 @@ import { GatewayError } from "../shared/errors";
 import { config } from "../config";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { SseParser } from "./translator/stream";
+import { isPermanentRefreshFailure, markReauthRequired, withRefreshLock } from "./refresh";
+import { normalizeUsage } from "./promptCache";
 import { ulid } from "../utils/id";
 import { log } from "../utils/logger";
 
@@ -421,73 +423,85 @@ export async function ensureFreshToken(repo: ProvidersRepo, account: ProviderAcc
     const refreshUrl = provider ? CODEBUDDY_REFRESH_URLS[provider.type] : undefined;
     const expiresAt = account.expires_at ?? null;
     if (!refreshUrl || (expiresAt && expiresAt - Date.now() > REFRESH_THRESHOLD_MS)) return account.api_key;
-    const res = await fetch(refreshUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refreshToken: account.refresh_token }),
-      signal: AbortSignal.timeout(20_000),
+    return withRefreshLock(account.id, async () => {
+      const res = await fetch(refreshUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refreshToken: account.refresh_token }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const data = await res.json() as { code?: number; data?: { accessToken?: string; refreshToken?: string; expiresIn?: number }; msg?: string };
+      if (!res.ok || data.code !== 0 || !data.data?.accessToken) {
+        const detail = data.msg ?? `HTTP ${res.status}`;
+        if (isPermanentRefreshFailure(res.status, detail)) {
+          throw markReauthRequired(repo, account, `CodeBuddy token refresh failed: ${detail}.`);
+        }
+        throw new GatewayError(502, "server_error", `CodeBuddy token refresh failed: ${detail}`);
+      }
+      const newExpiresAt = data.data.expiresIn ? Date.now() + data.data.expiresIn * 1000 : null;
+      repo.updateAccountOAuth(account.id, {
+        refreshToken: data.data.refreshToken ?? account.refresh_token,
+        expiresAt: newExpiresAt,
+      });
+      repo.updateAccount(account.id, { apiKey: data.data.accessToken });
+      account.api_key = data.data.accessToken;
+      account.refresh_token = data.data.refreshToken ?? account.refresh_token;
+      account.expires_at = newExpiresAt;
+      return data.data.accessToken;
     });
-    const data = await res.json() as { code?: number; data?: { accessToken?: string; refreshToken?: string; expiresIn?: number }; msg?: string };
-    if (!res.ok || data.code !== 0 || !data.data?.accessToken) {
-      throw new GatewayError(401, "authentication_error", `CodeBuddy token refresh failed: ${data.msg ?? `HTTP ${res.status}`} — reconnect the account.`);
-    }
-    const newExpiresAt = data.data.expiresIn ? Date.now() + data.data.expiresIn * 1000 : null;
-    repo.updateAccountOAuth(account.id, {
-      refreshToken: data.data.refreshToken ?? account.refresh_token,
-      expiresAt: newExpiresAt,
-    });
-    repo.updateAccount(account.id, { apiKey: data.data.accessToken });
-    account.api_key = data.data.accessToken;
-    account.refresh_token = data.data.refreshToken ?? account.refresh_token;
-    account.expires_at = newExpiresAt;
-    return data.data.accessToken;
   }
 
   const expiresAt = account.expires_at ?? null;
   if (expiresAt && expiresAt - Date.now() > REFRESH_THRESHOLD_MS) return account.api_key;
   if (!account.refresh_token) {
     if (expiresAt && expiresAt > Date.now()) return account.api_key;
-    throw new GatewayError(401, "authentication_error", "ChatGPT login has expired and no refresh token is stored — reconnect the account.");
+    throw markReauthRequired(repo, account, "ChatGPT login has expired and no refresh token is stored.");
   }
 
-  let data: RefreshResponse;
-  try {
-    const res = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: CLIENT_ID,
-        refresh_token: account.refresh_token,
-      }).toString(),
-      signal: AbortSignal.timeout(20_000),
-    });
-    data = (await res.json()) as RefreshResponse;
-    if (!res.ok) {
-      log.warn("oauth token refresh failed", { status: res.status, err: data.error });
-      throw new GatewayError(401, "authentication_error", `ChatGPT token refresh failed: ${data.error_description ?? data.error ?? `HTTP ${res.status}`} — reconnect the account.`);
+  return withRefreshLock(account.id, async () => {
+    let data: RefreshResponse;
+    try {
+      const res = await fetch(TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: CLIENT_ID,
+          refresh_token: account.refresh_token!,
+        }).toString(),
+        signal: AbortSignal.timeout(20_000),
+      });
+      data = (await res.json()) as RefreshResponse;
+      if (!res.ok) {
+        const detail = data.error_description ?? data.error ?? `HTTP ${res.status}`;
+        log.warn("oauth token refresh failed", { status: res.status, err: data.error });
+        if (isPermanentRefreshFailure(res.status, `${data.error ?? ""} ${data.error_description ?? ""}`)) {
+          throw markReauthRequired(repo, account, `ChatGPT token refresh failed: ${detail}.`);
+        }
+        throw new GatewayError(502, "server_error", `ChatGPT token refresh failed: ${detail}`);
+      }
+    } catch (err) {
+      if (err instanceof GatewayError) throw err;
+      throw new GatewayError(502, "server_error", `Token refresh request failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } catch (err) {
-    if (err instanceof GatewayError) throw err;
-    throw new GatewayError(502, "server_error", `Token refresh request failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
 
-  if (!data.access_token) {
-    throw new GatewayError(401, "authentication_error", "Token refresh response did not include an access token — reconnect the account.");
-  }
+    if (!data.access_token) {
+      throw markReauthRequired(repo, account, "Token refresh response did not include an access token.");
+    }
 
-  const newExpiresAt = data.expires_in ? Date.now() + data.expires_in * 1000 : null;
-  repo.updateAccountOAuth(account.id, {
-    refreshToken: data.refresh_token ?? account.refresh_token,
-    expiresAt: newExpiresAt,
+    const newExpiresAt = data.expires_in ? Date.now() + data.expires_in * 1000 : null;
+    repo.updateAccountOAuth(account.id, {
+      refreshToken: data.refresh_token ?? account.refresh_token,
+      expiresAt: newExpiresAt,
+    });
+    // updateAccountOAuth does not touch api_key — store the new access token there.
+    repo.updateAccount(account.id, { apiKey: data.access_token });
+    account.api_key = data.access_token;
+    account.refresh_token = data.refresh_token ?? account.refresh_token;
+    account.expires_at = newExpiresAt;
+    log.info("oauth access token refreshed", { account: account.label });
+    return data.access_token;
   });
-  // updateAccountOAuth does not touch api_key — store the new access token there.
-  repo.updateAccount(account.id, { apiKey: data.access_token });
-  account.api_key = data.access_token;
-  account.refresh_token = data.refresh_token ?? account.refresh_token;
-  account.expires_at = newExpiresAt;
-  log.info("oauth access token refreshed", { account: account.label });
-  return data.access_token;
 }
 
 // ── request translation: Chat Completions → Responses API ──
@@ -635,13 +649,7 @@ export function responsesApiToChatCompletion(data: ResponsesApiResponse, request
   const message: CanonicalResponse["choices"][number]["message"] = { role: "assistant", content: text };
   if (toolCalls.length) message.tool_calls = toolCalls;
 
-  const usage: Usage | undefined = data.usage
-    ? {
-        prompt_tokens: data.usage.input_tokens ?? 0,
-        completion_tokens: data.usage.output_tokens ?? 0,
-        total_tokens: data.usage.total_tokens ?? (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
-      }
-    : undefined;
+  const usage: Usage | undefined = normalizeUsage(data.usage) ?? undefined;
 
   return {
     id: `chatcmpl-${data.id ?? ulid()}`,
@@ -757,13 +765,7 @@ export class ResponsesToChatStreamTranslator {
       case "response.incomplete":
       case "response.failed": {
         const r = parsed.response as ResponsesApiResponse | undefined;
-        if (r?.usage) {
-          this.usage = {
-            prompt_tokens: r.usage.input_tokens ?? 0,
-            completion_tokens: r.usage.output_tokens ?? 0,
-            total_tokens: r.usage.total_tokens ?? (r.usage.input_tokens ?? 0) + (r.usage.output_tokens ?? 0),
-          };
-        }
+        if (r?.usage) this.usage = normalizeUsage(r.usage);
         if (!this.started) out.push(startChunk());
         // Some models put the whole answer in the final response object instead
         // of streaming text deltas — emit it so the client is not left empty.
@@ -870,7 +872,7 @@ export async function aggregateChatCompletionsStream(
             finishReason = choice.finish_reason;
           }
         }
-        const u = parsed.usage as Usage | undefined;
+        const u = normalizeUsage(parsed.usage);
         if (u) usage = u;
       }
     }

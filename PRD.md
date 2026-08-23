@@ -26,7 +26,7 @@ Developers using AI coding tools (Claude Code, Cursor, Cline, Codex, Continue) f
 - **G2:** Automatic failover across providers/accounts with cooldowns; multi-account round-robin.
 - **G3:** On-the-fly OpenAI ↔ Anthropic translation (requests, responses, streams, tools, images).
 - **G4:** Token saver compressing tool outputs; measurable savings shown in UI.
-- **G5:** Dashboard (passwordless; network-bound) for providers, accounts, models, aliases, combos, gateway API keys, logs, analytics, settings. External access must be gated by a reverse proxy, firewall, VPN, or private network — the dashboard itself has no application login.
+- **G5:** Dashboard (password-protected by default, can be turned off; network-bound) for providers, accounts, models, aliases, combos, gateway API keys, logs, analytics, settings. The login guards the dashboard only — gateway clients are unaffected — and external access must still be gated by a reverse proxy, firewall, VPN, or private network.
 - **G6:** Usage analytics: tokens, estimated cost, latency, success rate — per model/provider/key.
 - **G7:** First-class on Windows 10/11 **and** Ubuntu/Server; deploy via source, systemd/NSSM, or Docker.
 
@@ -109,7 +109,7 @@ Priority: **P0** must-have v1 · **P1** should-have v1 · **P2** v1.x stretch
 |---|---|
 | **Performance** | p50 proxy overhead < 15 ms (excluding upstream); ≥ 500 concurrent SSE streams on 2 vCPU/2 GB; dashboard first load < 1 s local |
 | **Reliability** | No request data loss on crash mid-stream (log row written on abort); SQLite WAL; restart-safe |
-| **Security** | Gateway keys hashed (SHA-256) with display prefix only; `DASHBOARD_PASSWORD` field removed (dashboard is intentionally passwordless per `RULES.md` R1.3); constant-time compare; `DATA_DIR` 0700 on Linux; no telemetry. External dashboard access is a network concern, not an app concern. |
+| **Security** | Gateway keys hashed (SHA-256) with display prefix only; dashboard password on by default (`12345678` until changed), stored as a `Bun.password` hash with HMAC-signed session cookies and a configurable lifetime (`RULES.md` R1.3); dashboard-only scope, never `/v1/*`; constant-time compare; `DATA_DIR` 0700 on Linux; no telemetry. External dashboard access remains primarily a network concern. |
 | **Compatibility** | Windows 10/11 x64, Ubuntu 22.04/24.04 x64 (+arm64 via Docker); Bun ≥ 1.1; Chrome/Edge/Firefox latest |
 | **Observability** | Structured JSON logs to stdout; `/health` for monitors; in-app logs page |
 | **Maintainability** | 100% TypeScript strict; typecheck + tests green in CI on both OSes |

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, XCircle, Send, Globe, KeyRound, RefreshCw } from "lucide-react";
-import { stats, logs, keys, providers, type Provider } from "../api";
+import { Activity, CheckCircle2, XCircle, Send, Globe, KeyRound, RefreshCw } from "lucide-react";
+import { stats, logs, keys, providers, healthInfo, type Provider } from "../api";
 import { rememberKey, storedKeyFor, forgetKey } from "../keyStore";
 import { Card, Skeleton, Badge, EmptyState, CopyButton, Button, toast, fmtNum, fmtMs, fmtTime } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -24,13 +24,13 @@ export default function Overview() {
   return (
     <div>
       <PageHeader title="Overview">
-        <div className="flex rounded-2xl border border-border/80 bg-bg-surface/70 p-1 shadow-inner">
+        <div className="flex rounded-lg border border-border bg-bg-surface p-1">
           {RANGES.map((r) => (
             <button
               key={r.days}
               onClick={() => { setDays(r.days); localStorage.setItem("mirais.range", String(r.days)); }}
-              className={`rounded-xl px-4 py-2 text-xs font-medium transition-colors ${
-                days === r.days ? "bg-accent text-white shadow-[0_10px_20px_rgba(124,92,255,0.28)]" : "text-text-muted hover:text-text-primary"
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                days === r.days ? "bg-bg-raised text-text-primary" : "text-text-muted hover:text-text-primary"
               }`}
             >
               {r.label}
@@ -49,6 +49,8 @@ export default function Overview() {
         <StatCard label="Tokens" value={fmtNum((s?.input_tokens ?? 0) + (s?.output_tokens ?? 0))} loading={summary.isLoading} />
         <StatCard label="Success rate" value={s ? `${(s.success_rate * 100).toFixed(1)}%` : "—"} loading={summary.isLoading} />
       </div>
+
+      <RuntimeCard />
 
       {s?.requests === 0 ? (
         <Card>
@@ -75,7 +77,7 @@ export default function Overview() {
         ) : (
           <div className="space-y-1">
             {recent.data!.items.map((l) => (
-              <div key={l.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-raised">
+              <div key={l.id} className="hover-nudge flex items-center gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-raised">
                 {l.status === "success" ? <CheckCircle2 size={14} className="shrink-0 text-success" /> : <XCircle size={14} className="shrink-0 text-danger" />}
                 <span className="w-32 shrink-0 text-text-muted">{fmtTime(l.ts)}</span>
                 <span className="truncate font-mono">{l.requested_model}</span>
@@ -94,7 +96,7 @@ export default function Overview() {
 
 function StatCard({ label, value, loading }: { label: string; value: string; loading?: boolean }) {
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className="hover-lift overflow-hidden p-0">
       <div className="p-4">
         <p className="text-xs uppercase tracking-[0.18em] text-text-muted">{label}</p>
         {loading ? <Skeleton className="mt-3 h-8 w-20" /> : <p className="mt-2 text-3xl font-semibold tracking-tight">{value}</p>}
@@ -103,9 +105,48 @@ function StatCard({ label, value, loading }: { label: string; value: string; loa
   );
 }
 
+function fmtBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+/**
+ * Live process health. In-flight count and active cooldowns are the two numbers
+ * that actually explain "why is the gateway not responding" — a stuck stream
+ * shows up as in-flight that never drains, and an exhausted pool shows up as
+ * cooldowns.
+ */
+function RuntimeCard() {
+  const health = useQuery({ queryKey: ["health-runtime"], queryFn: healthInfo.detailed, refetchInterval: 10_000 });
+  const runtime = health.data?.runtime;
+  if (!runtime) return null;
+  return (
+    <Card className="mb-5">
+      <div className="mb-3 flex items-center gap-2">
+        <Activity size={14} className="text-accent" />
+        <h3 className="text-sm font-medium text-text-muted">Runtime</h3>
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <MiniMetric label="In flight" value={fmtNum(runtime.in_flight)} />
+        <MiniMetric label="Cooldowns" value={fmtNum(runtime.active_cooldowns)} />
+        <MiniMetric label="RSS" value={fmtBytes(runtime.memory.rss_bytes)} />
+        <MiniMetric label="Heap" value={fmtBytes(runtime.memory.heap_used_bytes)} />
+        <MiniMetric label="Buffers" value={fmtBytes(runtime.memory.array_buffers_bytes)} />
+      </div>
+    </Card>
+  );
+}
+
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-border/80 bg-bg-base/60 px-4 py-3">
+    <div className="hover-lift rounded-2xl border border-border/80 bg-bg-base/60 px-4 py-3">
       <p className="text-[11px] uppercase tracking-[0.2em] text-text-muted">{label}</p>
       <p className="mt-1 text-lg font-semibold">{value}</p>
     </div>
@@ -151,7 +192,7 @@ function ConnectCard() {
   const keyDisplay = revealed ?? firstKey?.key ?? `${firstKey?.key_prefix ?? ""}••••••••••••••••`;
 
   return (
-    <Card className="mb-0 border-accent/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))]">
+    <Card className="mb-0">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <p className="mb-1 text-xs uppercase tracking-[0.22em] text-text-muted">Quick connect</p>
