@@ -2,60 +2,27 @@
 
 <img src="assets/icon.png" alt="Mirais icon" width="96" align="right" />
 
-**Mirais** is a self-hosted AI gateway & router: one local endpoint that routes LLM requests across multiple providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — with a beautiful dashboard behind an optional password that never gets in the way of API clients.
+**Mirais** is a self-hosted AI gateway: one endpoint for all your LLM providers. It routes requests across providers, translates between OpenAI and Anthropic API shapes on the fly, saves tokens, and never lets you hit a dead end — managed through a clean dashboard.
 
-- **Default address:** `http://0.0.0.0:1463` (exposed by default)
-- **Dashboard:** `http://localhost:1463/` (password protected)
 - **API base:** `http://localhost:1463/v1`
-- **Platforms:** Windows 10/11, Ubuntu 22.04+ / Ubuntu Server
-- **Stack:** Bun + Elysia (backend) · React + Vite + Tailwind (dashboard) · SQLite (storage)
+- **Dashboard:** `http://localhost:1463/`
+- **Platforms:** Windows 10/11, Ubuntu 22.04+
+- **Stack:** Bun + Elysia · React + Vite + Tailwind · SQLite
 
-Inspired by [9Router](https://github.com/decolua/9router) (token saving, tiered fallback) and [Cartethyia](https://github.com/risunCode/Cartethyia) (protocol translation, clean modular architecture).
+## What it does
 
----
+| Feature | Description |
+|---------|-------------|
+| **Multi-provider routing** | Route by model name across providers with priority, cooldowns, and automatic failover on errors and rate limits |
+| **Multi-account** | Many accounts per provider, rotated round-robin or by priority |
+| **OpenAI ↔ Anthropic** | Both API shapes accepted and translated on the fly — tools, streaming, images |
+| **Token saver** | Compresses verbose tool output (git diff, grep, ls…) before it reaches the model |
+| **Combos** | Named fallback chains: `combo:never-stop` = claude → gpt → glm → free provider |
+| **Gateway keys** | Issue API keys with model ACLs, rate limits, budgets, expiry |
+| **Usage analytics** | Tokens, latency, success rate per model/provider with charts |
+| **Account backup** | One-click JSON export/import of all provider accounts |
 
-## Feature Highlights
-
-| # | Feature | Description |
-|---|---------|-------------|
-| 1 | **Multi-provider routing + failover** | Route by model name across providers with priority, cooldowns, and automatic fallback on error/rate-limit |
-| 2 | **Multi-account + API key management** | Multiple accounts per provider (round-robin), issue gateway API keys with model ACLs, budgets & rate limits |
-| 3 | **OpenAI ↔ Anthropic translation** | Accept/return both API shapes; translated on the fly with tool-calling, streaming & image handling |
-| 4 | **Token saver / compression** | Compress verbose `tool_result` content (git diff, grep, ls…) and optional terse-reply prompt injection |
-| 5 | **Usage tracking & analytics** | Tokens, estimated cost, requests per model/provider, latency, charts on dashboard |
-| 6 | **Combos / fallback chains** | Named model chains, e.g. `combo:never-stop` = claude → gpt → glm → free provider |
-
-## Documentation
-
-| Doc | Content |
-|-----|---------|
-| [docs/01-architecture.md](docs/01-architecture.md) | System design, request flow, module map |
-| [docs/02-tech-stack-and-project-structure.md](docs/02-tech-stack-and-project-structure.md) | Stack rationale + full folder layout |
-| [docs/03-api-specification.md](docs/03-api-specification.md) | Client-facing & admin API reference |
-| [docs/04-database-schema.md](docs/04-database-schema.md) | SQLite schema, migrations, data retention |
-| [docs/05-uiux-design.md](docs/05-uiux-design.md) | Dashboard pages, design system, wireflows |
-| [docs/06-implementation-phases.md](docs/06-implementation-phases.md) | Phase-by-phase build plan with checklists |
-| [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md) | Windows & Ubuntu Server setup, service, hardening |
-
-## Quick Start (dev)
-
-```bash
-# Requires Bun >= 1.1 (https://bun.sh)
-git clone <your-repo> mirais && cd mirais
-bun install
-cd dashboard && bun install && cd ..
-cp .env.example .env      # optional: preset DASHBOARD_PASSWORD
-bun run dev
-```
-
-Open `http://localhost:1463`.
-
-- The dashboard asks for a password on first use. Default: `12345678` — change it in Settings → General.
-- A login lasts for a configurable number of hours (default 12; "remember this browser" = 30 days), so refreshing never re-prompts.
-- The password can be turned off entirely in Settings → General.
-- It guards the dashboard only. `/v1/*` API clients keep using gateway API keys and are never affected.
-
-## One-shot install
+## Install
 
 ### Ubuntu / Ubuntu Server
 
@@ -69,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/levanza1358/mirais/main/install.sh 
 irm https://raw.githubusercontent.com/levanza1358/mirais/main/install.ps1 | iex
 ```
 
-After install:
+Then:
 
 ```bash
 mirais start
@@ -77,42 +44,18 @@ mirais autostart on
 mirais status
 ```
 
-No `cd` required after install. The global `mirais` command remembers the install location.
+The global `mirais` command remembers the install location — no `cd` needed.
 
-## Run as a background service
+## First run
 
-```bash
-# Windows (cmd/PowerShell) — from the project root
-mirais start      # start in background (detached, logs to data/mirais.log)
-mirais status     # running? healthy? (exit 0 = healthy, 3 = not running)
-mirais restart
-mirais stop
-mirais fix        # update/install/build/start using the remembered install root
-mirais doctor --fix
-mirais doctor --json   # machine-readable health report
+1. Open `http://localhost:1463/`.
+2. Log in with the default password `12345678` — change it in Settings → General.
+3. Add a provider, add accounts, and sync models.
+4. Create a gateway key, then point any OpenAI-compatible tool at `http://localhost:1463/v1`.
 
-# Linux/macOS
-./mirais start|status|restart|stop
-mirais autostart on|off|status
-mirais update     # clears package/build caches, then updates and restarts
-mirais expose on|off
+A login lasts 12 hours by default ("remember this browser" = 30 days). The password can be turned off entirely; it guards the dashboard only — `/v1/*` clients always use gateway keys.
 
-# Or via bun from anywhere in the project
-bun run mirais start
-bun run svc:status   # svc:start / svc:stop / svc:restart also available
-```
-
-State is tracked via `data/mirais.pid`; server output goes to `data/mirais.log`.
-For a real always-on service (auto-start on boot), use `mirais autostart on` or the **Start on boot** switch in Settings → General. On Windows this starts Mirais after you log in; on Linux it installs a systemd unit that starts at boot without a login. See [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md).
-
-### Exposure and dashboard safety
-
-- `mirais expose on` sets `HOST=0.0.0.0` so Mirais is reachable from LAN, Tailscale, or any interface allowed by your firewall.
-- `mirais expose off` sets `HOST=127.0.0.1` for localhost-only access.
-- When exposed (`HOST=0.0.0.0`) without a dashboard password, Mirais logs a startup warning — keep the password on, or restrict access at the network layer.
-- The dashboard password is not a network boundary: use a reverse proxy, firewall, VPN, or private network for anything reachable from the internet.
-
-## Quick Start (client usage)
+## Using the API
 
 ```bash
 curl http://localhost:1463/v1/chat/completions \
@@ -121,7 +64,41 @@ curl http://localhost:1463/v1/chat/completions \
   -d '{"model":"combo:never-stop","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-Point any OpenAI/Anthropic-compatible tool (Claude Code, Cursor, Cline, Codex, Continue…) at `http://localhost:1463/v1`.
+Point Claude Code, Cursor, Cline, Codex, Continue, or anything OpenAI/Anthropic-compatible at `http://localhost:1463/v1`.
+
+## CLI
+
+```bash
+mirais start            # start in background (logs to data/mirais.log)
+mirais stop | restart
+mirais status           # exit 0 = healthy
+mirais expose on|off    # 0.0.0.0 or 127.0.0.1
+mirais autostart on|off # start at boot (systemd / Windows Startup)
+mirais update           # update + rebuild + restart
+mirais doctor --fix     # diagnose and repair
+bun run backup          # export all provider accounts to data/backups/*.json
+```
+
+## Security notes
+
+- Default bind is `0.0.0.0` (exposed). Use `mirais expose off` for localhost-only.
+- When exposed without a dashboard password, Mirais logs a warning at startup.
+- The dashboard password is not a network boundary — use a firewall, VPN, or reverse proxy for internet-facing installs.
+- Account backups contain credentials in plaintext JSON. Keep them private.
+
+## Development
+
+```bash
+git clone <your-repo> mirais && cd mirais
+bun install
+cd dashboard && bun install && cd ..
+bun run dev        # backend :1463 + dashboard dev server
+bun test test/
+bun run typecheck
+bun run build      # build dashboard into dashboard/dist
+```
+
+Detailed docs live in [`docs/`](docs/): architecture, API reference, database schema, UI design, and deployment guides.
 
 ## License
 

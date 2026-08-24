@@ -40,10 +40,4 @@
 
 Calm, direct, competent. Short sentences. No exclamation marks, no hype words ("blazing", "revolutionary"), no emoji in the product UI (status icons only). Error messages say what happened and what to do next.
 
-## Lineage
-
-Standing on good ideas, credit where due:
-- **[9Router](https://github.com/decolua/9router)** — token-saving philosophy, tiered fallback thinking
-- **[Cartethyia](https://github.com/risunCode/Cartethyia)** — protocol-translation purity, clean modular architecture
-
 Mirais is not a fork. It is a fresh, minimal take on the same promise.

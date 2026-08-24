@@ -5,7 +5,7 @@ Technical and product design decisions for Mirais, each with context and consequ
 ---
 
 ## ADR-001: Bun + Elysia, not Node/Next.js
-**Context:** 9Router (Next.js monolith) is heavy for a localhost gateway: slow startup, big memory, bundler complexity. Cartethyia shows Bun + Elysia is fast and clean.
+**Context:** a Next.js-style monolith is heavy for a localhost gateway: slow startup, big memory, bundler complexity. Bun + Elysia is fast and clean.
 **Decision:** Backend = Bun + Elysia; dashboard = separate React+Vite SPA served as static files by the same process.
 **Consequences:** + ms-level startup, native TS, built-in SQLite & test runner; − smaller ecosystem than Express (acceptable — our surface is small).
 

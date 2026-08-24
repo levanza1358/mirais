@@ -67,7 +67,7 @@ export const config = {
   authRequired: parsed.MIRAIS_AUTH_REQUIRED === "on",
   dashboardPassword: parsed.DASHBOARD_PASSWORD,
   sessionTtlHours: parsed.SESSION_TTL_HOURS,
-  version: "1.0.0",
+  version: "1.0.4",
   startedAt: Date.now(),
 } as const;
 

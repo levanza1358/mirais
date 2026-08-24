@@ -1,6 +1,6 @@
 {
 	"name": "mirais",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"description": "Self-hosted AI gateway & router — one local endpoint for all your LLM providers",
 	"type": "module",
 	"private": true,
