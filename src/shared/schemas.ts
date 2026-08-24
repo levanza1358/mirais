@@ -185,6 +185,37 @@ export const accountUpdateSchema = z.object({
   sessionCookie: z.string().max(8192).nullable().optional(),
 });
 
+const accountBackupAccountSchema = z.object({
+  label: z.string().min(1).max(64),
+  api_key: z.string().max(65_536),
+  base_url: upstreamBaseUrlSchema.nullable(),
+  enabled: z.boolean(),
+  priority: z.number().int(),
+  auth_kind: z.string().min(1).max(64),
+  refresh_token: z.string().max(65_536).nullable(),
+  id_token: z.string().max(65_536).nullable(),
+  account_id: z.string().max(1024).nullable(),
+  plan_type: z.string().max(256).nullable(),
+  expires_at: z.number().int().nullable(),
+  notes: z.string().max(8192).nullable(),
+  tags: z.string().max(8192).nullable(),
+  session_cookie: z.string().max(8192).nullable(),
+});
+
+export const accountBackupSchema = z.object({
+  version: z.literal(1),
+  exported_at: z.string().datetime(),
+  providers: z.array(z.object({
+    name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
+    type: z.enum(["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
+    base_url: upstreamBaseUrlSchema.nullable(),
+    enabled: z.boolean(),
+    priority: z.number().int(),
+    account_strategy: z.enum(["priority", "round_robin"]),
+    accounts: z.array(accountBackupAccountSchema).max(10_000),
+  })).max(1_000),
+});
+
 export const aliasCreateSchema = z.object({
   alias: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
   target: z.string().trim().min(1).max(1024),

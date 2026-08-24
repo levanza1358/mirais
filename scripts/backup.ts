@@ -1,26 +1,16 @@
-import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../src/config";
-import { gzipFile } from "../src/utils/backup";
+import { exportAccountBackup } from "../src/admin/account-backup";
+import { getDb } from "../src/store/db";
+import { ProvidersRepo } from "../src/store/repos/providers";
 
 const backupsDir = path.join(path.dirname(config.dbPath), "backups");
 fs.mkdirSync(backupsDir, { recursive: true });
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const dest = path.join(backupsDir, `mirais-${stamp}.db.gz`);
-const snapshot = path.join(backupsDir, `.mirais-${stamp}.db`);
-
-const src = new Database(config.dbPath, { readonly: true });
-try {
-	src.exec(`VACUUM INTO '${snapshot.replace(/'/g, "''")}';`);
-} finally {
-	src.close();
-}
-try {
-	await gzipFile(snapshot, dest);
-} finally {
-	fs.rmSync(snapshot, { force: true });
-}
+const dest = path.join(backupsDir, `mirais-accounts-${stamp}.json`);
+const backup = exportAccountBackup(new ProvidersRepo(getDb(config.dbPath)));
+fs.writeFileSync(dest, `${JSON.stringify(backup, null, 2)}\n`, { mode: 0o600 });
 
 console.log(`Backup written → ${dest}`);

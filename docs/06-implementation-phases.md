@@ -78,7 +78,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 - [x] Dockerfile (oven/bun base, `DATA_DIR` volume, non-root user) + docker-compose
 - [x] Windows: `nssm` service guide + start script; Ubuntu: systemd unit + ufw notes (doc 07)
 - [x] `mirais autostart on|off|status` plus `/api/autostart` so start-on-boot is manageable from the dashboard
-- [x] `scripts/backup.ts` (VACUUM INTO) + nightly retention task
+- [x] `scripts/backup.ts` account-only JSON export + nightly retention task
 - ✅ fresh-machine test: Windows 11 (bun install → dev) verified; Ubuntu Server 24.04 (docker compose up → curl completion) — pending manual run
 
 ## Post-v1 Backlog (not in initial build)

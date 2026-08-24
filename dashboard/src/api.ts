@@ -580,10 +580,10 @@ export const backups = {
       xhr.send(form);
     });
   },
-  restore: (id: string, mode: "merge" | "overwrite") =>
-    req<{ ok: boolean; restarting?: boolean; fallback?: string; mode?: string; added?: Record<string, number>; skipped?: Record<string, number> }>(
+  restore: (id: string) =>
+    req<{ ok: boolean; imported: number; skipped: number }>(
       `/api/backups/${encodeURIComponent(id)}/restore`,
-      { method: "POST", body: JSON.stringify({ mode }) },
+      { method: "POST" },
     ),
 };
 

@@ -222,10 +222,10 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET / POST | `/api/backups` | List backups or create a compact SQLite `.db.gz` backup. |
+| GET / POST | `/api/backups` | List account backups or export all provider accounts as JSON. |
 | GET / DELETE | `/api/backups/:id/download` | Download or delete a backup. |
-| POST | `/api/backups/upload` | Upload a native `.db.gz` backup or legacy raw `.db` backup. |
-| POST | `/api/backups/:id/restore` | `{ mode: "merge" \| "overwrite" }`; restores compressed and legacy backups. |
+| POST | `/api/backups/upload` | Upload a validated account-backup `.json` file. |
+| POST | `/api/backups/:id/restore` | Adds account records; existing API keys are skipped. Gateway keys, models, settings, logs, and usage are untouched. |
 
 ### Dashboard exposure and auth behavior
 
