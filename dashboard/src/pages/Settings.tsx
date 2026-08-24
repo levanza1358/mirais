@@ -1030,12 +1030,12 @@ function BackupSection() {
             <HardDrive size={14} className="text-accent" />
             <h3 className="text-sm font-medium">Backup & restore</h3>
           </div>
-          <p className="mt-1 text-xs text-text-muted">Create a consistent SQLite snapshot, download it, or restore a previous backup. A pre-restore fallback is created automatically.</p>
+          <p className="mt-1 text-xs text-text-muted">Create a compact SQLite backup, download it, or restore a previous backup. A pre-restore fallback is created automatically.</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" onClick={() => create.mutate()} loading={create.isPending}><Download size={14} /> Backup now</Button>
           <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} loading={upload.isPending}><Upload size={14} /> Upload</Button>
-          <input ref={fileRef} type="file" accept=".db,application/octet-stream" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) upload.mutate(file); e.currentTarget.value = ""; }} />
+          <input ref={fileRef} type="file" accept=".db,.db.gz,application/octet-stream,application/gzip" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) upload.mutate(file); e.currentTarget.value = ""; }} />
         </div>
       </div>
       {list.isLoading && <p className="text-xs text-text-muted">Loading backups…</p>}

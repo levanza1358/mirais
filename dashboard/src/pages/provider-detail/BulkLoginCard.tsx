@@ -27,14 +27,14 @@ export function BulkLoginCard({ providerId }: Props) {
     queryKey: ["copilot-bulk", jobId],
     queryFn: () => providers.copilotBulkStatus(jobId!),
     enabled: !!jobId,
-    refetchInterval: (data) => (data?.done ? false : 2000),
+    refetchInterval: (query) => (query.state.data?.done ? false : 2000),
   });
 
   const logs = useQuery({
     queryKey: ["copilot-bulk-logs", jobId],
     queryFn: () => providers.copilotBulkLogs(jobId!),
     enabled: !!jobId,
-    refetchInterval: (data) => (data?.done ? false : 1500),
+    refetchInterval: (query) => (query.state.data?.done ? false : 1500),
   });
 
   useEffect(() => {

@@ -7,8 +7,10 @@ import { Database as SqliteDatabase, type SQLQueryBindings } from "bun:sqlite";
 import { config } from "../config";
 import { log } from "../utils/logger";
 import { closeDb } from "../store/db";
+import { gunzipFile, gzipFile, isSqliteFile } from "../utils/backup";
 const BACKUP_PREFIX = "mirais-";
-const BACKUP_SUFFIX = ".db";
+const BACKUP_SUFFIX = ".db.gz";
+const LEGACY_BACKUP_SUFFIX = ".db";
 
 export interface BackupEntry {
   id: string;
@@ -27,7 +29,7 @@ function listBackups(): BackupEntry[] {
   const dir = backupsDir();
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.startsWith(BACKUP_PREFIX) && e.name.endsWith(BACKUP_SUFFIX))
+    .filter((e) => e.isFile() && e.name.startsWith(BACKUP_PREFIX) && (e.name.endsWith(BACKUP_SUFFIX) || e.name.endsWith(LEGACY_BACKUP_SUFFIX)))
     .map((e) => e.name);
   return entries
     .map((filename) => {
@@ -48,15 +50,19 @@ function snapshotName(): string {
   return `${BACKUP_PREFIX}${stamp}${BACKUP_SUFFIX}`;
 }
 
-function createSnapshot(): BackupEntry {
+async function createSnapshot(): Promise<BackupEntry> {
   const dest = path.join(backupsDir(), snapshotName());
-  // VACUUM INTO is safe with concurrent readers, but mirrors a single
-  // consistent snapshot at the moment the statement runs.
+  const snapshot = `${dest.slice(0, -3)}tmp`;
   const src = new SqliteDatabase(config.dbPath, { readonly: true });
   try {
-    src.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}';`);
+    src.exec(`VACUUM INTO '${snapshot.replace(/'/g, "''")}';`);
   } finally {
     src.close();
+  }
+  try {
+    await gzipFile(snapshot, dest);
+  } finally {
+    fs.rmSync(snapshot, { force: true });
   }
   const stat = fs.statSync(dest);
   return {
@@ -67,13 +73,22 @@ function createSnapshot(): BackupEntry {
   };
 }
 
-/** Lightweight SQLite file sanity check before accepting an upload. */
-function looksLikeSqlite(filename: string, buf: Uint8Array): boolean {
-  if (!filename.toLowerCase().endsWith(".db")) return false;
-  if (buf.length < 100) return false;
-  // SQLite files start with the magic "SQLite format 3\x00" string.
-  const header = Buffer.from(buf.subarray(0, 16)).toString("ascii");
-  return header.startsWith("SQLite format 3");
+function isCompressedBackup(file: string): boolean {
+  return file.toLowerCase().endsWith(BACKUP_SUFFIX);
+}
+
+async function materializeBackup(source: string): Promise<{ path: string; cleanup: () => void }> {
+  const dir = fs.mkdtempSync(path.join(backupsDir(), ".restore-"));
+  const destination = path.join(dir, "backup.db");
+  try {
+    if (isCompressedBackup(source)) await gunzipFile(source, destination);
+    else fs.copyFileSync(source, destination);
+    if (!isSqliteFile(destination)) throw new Error("File is not a SQLite database (missing magic header)");
+    return { path: destination, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
 }
 
 function resolveBackup(id: string): string {
@@ -81,7 +96,7 @@ function resolveBackup(id: string): string {
   if (id.includes("..") || id.includes("/") || id.includes("\\")) {
     throw new Error("Invalid backup id");
   }
-  if (!id.startsWith(BACKUP_PREFIX) || !id.endsWith(BACKUP_SUFFIX)) {
+  if (!id.startsWith(BACKUP_PREFIX) || (!id.endsWith(BACKUP_SUFFIX) && !id.endsWith(LEGACY_BACKUP_SUFFIX))) {
     throw new Error("Invalid backup id");
   }
   const full = path.join(backupsDir(), id);
@@ -153,8 +168,8 @@ function mergeBackup(srcPath: string, live: SqliteDatabase): { added: Record<str
 export function backupRoutes(_db: Database) {
   return new Elysia({ prefix: "/api/backups" })
     .get("/", () => ({ backups: listBackups() }))
-    .post("/", () => {
-      const entry = createSnapshot();
+    .post("/", async () => {
+      const entry = await createSnapshot();
       log.info("backup created", { id: entry.id, size_bytes: entry.size_bytes });
       return entry;
     })
@@ -187,15 +202,24 @@ export function backupRoutes(_db: Database) {
         set.status = 400;
         return { error: "Missing 'file' field" };
       }
-      const buf = new Uint8Array(await file.arrayBuffer());
-      if (!looksLikeSqlite(file.name, buf)) {
+      const compressed = isCompressedBackup(file.name);
+      if (!compressed && !file.name.toLowerCase().endsWith(LEGACY_BACKUP_SUFFIX)) {
         set.status = 400;
-        return { error: "File is not a SQLite database (missing magic header)" };
+        return { error: "Backup must be a .db.gz or .db file" };
       }
       const safeBase = path.basename(file.name).replace(/[^A-Za-z0-9._-]/g, "_");
-      const id = `${BACKUP_PREFIX}${Date.now()}-${safeBase.endsWith(BACKUP_SUFFIX) ? safeBase : safeBase + BACKUP_SUFFIX}`;
+      const suffix = compressed ? BACKUP_SUFFIX : LEGACY_BACKUP_SUFFIX;
+      const id = `${BACKUP_PREFIX}${Date.now()}-${safeBase.endsWith(suffix) ? safeBase : safeBase + suffix}`;
       const dest = path.join(backupsDir(), id);
-      fs.writeFileSync(dest, buf);
+      fs.writeFileSync(dest, new Uint8Array(await file.arrayBuffer()));
+      try {
+        const materialized = await materializeBackup(dest);
+        materialized.cleanup();
+      } catch (err) {
+        fs.rmSync(dest, { force: true });
+        set.status = 400;
+        return { error: err instanceof Error ? err.message : "Invalid backup" };
+      }
       const stat = fs.statSync(dest);
       log.info("backup uploaded", { id, size_bytes: stat.size });
       return {
@@ -208,59 +232,50 @@ export function backupRoutes(_db: Database) {
     .post("/:id/restore", async ({ params, body, set }) => {
       try {
         const src = resolveBackup(params.id);
-        const stat = fs.statSync(src);
-        if (stat.size < 100) {
-          set.status = 400;
-          return { error: "Backup file is too small to be a database" };
-        }
+        const materialized = await materializeBackup(src);
         const mode = (body as { mode?: string } | undefined)?.mode === "merge" ? "merge" : "overwrite";
-
-        // Close the active DB handle so the file can be replaced on
-        // Windows (open files cannot be overwritten).
-        try { closeDb(); } catch { /* ignore — best effort */ }
-        // Snapshot the current DB next to backups dir for one-step undo.
-        const fallback = path.join(backupsDir(), `pre-restore-${Date.now()}.db`);
         try {
-          fs.copyFileSync(config.dbPath, fallback);
-        } catch { /* first run might fail; continue anyway */ }
-
-        if (mode === "merge") {
-          // Merge into a copy of the live DB so the running server's data is
-          // preserved and only missing rows are added.
-          const live = new SqliteDatabase(config.dbPath);
+          const fallback = path.join(backupsDir(), `pre-restore-${Date.now()}.db.gz`);
           try {
-            live.exec("PRAGMA foreign_keys = ON;");
-            live.exec("PRAGMA busy_timeout = 5000;");
-            const result = mergeBackup(src, live);
-            log.warn("backup merged", { id: params.id, ...result });
-            return { ok: true, mode: "merge", added: result.added, skipped: result.skipped };
-          } finally {
-            live.close();
+            await gzipFile(config.dbPath, fallback);
+          } catch { /* first run might fail; continue anyway */ }
+
+          if (mode === "merge") {
+            const live = new SqliteDatabase(config.dbPath);
+            try {
+              live.exec("PRAGMA foreign_keys = ON;");
+              live.exec("PRAGMA busy_timeout = 5000;");
+              const result = mergeBackup(materialized.path, live);
+              log.warn("backup merged", { id: params.id, ...result });
+              return { ok: true, mode: "merge", added: result.added, skipped: result.skipped };
+            } finally {
+              live.close();
+            }
           }
+
+          try { closeDb(); } catch { /* ignore — best effort */ }
+          fs.copyFileSync(materialized.path, config.dbPath);
+          log.warn("backup restored; restarting server", { id: params.id, fallback });
+          setTimeout(() => {
+            try {
+              const serverEntry = path.join(import.meta.dir, "..", "server.ts");
+              const child = spawn(process.execPath, ["run", serverEntry], {
+                detached: true,
+                stdio: "ignore",
+                cwd: path.join(import.meta.dir, "..", ".."),
+                env: process.env,
+              });
+              child.unref();
+              fs.mkdirSync(config.dataDir, { recursive: true });
+              fs.writeFileSync(path.join(config.dataDir, "mirais.pid"), String(child.pid));
+            } finally {
+              process.exit(0);
+            }
+          }, 150);
+          return { ok: true, mode: "overwrite", restarting: true, fallback: path.basename(fallback) };
+        } finally {
+          materialized.cleanup();
         }
-
-        fs.copyFileSync(src, config.dbPath);
-        log.warn("backup restored; restarting server", { id: params.id, fallback });
-        // The dashboard may be running without the CLI supervisor. Start a
-        // replacement process explicitly; merely exiting here leaves Mirais
-        // stopped after a restore.
-        setTimeout(() => {
-          try {
-            const serverEntry = path.join(import.meta.dir, "..", "server.ts");
-            const child = spawn(process.execPath, ["run", serverEntry], {
-              detached: true,
-              stdio: "ignore",
-              cwd: path.join(import.meta.dir, "..", ".."),
-              env: process.env,
-            });
-            child.unref();
-            fs.mkdirSync(config.dataDir, { recursive: true });
-            fs.writeFileSync(path.join(config.dataDir, "mirais.pid"), String(child.pid));
-          } finally {
-            process.exit(0);
-          }
-        }, 150);
-        return { ok: true, mode: "overwrite", restarting: true, fallback: path.basename(fallback) };
       } catch (err) {
         set.status = 404;
         return { error: err instanceof Error ? err.message : "Restore failed" };

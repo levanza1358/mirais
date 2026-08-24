@@ -158,7 +158,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
     onSuccess: (r) => {
       invalidate();
       onClose();
-      toast(`Bulk login: ${r.success}/${r.total} successful${r.failed ? `, ${r.failed} failed` : ""}`, r.success ? "success" : "error");
+      toast(`Bulk login started for ${r.total} account(s)`);
     },
     onError: (e) => toast(e.message, "error"),
   });

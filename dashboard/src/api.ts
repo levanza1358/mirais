@@ -58,6 +58,8 @@ export interface ProviderAccount {
   updated_at: string;
   auth_kind?: string;
   account_id?: string | null;
+  refresh_token?: string | null;
+  expires_at?: string | null;
   notes?: string | null;
   tags?: string | null;
   session_cookie?: string | null;
@@ -334,7 +336,7 @@ export const providers = {
     req<{ url: string; state: string }>("/api/oauth/openai/start", { method: "POST", body: JSON.stringify({ providerId }) }),
   oauthRedirectUrl: (url: string) => `/api/oauth/openai/redirect?url=${encodeURIComponent(url)}`,
   oauthStatus: (state: string) =>
-    req<{ done: boolean; ok?: boolean; message?: string }>(`/api/oauth/openai/status?state=${encodeURIComponent(state)}`),
+    req<{ done: boolean; ok?: boolean; message?: string; duplicate?: boolean; login?: string | null }>(`/api/oauth/openai/status?state=${encodeURIComponent(state)}`),
   oauthSubmitCallback: (url: string) =>
     req<{ ok: boolean }>("/api/oauth/openai/callback", { method: "POST", body: JSON.stringify({ url }) }),
   updateAccount: (accId: string, patch: Partial<{ label: string; apiKey: string; baseUrl: string | null; priority: number; enabled: boolean; notes: string | null; tags: string | null; sessionCookie: string | null }>) =>

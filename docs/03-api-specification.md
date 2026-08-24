@@ -218,6 +218,15 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | GET | `/api/settings/export` | Full config export (JSON, secrets redacted) |
 | POST | `/api/settings/import` | Import config (merge) |
 
+### Backups
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET / POST | `/api/backups` | List backups or create a compact SQLite `.db.gz` backup. |
+| GET / DELETE | `/api/backups/:id/download` | Download or delete a backup. |
+| POST | `/api/backups/upload` | Upload a native `.db.gz` backup or legacy raw `.db` backup. |
+| POST | `/api/backups/:id/restore` | `{ mode: "merge" \| "overwrite" }`; restores compressed and legacy backups. |
+
 ### Dashboard exposure and auth behavior
 
 - The dashboard login is on by default (`12345678` until changed) and can be turned off in Settings → General. It protects the dashboard only — `/v1/*` gateway traffic is unaffected.

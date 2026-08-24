@@ -183,7 +183,7 @@ CREATE TABLE settings (
 
 **Retention** — nightly task deletes `request_logs` older than `settings.log_retention_days` (default 30). If `TRACK_PAYLOADS=full`, bodies are purged after 7 days regardless.
 
-**Backups** — SQLite online backup: `bun run scripts/backup.ts` copies `mirais.db` via the `VACUUM INTO` command to `DATA_DIR/backups/mirais-<ts>.db` (keep last 7).
+**Backups** — SQLite online backup: `bun run scripts/backup.ts` snapshots `mirais.db` with `VACUUM INTO`, then writes the compact native backup `DATA_DIR/backups/mirais-<ts>.db.gz` (keep last 7). Dashboard restore accepts these compressed backups and legacy raw `.db` files.
 
 **Secrets at rest** — `provider_accounts.api_key` is plaintext by design (needed to call upstreams). `DATA_DIR` must be `chmod 700` on Ubuntu and ACL-restricted on Windows. Gateway keys are stored plaintext (migration 0021+) so operators can recover them; the legacy `key_hash` column remains for lookup fallback on pre-0021 databases.
 
