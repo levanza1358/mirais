@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, CheckCircle2, Loader2, XCircle, Globe2, Lock, Power } from "lucide-react";
 import { settings, backups, healthInfo, providers, auth, autostart, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
-import { Button, Card, ConfirmModal, Input, Modal, Switch, toast } from "../components/ui";
+import { Button, Card, ConfirmModal, Input, Modal, Switch, toast, uploadProgress, dismissProgress } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
 const ACCENT_OPTIONS: Array<{ id: string; label: string; value: string }> = [
@@ -966,7 +966,11 @@ function BackupSection() {
     onError: (e) => toast(e.message, "error"),
   });
   const upload = useMutation({
-    mutationFn: backups.upload,
+    mutationFn: (file: File) => {
+      const progressId = `upload-${Date.now()}`;
+      uploadProgress(progressId, 0, file.name);
+      return backups.upload(file, (pct) => uploadProgress(progressId, pct, file.name)).finally(() => dismissProgress(progressId));
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["backups"] }); toast("Backup uploaded"); },
     onError: (e) => toast(e.message, "error"),
   });

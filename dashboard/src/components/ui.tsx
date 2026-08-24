@@ -225,7 +225,11 @@ export function CopyButton({ text, className = "", disabled = false }: { text: s
 type ToastTone = "success" | "error";
 type ToastOptions = { title?: string };
 type ToastFn = (msg: string, tone?: ToastTone, options?: ToastOptions) => void;
+type ProgressFn = (id: string, progress: number, label?: string) => void;
+type DismissProgressFn = (id: string) => void;
 let toastHandler: ToastFn | null = null;
+let progressHandler: ProgressFn | null = null;
+let dismissProgressHandler: DismissProgressFn | null = null;
 const toastQueue: Array<[string, ToastTone | undefined, ToastOptions | undefined]> = [];
 export function setToastHandler(fn: ToastFn) {
   toastHandler = fn;
@@ -235,22 +239,53 @@ export function setToastHandler(fn: ToastFn) {
     fn(m, t, o);
   }
 }
+export function setProgressHandler(fn: ProgressFn, dismiss: DismissProgressFn) {
+  progressHandler = fn;
+  dismissProgressHandler = dismiss;
+}
 export function toast(msg: string, tone?: ToastTone, options?: ToastOptions) {
   if (toastHandler) toastHandler(msg, tone, options);
   else toastQueue.push([msg, tone, options]);
 }
+/** Show or update a sticky progress notification (0–100). */
+export function uploadProgress(id: string, progress: number, label?: string) {
+  progressHandler?.(id, Math.max(0, Math.min(100, Math.round(progress))), label);
+}
+export function dismissProgress(id: string) {
+  dismissProgressHandler?.(id);
+}
 
 export function ToastHost() {
   const [items, setItems] = useState<Array<{ id: number; msg: string; tone: ToastTone; title?: string }>>([]);
+  const [progress, setProgress] = useState<Record<string, { progress: number; label: string }>>({});
   useEffect(() => {
     setToastHandler((msg, tone = "success", options) => {
       const id = Date.now() + Math.random();
       setItems((xs) => [...xs, { id, msg, tone, title: options?.title }]);
       setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== id)), 3500);
     });
+    setProgressHandler(
+      (id, pct, label) => setProgress((p) => ({ ...p, [id]: { progress: pct, label: label ?? p[id]?.label ?? "Uploading…" } })),
+      (id) => setProgress((p) => { const { [id]: _drop, ...rest } = p; return rest; }),
+    );
   }, []);
+  const progressEntries = Object.entries(progress);
   return (
     <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-[min(92vw,380px)] flex-col gap-3">
+      {progressEntries.map(([id, p]) => (
+        <div key={id} className="pointer-events-auto rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
+          <div className="px-4 pt-3 pb-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Upload backup</span>
+              <span className="font-mono text-[11px] text-text-muted">{p.progress}%</span>
+            </div>
+            <p className="mb-2 truncate text-xs text-text-muted">{p.label}</p>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-raised" role="progressbar" aria-label="Upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={p.progress}>
+              <div className="h-full rounded-full bg-accent transition-all duration-200" style={{ width: `${p.progress}%` }} />
+            </div>
+          </div>
+        </div>
+      ))}
       {items.map((t) => (
         <div
           key={t.id}

@@ -9,6 +9,9 @@ const envSchema = z.object({
   TOKEN_SAVER: z.enum(["on", "off"]).default("on"),
   TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("meta"),
   REQUEST_BODY_LIMIT_MB: z.coerce.number().positive().default(25),
+  // Server-level cap for file uploads (backup restore). Bun rejects larger
+  // request bodies with 413 before any route runs.
+  MAX_UPLOAD_MB: z.coerce.number().positive().default(1024),
   UPSTREAM_TIMEOUT_MS: z.coerce.number().positive().default(120000),
   // The ChatGPT Codex model catalog is gated by this official CLI version.
   // Override it after updating Codex CLI if its catalog includes newer models.
@@ -57,6 +60,7 @@ export const config = {
   tokenSaverDefault: parsed.TOKEN_SAVER === "on",
   trackPayloads: parsed.TRACK_PAYLOADS,
   requestBodyLimit: parsed.REQUEST_BODY_LIMIT_MB * 1024 * 1024,
+  maxUploadBytes: parsed.MAX_UPLOAD_MB * 1024 * 1024,
   upstreamTimeoutMs: parsed.UPSTREAM_TIMEOUT_MS,
   codexClientVersion: parsed.CODEX_CLIENT_VERSION,
   logLevel: parsed.LOG_LEVEL,

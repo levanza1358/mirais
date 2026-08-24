@@ -538,19 +538,45 @@ export const backups = {
   create: () => req<BackupEntry>("/api/backups", { method: "POST" }),
   remove: (id: string) => req<{ ok: boolean }>(`/api/backups/${encodeURIComponent(id)}`, { method: "DELETE" }),
   downloadUrl: (id: string) => `/api/backups/${encodeURIComponent(id)}/download`,
-  upload: async (file: File) => {
+  upload: async (file: File, onProgress?: (percent: number) => void) => {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch("/api/backups/upload", { method: "POST", body: form, credentials: "same-origin" });
-    if (!res.ok) {
-      let message = `HTTP ${res.status}`;
-      try {
-        const body = (await res.json()) as { error?: string };
-        if (typeof body.error === "string") message = body.error;
-      } catch { /* keep default */ }
-      throw new ApiError(res.status, message);
+    if (!onProgress) {
+      const res = await fetch("/api/backups/upload", { method: "POST", body: form, credentials: "same-origin" });
+      if (!res.ok) {
+        let message = `HTTP ${res.status}`;
+        try {
+          const body = (await res.json()) as { error?: string };
+          if (typeof body.error === "string") message = body.error;
+        } catch { /* keep default */ }
+        throw new ApiError(res.status, message);
+      }
+      return (await res.json()) as BackupEntry;
     }
-    return (await res.json()) as BackupEntry;
+    // XHR for upload progress events — fetch() cannot report them.
+    return await new Promise<BackupEntry>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/backups/upload");
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText) as BackupEntry); }
+          catch { reject(new ApiError(xhr.status, "Invalid server response")); }
+          return;
+        }
+        let message = `HTTP ${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText) as { error?: string };
+          if (typeof body.error === "string") message = body.error;
+        } catch { /* keep default */ }
+        reject(new ApiError(xhr.status, message));
+      };
+      xhr.onerror = () => reject(new ApiError(0, "Network error during upload"));
+      xhr.send(form);
+    });
   },
   restore: (id: string, mode: "merge" | "overwrite") =>
     req<{ ok: boolean; restarting?: boolean; fallback?: string; mode?: string; added?: Record<string, number>; skipped?: Record<string, number> }>(

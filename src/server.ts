@@ -258,6 +258,16 @@ const MIME: Record<string, string> = {
 };
 
 const app = new Elysia()
+  // Bun's default request cap is 128MB — backup uploads exceed it and die
+  // with a connection reset before any route runs, which the browser reports
+  // as a generic network error. Raise it to the configured upload cap.
+  .onRequest(({ request, set }) => {
+    const declared = Number(request.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > config.maxUploadBytes) {
+      set.status = 413;
+      return new Response(JSON.stringify({ error: `Upload exceeds the ${Math.floor(config.maxUploadBytes / (1024 * 1024))}MB limit` }), { status: 413, headers: { "content-type": "application/json" } });
+    }
+  })
   .onError(({ error, set, request }) => {
     if (error instanceof GatewayError) {
       set.status = error.status;
@@ -330,7 +340,7 @@ const app = new Elysia()
     }
     return fs.readFileSync(file);
   })
-  .listen({ port: config.port, hostname: config.host });
+  .listen({ port: config.port, hostname: config.host, maxRequestBodySize: config.maxUploadBytes });
 
 log.info("mirais started", {
   url: `http://${config.host}:${config.port}`,
