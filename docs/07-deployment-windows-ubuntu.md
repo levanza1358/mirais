@@ -55,6 +55,11 @@ Since the UAC relaunch starts a fresh process, pass an override as a machine or
 user environment variable (`setx MIRAIS_INSTALL_DIR D:\Mirais`) rather than a
 session variable, or run the installer from an already-elevated shell.
 
+The Windows installer uses the first working Python 3 command from `python`,
+`python3`, then `py -3`. Set `MIRAIS_PYTHON` to override discovery with a
+specific executable, for example `setx MIRAIS_PYTHON C:\Python313\python.exe`.
+Stale Python Launcher registrations are skipped automatically.
+
 Both one-shot installers create an isolated Python environment at
 `<install-root>/.venv` and store the Camoufox browser at
 `<install-root>/.camoufox`. Farm never installs packages into global Python.

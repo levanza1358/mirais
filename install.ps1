@@ -54,6 +54,31 @@ function Test-ExecutableAvailable($name) {
   return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
+function Test-PythonCandidate($command, $arguments) {
+  if (-not (Test-Path $command) -and -not (Test-ExecutableAvailable $command)) { return $false }
+  try {
+    $major = & $command @arguments -c 'import sys; print(sys.version_info.major)' 2>$null
+    return $LASTEXITCODE -eq 0 -and "$major".Trim() -eq '3'
+  } catch {
+    return $false
+  }
+}
+
+function Resolve-Python {
+  $candidates = @()
+  if ($env:MIRAIS_PYTHON) { $candidates += ,@($env:MIRAIS_PYTHON, @()) }
+  $candidates += ,@('python', @())
+  $candidates += ,@('python3', @())
+  $candidates += ,@('py', @('-3'))
+
+  foreach ($candidate in $candidates) {
+    if (Test-PythonCandidate $candidate[0] $candidate[1]) {
+      return @{ Command = $candidate[0]; Arguments = $candidate[1] }
+    }
+  }
+  throw 'Python 3 is required for XAI Farm. Install Python 3 or set MIRAIS_PYTHON to a valid python.exe path.'
+}
+
 Write-Output 'Installation in progress... please wait.'
 if (-not (Test-ExecutableAvailable git)) {
   throw 'Git is required. Install Git for Windows first.'
@@ -78,14 +103,11 @@ Push-Location dashboard
 & bun install | Out-Null
 Pop-Location
 
-if (Test-ExecutableAvailable py) {
-  & py -3 -m venv '.venv'
-} elseif (Test-ExecutableAvailable python) {
-  & python -m venv '.venv'
-} else {
-  throw 'Python 3 is required for XAI Farm.'
-}
+$python = Resolve-Python
+& $python.Command @($python.Arguments) -m venv '.venv'
+if ($LASTEXITCODE -ne 0) { throw 'Python failed to create the Mirais virtual environment.' }
 $venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
+if (-not (Test-Path $venvPython)) { throw "Virtual environment was not created at $venvPython." }
 $env:PYTHONUTF8 = '1'
 & $venvPython -m pip install -r 'scripts\xfarm\requirements.txt' | Out-Null
 New-Item -ItemType Directory -Force -Path '.camoufox' | Out-Null
