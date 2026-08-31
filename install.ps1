@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $InstallDir) {
+  # Windows PowerShell 5.1 has no `??` operator — keep expressions 5.1-safe.
   $InstallDir = if ($env:MIRAIS_INSTALL_DIR) { $env:MIRAIS_INSTALL_DIR } else { Join-Path $env:USERPROFILE 'Mirais' }
 }
 
@@ -97,7 +98,9 @@ New-Item -ItemType Directory -Force -Path 'data\backups' | Out-Null
 
 & bun run build | Out-Null
 
-$infoDir = Join-Path ($env:ProgramData ?? 'C:\ProgramData') 'Mirais'
+# $env:ProgramData is always set on Windows, but stay 5.1-safe (no `??`).
+$programData = if ($env:ProgramData) { $env:ProgramData } else { 'C:\ProgramData' }
+$infoDir = Join-Path $programData 'Mirais'
 New-Item -ItemType Directory -Force -Path $infoDir | Out-Null
 Set-Content -Path (Join-Path $infoDir 'install.json') -Value (@{ root = $InstallDir } | ConvertTo-Json)
 # The shim lives in C:\Windows (the one step that needs admin); everything else
