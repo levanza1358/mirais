@@ -17,7 +17,7 @@ import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
 import { SseParser } from "../proxy/translator/stream";
 import { CODEBUDDY_MODELS, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
-import { copilotEntitlementError, copilotLoginForAccount, copilotResolvedLabel, waitCopilotSidecar } from "./copilot";
+import { copilotEntitlementError, copilotLoginForAccount, copilotResolvedLabel, waitCopilotSidecar, checkCopilotQuota } from "./copilot";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
@@ -256,13 +256,21 @@ export function providerRoutes(db: Database) {
           ? { "x-api-key": acc.api_key, "anthropic-version": "2023-06-01" }
           : acc.api_key ? { Authorization: `Bearer ${acc.api_key}` } : {};
         const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(15_000) });
-        const detail = !res.ok && provider.type === "github-copilot"
+        let detail = !res.ok && provider.type === "github-copilot"
           ? copilotWarmupError(await res.json().catch(() => null), res.status)
           : res.ok ? undefined : `HTTP ${res.status}`;
+        let quotaExhausted = false;
+        let quotaAvailable = true;
+        if (res.ok && provider.type === "github-copilot") {
+          const quota = await checkCopilotQuota(acc.id);
+          quotaExhausted = quota.exhausted;
+          quotaAvailable = quota.detail === undefined || quotaExhausted;
+          detail = quota.detail;
+        }
         result = {
           account_id: acc.id,
-          ok: res.ok,
-          status: res.status,
+          ok: res.ok && quotaAvailable && !quotaExhausted,
+          status: quotaExhausted ? 429 : quotaAvailable ? res.status : 502,
           latency_ms: Date.now() - started,
           account: acc.label,
           detail,

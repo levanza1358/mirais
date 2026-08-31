@@ -6,6 +6,8 @@
 // values follow the model itself rather than being hardcoded per account.
 //
 // Precedence at sync time: upstream-provided value → this catalog → null.
+//
+// Each provider has its own file in model-catalog/. Import here and merge.
 
 export interface ModelMeta {
   contextLength: number;
@@ -18,84 +20,42 @@ interface Pattern {
   meta: ModelMeta;
 }
 
-// Ordered most-specific → most-general. First match wins.
+import { PATTERNS as openai } from "./model-catalog/openai";
+import { PATTERNS as anthropic } from "./model-catalog/anthropic";
+import { PATTERNS as google } from "./model-catalog/google";
+import { PATTERNS as deepseek } from "./model-catalog/deepseek";
+import { PATTERNS as meta } from "./model-catalog/meta";
+import { PATTERNS as mistral } from "./model-catalog/mistral";
+import { PATTERNS as qwen } from "./model-catalog/qwen";
+import { PATTERNS as xai } from "./model-catalog/xai";
+import { PATTERNS as zhipu } from "./model-catalog/zhipu";
+import { PATTERNS as moonshot } from "./model-catalog/moonshot";
+import { PATTERNS as nvidia } from "./model-catalog/nvidia";
+import { PATTERNS as minimax } from "./model-catalog/minimax";
+import { PATTERNS as morph } from "./model-catalog/morph";
+import { PATTERNS as blackbox } from "./model-catalog/blackbox";
+import { PATTERNS as amazon } from "./model-catalog/amazon";
+import { PATTERNS as githubCopilot } from "./model-catalog/github-copilot";
+import { PATTERNS as codex } from "./model-catalog/codex";
+
 const PATTERNS: Pattern[] = [
-  // ── OpenAI GPT-5 / Codex ──
-  { re: /gpt-5(\.\d+)?-codex|codex/i, meta: { contextLength: 400_000, maxOutputTokens: 128_000, capabilities: ["reasoning", "tools", "json", "vision"] } },
-  { re: /gpt-5/i, meta: { contextLength: 400_000, maxOutputTokens: 128_000, capabilities: ["reasoning", "tools", "json", "vision"] } },
-  { re: /gpt-4\.1/i, meta: { contextLength: 1_047_576, maxOutputTokens: 32_768, capabilities: ["tools", "json", "vision"] } },
-  { re: /gpt-4o/i, meta: { contextLength: 128_000, maxOutputTokens: 16_384, capabilities: ["tools", "json", "vision"] } },
-  { re: /gpt-4-turbo/i, meta: { contextLength: 128_000, maxOutputTokens: 4_096, capabilities: ["tools", "json", "vision"] } },
-  { re: /\bo[134](-mini|-pro)?\b/i, meta: { contextLength: 200_000, maxOutputTokens: 100_000, capabilities: ["reasoning", "tools", "json", "vision"] } },
-
-  // ── Anthropic Claude ──
-  { re: /claude-.*(opus|sonnet|haiku).*4/i, meta: { contextLength: 200_000, maxOutputTokens: 64_000, capabilities: ["reasoning", "tools", "json", "vision"] } },
-  { re: /claude.*3-5-sonnet/i, meta: { contextLength: 200_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /claude.*3-5-haiku/i, meta: { contextLength: 200_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /claude.*3-opus/i, meta: { contextLength: 200_000, maxOutputTokens: 4_096, capabilities: ["tools", "json", "vision"] } },
-  { re: /claude/i, meta: { contextLength: 200_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-
-  // ── Google Gemini ──
-  { re: /gemini-.*(2\.5|3)/i, meta: { contextLength: 1_048_576, maxOutputTokens: 65_536, capabilities: ["reasoning", "tools", "json", "vision"] } },
-  { re: /gemini.*flash/i, meta: { contextLength: 1_048_576, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /gemini.*pro/i, meta: { contextLength: 2_097_152, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /gemma/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── DeepSeek ──
-  { re: /deepseek.*(r1|reason|think)/i, meta: { contextLength: 128_000, maxOutputTokens: 64_000, capabilities: ["reasoning", "tools", "json"] } },
-  { re: /deepseek.*(vl|vision)/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /deepseek-v4/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /deepseek/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── Meta Llama ──
-  { re: /llama-3\.[23]/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /llama-3\.1-405/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /llama-3\.1/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /llama-4/i, meta: { contextLength: 1_048_576, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /llama/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── Mistral ──
-  { re: /codestral/i, meta: { contextLength: 256_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /devstral/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /mistral.*large/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /mistral|mixtral|ministral/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── Qwen ──
-  { re: /qwen.*(max|plus|turbo)/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /qwen|qwq/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["reasoning", "tools", "json"] } },
-
-  // ── xAI Grok ──
-  { re: /grok-4/i, meta: { contextLength: 256_000, maxOutputTokens: 16_384, capabilities: ["reasoning", "tools", "json", "vision"] } },
-  { re: /grok-3/i, meta: { contextLength: 131_072, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /grok/i, meta: { contextLength: 131_072, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── Zhipu GLM ──
-  { re: /glm-5v|glm-4v|glm.*vision/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["reasoning", "tools", "json", "vision"] } },
-  { re: /glm-5/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["reasoning", "tools", "json"] } },
-  { re: /glm-4/i, meta: { contextLength: 128_000, maxOutputTokens: 4_096, capabilities: ["tools", "json"] } },
-
-  // ── Moonshot Kimi ──
-  { re: /kimi.*(vision|vl)/i, meta: { contextLength: 256_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /kimi/i, meta: { contextLength: 256_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── NVIDIA Nemotron ──
-  { re: /nemotron/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── MiniMax ──
-  { re: /minimax.*(vision|vl|image)/i, meta: { contextLength: 1_000_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /minimax-m3/i, meta: { contextLength: 1_000_000, maxOutputTokens: 8_192, capabilities: ["tools", "json", "vision"] } },
-  { re: /minimax/i, meta: { contextLength: 1_000_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── Morph ──
-  { re: /morph/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── OpenAI open-weight / BlackBox own ──
-  { re: /gpt-oss/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-  { re: /blackbox-pro/i, meta: { contextLength: 128_000, maxOutputTokens: 8_192, capabilities: ["tools", "json"] } },
-
-  // ── Amazon Nova ──
-  { re: /nova.*pro/i, meta: { contextLength: 300_000, maxOutputTokens: 5_000, capabilities: ["tools", "json", "vision"] } },
-  { re: /nova/i, meta: { contextLength: 128_000, maxOutputTokens: 5_000, capabilities: ["tools", "json"] } },
+  ...openai,
+  ...anthropic,
+  ...google,
+  ...deepseek,
+  ...meta,
+  ...mistral,
+  ...qwen,
+  ...xai,
+  ...zhipu,
+  ...moonshot,
+  ...nvidia,
+  ...minimax,
+  ...morph,
+  ...blackbox,
+  ...amazon,
+  ...githubCopilot,
+  ...codex,
 ];
 
 /** Look up metadata for a model id by matching against known model families. */

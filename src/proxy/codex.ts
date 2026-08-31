@@ -179,8 +179,11 @@ export async function attemptCodeBuddyCheckin(
     if (text.trimStart().startsWith("<")) continue; // APISIX HTML rejection
     if (!res.ok) continue;
 
-    let parsed: any = null;
-    try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
+    let parsed: { code?: unknown; msg?: unknown } | null = null;
+    try {
+      const value: unknown = JSON.parse(text);
+      if (typeof value === "object" && value !== null) parsed = value as { code?: unknown; msg?: unknown };
+    } catch { /* non-JSON body */ }
     if (parsed && typeof parsed.code === "number" && parsed.code !== 0) {
       const msg = typeof parsed.msg === "string" ? parsed.msg : "check-in rejected";
       if (/already|重复|已|signed/i.test(msg)) {

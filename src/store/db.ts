@@ -34,14 +34,15 @@ function migrate(d: Database) {
 
   for (const file of files) {
     if (applied.has(file)) continue;
-    const sql = fs.readFileSync(path.join(dir, file), "utf8");
-    // Some migrations contain their own BEGIN/COMMIT block (notably the
-    // SQLite table-rebuild migrations). Wrapping those again with
-    // `Database.transaction()` causes Bun/SQLite to try committing after the
-    // migration already committed: "cannot commit - no transaction is active".
-    // Execute each migration as authored, then record it only after success.
-    d.exec(sql);
-    d.query("INSERT INTO _migrations (name) VALUES (?)").run(file);
+    const rawSql = fs.readFileSync(path.join(dir, file), "utf8");
+    const sql = rawSql
+      .replace(/^(?:\s*--[^\r\n]*(?:\r?\n|$))*/, "")
+      .replace(/^\s*BEGIN(?:\s+TRANSACTION)?\s*;?/i, "")
+      .replace(/COMMIT\s*;?\s*$/i, "");
+    d.transaction(() => {
+      d.exec(sql);
+      d.query("INSERT INTO _migrations (name) VALUES (?)").run(file);
+    })();
     log.info("migration applied", { name: file });
   }
 

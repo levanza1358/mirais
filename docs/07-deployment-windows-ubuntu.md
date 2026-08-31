@@ -1,6 +1,6 @@
 # 07 — Deployment: Windows & Ubuntu / Ubuntu Server
 
-Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. By default it binds to **`0.0.0.0`** so it is reachable from LAN / Tailscale / internet depending on your firewall.
+Mirais runs the same everywhere: **Bun + one port (`1463`) + one data directory**. By default it binds to **`127.0.0.1`**. Set `HOST=0.0.0.0` only when intentionally exposing it through a protected private network or reverse proxy.
 
 > The Mirais dashboard is password-protected by default (`12345678` — change it in Settings → General, or preset it with `DASHBOARD_PASSWORD`). It guards the dashboard only; gateway clients on `/v1/*` keep using gateway API keys. Even with a password, when exposed beyond a trusted network bind it to `127.0.0.1` and protect access with an authenticated reverse proxy, VPN, firewall, or private network. Do not expose port `1463` directly to the internet.
 

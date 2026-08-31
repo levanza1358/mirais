@@ -1,4 +1,4 @@
-import { isValidElement, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, useEffect, useRef, useState } from "react";
+import { Children, isValidElement, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button as ShadcnButton } from "@/components/ui/button";
 import { Input as ShadcnInput } from "@/components/ui/input";
@@ -77,13 +77,15 @@ export function Select({
   title?: string;
   "aria-label"?: string;
 }) {
-  const options = (Array.isArray(children) ? children : [children]).flatMap((child) =>
+  const options = Children.toArray(children).flatMap((child) =>
     isValidElement<{ value?: string | number; disabled?: boolean; children?: ReactNode }>(child) && child.type === "option"
       ? [child]
       : [],
   );
+  const placeholder = options.find((option) => String(option.props.value ?? "") === "")?.props.children;
+  const choices = options.filter((option) => String(option.props.value ?? "") !== "");
   const initial = Array.isArray(defaultValue) ? defaultValue[0] : defaultValue;
-  const [internalValue, setInternalValue] = useState(String(initial ?? options[0]?.props.value ?? ""));
+  const [internalValue, setInternalValue] = useState(String(initial ?? ""));
   const selectedValue = String((Array.isArray(value) ? value[0] : value) ?? internalValue);
 
   const choose = (next: string) => {
@@ -96,10 +98,10 @@ export function Select({
     <>
       <ShadcnSelect value={selectedValue} onValueChange={choose} disabled={disabled} required={required}>
         <SelectTrigger id={id} title={title} aria-label={ariaLabel} className={`w-full ${className}`}>
-          <SelectValue />
+          <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent position="popper">
-          {options.map((option) => (
+          {choices.map((option) => (
             <SelectItem key={String(option.props.value)} value={String(option.props.value)} disabled={option.props.disabled}>
               {option.props.children}
             </SelectItem>

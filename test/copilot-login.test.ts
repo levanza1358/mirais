@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { copilotCredentialCandidates, copilotEntitlementError, copilotLoginFromConfig, copilotResolvedLabel } from "../src/admin/copilot";
+import { copilotCredentialCandidates, copilotEntitlementError, copilotLoginFromConfig, copilotResolvedLabel, isCopilotQuotaExhausted } from "../src/admin/copilot";
 import { copilotWarmupError } from "../src/admin/providers";
+
+const quotaSnapshot = (remainingPercentage: number, entitlementRequests: number) => ({
+  isUnlimitedEntitlement: false,
+  entitlementRequests,
+  usedRequests: entitlementRequests * (1 - remainingPercentage / 100),
+  usageAllowedWithExhaustedQuota: false,
+  remainingPercentage,
+  overage: 0,
+  overageAllowedWithExhaustedQuota: false,
+});
 
 describe("GitHub Copilot login", () => {
   test("reads the GitHub login from Copilot config", () => {
@@ -36,6 +46,36 @@ describe("GitHub Copilot login", () => {
 
   test("keeps unrelated model failures retryable", () => {
     expect(copilotEntitlementError({ error: { message: "upstream unavailable" } })).toBeNull();
+  });
+
+  test("treats exhausted chat quota as exhausted even when completions remain", () => {
+    expect(isCopilotQuotaExhausted({ quotaSnapshots: {
+      chat: quotaSnapshot(0, 200),
+      completions: quotaSnapshot(98.6, 2_000),
+      premium_interactions: quotaSnapshot(0, 0),
+    } })).toBe(true);
+  });
+
+  test("uses premium interactions when the account has that entitlement", () => {
+    expect(isCopilotQuotaExhausted({ quotaSnapshots: {
+      chat: quotaSnapshot(100, 200),
+      premium_interactions: quotaSnapshot(0, 300),
+    } })).toBe(true);
+  });
+
+  test("keeps an account healthy when its effective chat quota remains", () => {
+    expect(isCopilotQuotaExhausted({ quotaSnapshots: {
+      chat: quotaSnapshot(40, 200),
+      premium_interactions: quotaSnapshot(0, 0),
+    } })).toBe(false);
+  });
+
+  test("falls back from a zero-entitlement chat snapshot to completions", () => {
+    expect(isCopilotQuotaExhausted({ quotaSnapshots: {
+      chat: quotaSnapshot(0, 0),
+      completions: quotaSnapshot(80, 2_000),
+      premium_interactions: quotaSnapshot(0, 0),
+    } })).toBe(false);
   });
 
   test("preserves useful Copilot warmup errors", () => {

@@ -192,16 +192,33 @@ describe("combo streaming failover", () => {
     providers.upsertModel(p.id, "gpt-5");
     const originalFetch = globalThis.fetch;
     const urls: string[] = [];
+    let endpointCalls = 0;
     globalThis.fetch = (async (input: string | URL | Request) => {
-      urls.push(String(input));
-      return urls.length === 1
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/endpoint")) {
+        endpointCalls++;
+        return new Response(JSON.stringify({
+          baseUrl: "https://api.copilot.example.com",
+          apiKey: "test-key",
+          headers: { "Content-Type": "application/json" },
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/quota")) {
+        return new Response(JSON.stringify({ quotaSnapshots: {} }), { headers: { "content-type": "application/json" } });
+      }
+      return endpointCalls === 1
         ? new Response("rate limited", { status: 429 })
         : new Response('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
     try {
       const result = await executeRequest({ model: "github-copilot/gpt-5", messages: [{ role: "user", content: "hi" }], stream: true }, router.resolve("github-copilot/gpt-5").candidates, {}, providers);
       expect(result.kind).toBe("stream");
-      expect(urls).toEqual(["http://127.0.0.1:4141/v1/chat/completions", "http://127.0.0.1:4142/v1/chat/completions"]);
+      expect(urls[0]).toContain("/quota");
+      expect(urls[1]).toContain("/endpoint?model=gpt-5");
+      expect(urls[2]).toBe("https://api.copilot.example.com/chat/completions");
+      expect(urls[3]).toContain("/quota");
+      expect(urls[4]).toContain("/endpoint?model=gpt-5");
     } finally {
       globalThis.fetch = originalFetch;
     }

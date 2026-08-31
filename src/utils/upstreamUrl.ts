@@ -127,9 +127,10 @@ export async function fetchNoCrossHostRedirect(
   url: string,
   init: RequestInit,
   maxRedirects = 3,
+  options: UpstreamUrlOptions = {},
 ): Promise<Response> {
-  const origin = new URL(url);
-  let current = url;
+  const origin = assertSafeUpstreamUrl(url, options);
+  let current = origin.toString();
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     const res = await fetch(current, { ...init, redirect: "manual" });
     if (res.status < 300 || res.status > 399) return res;
@@ -140,9 +141,11 @@ export async function fetchNoCrossHostRedirect(
       await res.body?.cancel();
       throw new Error(`Upstream redirected to a different host (${next.host}); refusing to forward credentials`);
     }
-    if (next.protocol !== "http:" && next.protocol !== "https:") {
+    try {
+      assertSafeUpstreamUrl(next.toString(), options);
+    } catch (error) {
       await res.body?.cancel();
-      throw new Error(`Upstream redirected to an unsupported scheme (${next.protocol})`);
+      throw error;
     }
     await res.body?.cancel();
     current = next.toString();

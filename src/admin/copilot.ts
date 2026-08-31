@@ -8,7 +8,7 @@ import { Elysia } from "elysia";
 import { config } from "../config";
 import { AdminError } from "../shared/errors";
 import { log } from "../utils/logger";
-import { copilotLoginSchema, copilotBulkSchema } from "../shared/schemas";
+import { copilotLoginSchema, copilotBulkSchema, copilotQuotaSchema } from "../shared/schemas";
 import { ProvidersRepo } from "../store/repos/providers";
 
 const sidecarDir = path.resolve("scripts", "copilot-sidecar");
@@ -45,6 +45,36 @@ interface BulkJob {
 }
 const bulkJobs = new Map<string, BulkJob>();
 const latestBulkJob = new Map<string, string>(); // providerId -> jobId
+
+type CopilotQuota = ReturnType<typeof copilotQuotaSchema.parse>;
+type CopilotQuotaSnapshot = NonNullable<CopilotQuota["quotaSnapshots"][string]>;
+
+function hasCopilotEntitlement(snapshot: CopilotQuotaSnapshot | undefined): snapshot is CopilotQuotaSnapshot {
+  return !!snapshot && (snapshot.isUnlimitedEntitlement || snapshot.entitlementRequests > 0);
+}
+
+export function effectiveCopilotQuota(quota: CopilotQuota): CopilotQuotaSnapshot | undefined {
+  const { premium_interactions: premium, chat, completions } = quota.quotaSnapshots;
+  return [premium, chat, completions].find(hasCopilotEntitlement) ?? premium ?? chat ?? completions;
+}
+
+export function isCopilotQuotaExhausted(quota: CopilotQuota): boolean {
+  const snapshot = effectiveCopilotQuota(quota);
+  return !!snapshot && !snapshot.isUnlimitedEntitlement && snapshot.remainingPercentage <= 0 && !snapshot.usageAllowedWithExhaustedQuota;
+}
+
+export async function checkCopilotQuota(accountId: string): Promise<{ exhausted: boolean; detail?: string }> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${portFor(accountId)}/v1/quota`, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return { exhausted: false, detail: `Copilot usage check HTTP ${res.status}` };
+    const parsed = copilotQuotaSchema.safeParse(await res.json());
+    if (!parsed.success) return { exhausted: false, detail: "invalid Copilot usage response" };
+    const exhausted = isCopilotQuotaExhausted(parsed.data);
+    return { exhausted, detail: exhausted ? "quota exhausted (0%)" : undefined };
+  } catch (err) {
+    return { exhausted: false, detail: `Copilot usage check failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 
 export function copilotEntitlementError(body: unknown): string | null {
   if (!body || typeof body !== "object" || !("error" in body)) return null;
@@ -268,15 +298,18 @@ async function health(accountId: string): Promise<{ ok: boolean; login: string |
 
 export function startCopilotSidecars(db: Database): void {
   const repo = new ProvidersRepo(db);
+  const tasks: Array<() => void> = [];
   for (const provider of repo.list()) {
     if (provider.type !== "github-copilot") continue;
     const accounts = repo.listAccounts(provider.id);
     for (const account of accounts) {
       const label = copilotResolvedLabel(account.label, copilotLoginForAccount(account.id), accounts.filter((other) => other.id !== account.id).map((other) => other.label));
       if (label !== account.label) repo.updateAccount(account.id, { label });
-      if (account.enabled) start(account.id);
+      if (account.enabled) tasks.push(() => start(account.id));
     }
   }
+  // Start all sidecars in parallel
+  tasks.forEach((fn) => fn());
 }
 
 export async function waitCopilotSidecar(accountId: string): Promise<void> {
@@ -484,7 +517,6 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
   const log = (msg: string) => {
     const ts = new Date().toISOString().slice(11, 19);
     job.logs.push(`[${ts}] ${msg}`);
-    console.log(`[COPILOT-BULK:${job.id.slice(0, 8)}]`, msg);
   };
 
   log(`Starting bulk login for ${lines.length} account(s)...`);

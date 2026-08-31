@@ -4,7 +4,7 @@ import fs from "node:fs";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(1463),
-  HOST: z.string().default("0.0.0.0"),
+  HOST: z.string().default("127.0.0.1"),
   DATA_DIR: z.string().default("./data"),
   TOKEN_SAVER: z.enum(["on", "off"]).default("on"),
   TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("meta"),
@@ -12,7 +12,7 @@ const envSchema = z.object({
   // Server-level cap for file uploads (backup restore). Bun rejects larger
   // request bodies with 413 before any route runs.
   MAX_UPLOAD_MB: z.coerce.number().positive().default(1024),
-  UPSTREAM_TIMEOUT_MS: z.coerce.number().positive().default(120000),
+  UPSTREAM_TIMEOUT_MS: z.coerce.number().positive().default(60000),
   // The ChatGPT Codex model catalog is gated by this official CLI version.
   // Override it after updating Codex CLI if its catalog includes newer models.
   CODEX_CLIENT_VERSION: z.string().regex(/^\d+\.\d+\.\d+$/, "must be a semantic version").default("0.145.0"),
@@ -67,7 +67,6 @@ export const config = {
   authRequired: parsed.MIRAIS_AUTH_REQUIRED === "on",
   dashboardPassword: parsed.DASHBOARD_PASSWORD,
   sessionTtlHours: parsed.SESSION_TTL_HOURS,
-  version: "1.0.4",
   startedAt: Date.now(),
 } as const;
 

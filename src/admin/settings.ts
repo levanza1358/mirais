@@ -12,6 +12,7 @@ import { normalizeRoutingPolicy } from "../proxy/router";
 import { cooldownSnapshot } from "../proxy/executor";
 import { totalInFlight } from "../ratelimit";
 import { autostartStatus, setAutostart } from "../../scripts/autostart";
+import { getAppVersion } from "../version";
 
 function fsSyncExists(p: string): boolean {
   try { return fs.statSync(p).isFile(); } catch { return false; }
@@ -101,20 +102,28 @@ export function settingsRoutes(db: Database) {
 
 export function statsRoutes(db: Database) {
   const logs = new LogsRepo(db);
+  const days = (raw: unknown) => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 1 && n <= 90 ? Math.floor(n) : 7;
+  };
   return new Elysia({ prefix: "/api/stats" })
-    .get("/summary", ({ query }) => logs.statsSummary(Number(query.days ?? 7)))
-    .get("/timeseries", ({ query }) => logs.statsTimeseries(Number(query.days ?? 7)))
-    .get("/by-model", ({ query }) => logs.statsByModel(Number(query.days ?? 7)))
-    .get("/by-provider", ({ query }) => logs.statsByProvider(Number(query.days ?? 7)));
+    .get("/summary", ({ query }) => logs.statsSummary(days(query.days)))
+    .get("/timeseries", ({ query }) => logs.statsTimeseries(days(query.days)))
+    .get("/by-model", ({ query }) => logs.statsByModel(days(query.days)))
+    .get("/by-provider", ({ query }) => logs.statsByProvider(days(query.days)));
 }
 
 export function logRoutes(db: Database) {
   const logs = new LogsRepo(db);
+  const days = (raw: unknown) => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.floor(n) : 7;
+  };
   return new Elysia({ prefix: "/api/logs" })
     .get("/", ({ query }) =>
       logs.list({
-        page: Math.max(1, Number(query.page ?? 1)),
-        limit: Math.min(200, Math.max(1, Number(query.limit ?? 50))),
+        page: Math.max(1, Number.isFinite(Number(query.page)) ? Number(query.page) : 1),
+        limit: Math.min(200, Math.max(1, Number.isFinite(Number(query.limit)) ? Number(query.limit) : 50)),
         model: query.model,
         provider: query.provider,
         status: query.status,
@@ -124,7 +133,7 @@ export function logRoutes(db: Database) {
         kind: query.kind,
       }),
     )
-    .get("/usage", ({ query }) => logs.usageAggregate(Number(query.days ?? 7)))
+    .get("/usage", ({ query }) => logs.usageAggregate(days(query.days)))
     .delete("/usage", () => ({ ok: true, cleared: logs.clearAll() }))
     .get("/:id", ({ params }) => {
       const entry = logs.getById(params.id);
@@ -149,17 +158,18 @@ export function autostartRoutes() {
 
 export function healthRoutes(db: Database) {
   const providers = new ProvidersRepo(db);
+  const version = getAppVersion().version;
   return new Elysia()
     .get("/health", () => ({
       status: "ok",
-      version: config.version,
+      version,
       uptime_sec: Math.floor((Date.now() - config.startedAt) / 1000),
     }))
     .get("/api/health", () => {
       const list = providers.list();
       return {
         status: "ok",
-        version: config.version,
+        version,
         uptime_sec: Math.floor((Date.now() - config.startedAt) / 1000),
         providers: {
           total: list.length,

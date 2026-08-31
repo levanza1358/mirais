@@ -70,10 +70,10 @@ export function InlineCodexQuota({ data, loading }: { data: CodexQuota | undefin
 
 export function InlineCopilotQuota({ data, loading }: { data: CopilotQuota | undefined; loading: boolean }) {
   if (loading) return <span className="text-[11px] text-text-muted">Checking quota…</span>;
-  const premium = data?.quotaSnapshots.premium_interactions;
-  const quota = premium && (premium.isUnlimitedEntitlement || premium.entitlementRequests > 0)
-    ? premium
-    : data?.quotaSnapshots.chat ?? data?.quotaSnapshots.completions;
+  const snapshots = data?.quotaSnapshots;
+  const candidates = snapshots ? [snapshots.premium_interactions, snapshots.chat, snapshots.completions] : [];
+  const quota = candidates.find((snapshot) => snapshot && (snapshot.isUnlimitedEntitlement || snapshot.entitlementRequests > 0))
+    ?? candidates.find((snapshot) => snapshot);
   if (!quota) return <span className="text-[11px] text-text-muted">Quota unavailable</span>;
   if (quota.isUnlimitedEntitlement) return <span className="text-[11px] text-success">Unlimited quota</span>;
 

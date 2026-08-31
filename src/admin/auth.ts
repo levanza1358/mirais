@@ -80,13 +80,18 @@ function isValidToken(token: string, key: string): boolean {
 function cookieValue(header: string | null): string | null {
   for (const part of header?.split(";") ?? []) {
     const [name, ...rest] = part.trim().split("=");
-    if (name === COOKIE) return decodeURIComponent(rest.join("="));
+    if (name !== COOKIE) continue;
+    try {
+      return decodeURIComponent(rest.join("="));
+    } catch {
+      return null;
+    }
   }
   return null;
 }
 
 function cookieHeader(token: string, maxAge: number): string {
-  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Secure`;
 }
 
 function throttle(ip: string): void {

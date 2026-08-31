@@ -154,6 +154,20 @@ const server = http.createServer(async (req, res) => {
       await start();
       return json(res, 200, await client.rpc.account.getQuota({}));
     }
+    if (req.method === "GET" && req.url?.startsWith("/v1/endpoint")) {
+      await start();
+      const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+      const modelId = url.searchParams.get("model") || undefined;
+      const session = await client.createSession({ model: modelId ?? "gpt-4o", streaming: false, enableSessionStore: false });
+      try {
+        const ep = await session.rpc.provider.getEndpoint({ modelId });
+        await session.disconnect();
+        return json(res, 200, { baseUrl: ep.baseUrl, apiKey: ep.apiKey ?? null, headers: ep.headers, sessionToken: ep.sessionToken ?? null });
+      } catch (err) {
+        await session.disconnect().catch(() => undefined);
+        throw err;
+      }
+    }
     if (req.method === "POST" && req.url === "/v1/chat/completions") return await chat(req, res);
     json(res, 404, { error: { message: "Not found", type: "invalid_request_error" } });
   } catch (error) {

@@ -6,9 +6,10 @@ import { anthropicToOpenaiResponse } from "./translator/openai-to-anthropic";
 import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/stream";
 import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
 import { aggregateXaiChatCompletionsStream, aggregateXaiResponsesStream, ensureFreshXaiToken, fetchXaiChatCompletions, fetchXaiResponses, supportsReasoningEffort, xaiChatCompletionsBody, xaiChatCompletionsStreamToChat, xaiHeaders, xaiRequestBody, xaiRequestContext, xaiResponsesStreamToChat } from "./xai";
+import { directChatCompletions, directChatCompletionsStream } from "./copilot-direct";
 import { metaForModel } from "./modelMeta";
 import { isCacheable, normalizeUsage, promptCacheKey, withAnthropicCacheControl } from "./promptCache";
-import { fetchNoCrossHostRedirect as upstreamFetch } from "../utils/upstreamUrl";
+import { assertSafeUpstreamUrl, fetchNoCrossHostRedirect as upstreamFetch } from "../utils/upstreamUrl";
 import type { ProvidersRepo } from "../store/repos/providers";
 import { config } from "../config";
 import { log } from "../utils/logger";
@@ -268,11 +269,14 @@ export async function executeRequest(
     const format = upstreamFormat(candidate.provider);
     const base = baseUrlFor(candidate.provider, account);
     const cdKey = cooldownKey(candidate, account.id);
+    const upstreamUrlOptions = candidate.provider.type === "github-copilot" ? { allowPrivate: true } : {};
 
     try {
+      assertSafeUpstreamUrl(base, upstreamUrlOptions);
       // OAuth accounts require their provider's CLI Responses endpoint; they
       // cannot call the public OpenAI-compatible endpoint with a bearer token.
       const isXaiOAuth = candidate.provider.type === "xai" && account.auth_kind === "oauth";
+      const fetchUpstream = (url: string, init: RequestInit) => upstreamFetch(url, init, 3, upstreamUrlOptions);
       // Chat Completions exposes Grok-4.5 reasoning deltas for plain chat.
       // Tool agents must use Responses API: it preserves function-call item
       // lifecycle events and is the endpoint the Grok CLI uses for tools.
@@ -323,8 +327,65 @@ export async function executeRequest(
         return { kind: "json", response, candidate, accountLabel: account.label, attempts, latencyMs: Date.now() - started };
       }
 
+      // GitHub Copilot: use direct backend proxy instead of sidecar proxy hop
+      if (candidate.provider.type === "github-copilot") {
+        const sidecarUrl = base.replace(/\/v1\/?$/, "");
+        const { checkCopilotQuota } = await import("../admin/copilot");
+        const quota = await checkCopilotQuota(account.id);
+        if (quota.exhausted) {
+          markCooldown(cdKey, 300_000);
+          if (providersRepo) {
+            providersRepo.updateAccount(account.id, {
+              rateLimitedUntil: Date.now() + 300_000,
+              lastWarmupStatus: "rate_limited",
+              lastWarmupDetail: "quota exhausted (0%)",
+              lastWarmupAt: new Date().toISOString(),
+            });
+          }
+          attempts.push({
+            provider: candidate.provider.name,
+            model: candidate.modelId,
+            accountId: account.id,
+            accountLabel: account.label,
+            outcome: "error",
+            latencyMs: Date.now() - started,
+            reason: "quota exhausted",
+          });
+          lastError = new GatewayError(429, "rate_limit_error", "GitHub Copilot quota exhausted (0%)");
+          continue;
+        }
+        if (req.stream) {
+          const result = await directChatCompletionsStream(sidecarUrl, effectiveReq, candidate.modelId);
+          markSuccess(cdKey);
+          clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+          attempts.push({
+            provider: candidate.provider.name,
+            model: candidate.modelId,
+            accountId: account.id,
+            accountLabel: account.label,
+            outcome: "success",
+            latencyMs: Date.now() - started,
+            reason: attemptNo === 0 ? "primary candidate" : "fallback candidate",
+          });
+          return { kind: "stream", stream: result.stream, candidate, accountLabel: account.label, attempts, usagePromise: result.usagePromise };
+        }
+        const response = await directChatCompletions(sidecarUrl, effectiveReq, candidate.modelId);
+        markSuccess(cdKey);
+        clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+        attempts.push({
+          provider: candidate.provider.name,
+          model: candidate.modelId,
+          accountId: account.id,
+          accountLabel: account.label,
+          outcome: "success",
+          latencyMs: Date.now() - started,
+          reason: attemptNo === 0 ? "primary candidate" : "fallback candidate",
+        });
+        return { kind: "json", response, candidate, accountLabel: account.label, attempts, latencyMs: Date.now() - started };
+      }
+
       if (req.stream) {
-        const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId);
+        const result = await openUpstreamStream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId, upstreamUrlOptions);
         try {
           await result.ready;
         } catch (err) {
@@ -353,7 +414,7 @@ export async function executeRequest(
         };
       }
 
-      const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId);
+      const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId, upstreamUrlOptions);
       markSuccess(cdKey);
       clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
       attempts.push({
@@ -456,9 +517,11 @@ async function callUpstream(
   format: "openai" | "anthropic",
   signal?: AbortSignal,
   sessionId?: string,
+  upstreamUrlOptions: { allowPrivate?: boolean } = {},
 ): Promise<CanonicalResponse> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const fetchUpstream = (url: string, init: RequestInit) => upstreamFetch(url, init, 3, upstreamUrlOptions);
 
   if (isCodeBuddyProvider(candidate.provider.type)) {
     const forced = withRequiredSystemMessage(req);
@@ -486,7 +549,7 @@ async function callUpstream(
       },
       body: JSON.stringify(cached),
       signal: combined,
-    });
+    }, 3, upstreamUrlOptions);
     if (!res.ok) throw await upstreamError(res);
     const data = (await res.json()) as Record<string, unknown>;
     return anthropicToOpenaiResponse(data, req.model);
@@ -497,7 +560,7 @@ async function callUpstream(
     headers: candidate.provider.type === "xai" ? xaiHeaders(apiKey) : openAiHeaders(apiKey),
     body: JSON.stringify(toOpenAiBody({ ...req, stream: false }, candidate.modelId, sessionId)),
     signal: combined,
-  });
+  }, 3, upstreamUrlOptions);
   if (!res.ok) throw await upstreamError(res);
   const data = (await res.json()) as CanonicalResponse;
   // Cache counters are nested (`prompt_tokens_details`), so normalize rather
@@ -526,6 +589,7 @@ async function openUpstreamStream(
   format: "openai" | "anthropic",
   signal?: AbortSignal,
   sessionId?: string,
+  upstreamUrlOptions: { allowPrivate?: boolean } = {},
 ): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null>; ready: Promise<void> }> {
   const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -538,7 +602,7 @@ async function openUpstreamStream(
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
       body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
       signal: combined,
-    });
+    }, 3, upstreamUrlOptions);
   } else if (format === "anthropic") {
     const body = openaiToAnthropicRequest({ ...req, stream: true }, candidate.modelId);
     const cached = isCacheable(req) ? withAnthropicCacheControl(body as unknown as Record<string, unknown>) : body;
@@ -552,14 +616,14 @@ async function openUpstreamStream(
       },
       body: JSON.stringify(cached),
       signal: combined,
-    });
+    }, 3, upstreamUrlOptions);
   } else {
     res = await upstreamFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: candidate.provider.type === "xai" ? xaiHeaders(apiKey, true) : openAiHeaders(apiKey, "text/event-stream"),
       body: JSON.stringify(toOpenAiBody({ ...req, stream: true }, candidate.modelId, sessionId)),
       signal: combined,
-    });
+    }, 3, upstreamUrlOptions);
   }
   if (!res.ok) throw await upstreamError(res);
   if (!res.body) throw new GatewayError(502, "server_error", "Upstream returned no stream body");

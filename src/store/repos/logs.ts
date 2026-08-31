@@ -164,7 +164,7 @@ export class LogsRepo {
                 COALESCE(SUM(output_tokens), 0) as output_tokens,
                 COALESCE(SUM(tokens_saved), 0) as tokens_saved,
                 AVG(latency_ms) as avg_latency
-         FROM request_logs WHERE ts >= datetime('now', ?)`,
+         FROM request_logs WHERE ts >= datetime('now', ?) AND kind = 'request'`,
       )
       .get(since) as {
         requests: number;
@@ -175,7 +175,7 @@ export class LogsRepo {
       };
 
     const successRow = this.db
-      .query("SELECT COUNT(*) as c FROM request_logs WHERE ts >= datetime('now', ?) AND status = 'success'")
+      .query("SELECT COUNT(*) as c FROM request_logs WHERE ts >= datetime('now', ?) AND kind = 'request' AND status = 'success'")
       .get(since) as { c: number };
 
     return {
@@ -198,7 +198,7 @@ export class LogsRepo {
                 COALESCE(SUM(output_tokens), 0) as output_tokens,
                 COALESCE(SUM(tokens_saved), 0) as tokens_saved
          FROM request_logs
-         WHERE ts >= datetime('now', ?)
+         WHERE ts >= datetime('now', ?) AND kind = 'request'
          GROUP BY date(ts) ORDER BY day ASC`,
       )
       .all(`-${days} days`);
@@ -211,7 +211,7 @@ export class LogsRepo {
                 COUNT(*) as requests,
                 COALESCE(SUM(input_tokens), 0) as input_tokens,
           COALESCE(SUM(output_tokens), 0) as output_tokens
-         FROM request_logs WHERE ts >= datetime('now', ?)
+         FROM request_logs WHERE ts >= datetime('now', ?) AND kind = 'request'
          GROUP BY COALESCE(model, requested_model) ORDER BY requests DESC LIMIT 20`,
       )
       .all(`-${days} days`);
@@ -225,7 +225,7 @@ export class LogsRepo {
                 COALESCE(SUM(input_tokens), 0) as input_tokens,
                 COALESCE(SUM(output_tokens), 0) as output_tokens,
                 SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) as success_rate
-         FROM request_logs WHERE ts >= datetime('now', ?) AND provider IS NOT NULL
+         FROM request_logs WHERE ts >= datetime('now', ?) AND kind = 'request' AND provider IS NOT NULL
          GROUP BY provider ORDER BY requests DESC`,
       )
       .all(`-${days} days`);
@@ -233,7 +233,7 @@ export class LogsRepo {
 
   /**
    * Per-account usage for one provider, keyed by account label (recorded in
-   * attempts_detail). Returns today + all-time request/token/cost totals.
+   * attempts_detail). Returns today + all-time request/token totals.
    */
   usageByAccount(providerName: string): Array<{
     account: string;
@@ -246,7 +246,7 @@ export class LogsRepo {
       .query(
         `SELECT attempts_detail, ts, input_tokens, output_tokens
          FROM request_logs
-         WHERE provider = ? AND attempts_detail IS NOT NULL`,
+         WHERE provider = ? AND attempts_detail IS NOT NULL AND kind = 'request'`,
       )
       .all(providerName) as Array<{
         attempts_detail: string;
