@@ -47,6 +47,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
   const [addCustomOpen, setAddCustomOpen] = useState(false);
   const [costModel, setCostModel] = useState<ProviderModel | null>(null);
   const [deleteAllPrompt, setDeleteAllPrompt] = useState(false);
+  const [deleteModelId, setDeleteModelId] = useState<string | null>(null);
   const modelsQuery = useQuery({ queryKey: ["providers", p.id, "models"], queryFn: () => providers.models(p.id) });
   const invalidate = () => Promise.all([
     qc.invalidateQueries({ queryKey: ["providers"] }),
@@ -207,7 +208,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
                 {r && !r.testing && <span className={r.ok ? "text-success/80" : "text-danger/80"}>{r.ok ? `${r.latency_ms}ms` : "✗"}</span>}
                 <button onClick={() => setCostModel(m)} className={m.credit_rate != null ? "text-accent/70 hover:text-accent" : "text-text-muted/40 hover:text-accent"} aria-label={`Set estimated cost for ${m.model_id}`} title={m.credit_rate != null ? `Estimated ${m.credit_rate} ${m.credit_unit ?? "credit"}(s) per 1,000 tokens` : "Set estimated cost per 1,000 tokens"}><Coins size={11} /></button>
                 <button onClick={() => testOne(m.model_id)} disabled={r?.testing || testingAll} className="text-text-muted/40 hover:text-accent disabled:opacity-40" aria-label={`Test ${m.model_id}`} title="Test this model"><Zap size={11} /></button>
-                <button onClick={() => removeModel.mutate(m.model_id)} className="text-text-muted/40 hover:text-danger" aria-label={`Remove ${m.model_id}`}><Trash2 size={11} /></button>
+                <button onClick={() => setDeleteModelId(m.model_id)} className="text-text-muted/40 hover:text-danger" aria-label={`Remove ${m.model_id}`}><Trash2 size={11} /></button>
               </span>
             );
           })}
@@ -224,6 +225,8 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
       </Modal>
 
       <ConfirmModal open={deleteAllPrompt} onClose={() => setDeleteAllPrompt(false)} onConfirm={() => removeAllModels.mutate(models.map((m) => m.model_id))} title="Delete all models" message={`Delete all ${models.length} models from ${p.name}? This only clears the local model list for this provider.`} danger loading={removeAllModels.isPending} />
+
+      <ConfirmModal open={deleteModelId !== null} onClose={() => setDeleteModelId(null)} onConfirm={() => { if (deleteModelId) removeModel.mutate(deleteModelId); setDeleteModelId(null); }} title="Delete model" message={`Delete ${deleteModelId ?? ""} from ${p.name}? This only removes it from the local model list.`} danger loading={removeModel.isPending} />
 
       <AddCustomModelModal
         open={addCustomOpen}

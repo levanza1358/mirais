@@ -145,14 +145,15 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | POST | `/api/copilot/:accountId/reconnect` | Restart GitHub device authorization for an existing Copilot account while preserving its ID, metadata, and usage history. |
 | GET | `/api/copilot/:accountId/login-info` | Poll the device code and terminal login result → `{ code, done, ok?, error?, url }`. |
 | DELETE | `/api/copilot/:accountId/login` | Cancel an unfinished Copilot login. Removes a new disabled placeholder account, but preserves an existing account being reconnected. |
-| GET | `/api/copilot/:accountId/status` | Poll Copilot login and local sidecar health → `{ done, ok, message? }`. |
+| GET | `/api/copilot/:accountId/status` | Poll Copilot login and local sidecar health → `{ done, ok, message?, login? }`. Read-only: never mutates accounts, credentials, or processes. |
+| POST | `/api/copilot/:accountId/finalize` | Complete a device login after authorization: recovers the token if the SDK missed it, syncs models, enables the account. If the GitHub username matches another account, returns `{ duplicate: true, login, existingAccountId }` without deleting anything — overwrite requires the explicit `/overwrite` call. |
 | GET | `/oauth/callback` | OAuth redirect target — exchanges the code (PKCE) for tokens and creates the account labeled `ChatGPT (email)`. Public route, no session |
 | PATCH | `/api/providers/:id/accounts/:accId` | Update key/priority/enabled. Accounts with a permanent OAuth refresh failure expose persisted `reauth_required`/`reauth_reason` and remain unroutable until reconnection. |
 | DELETE | `/api/providers/:id/accounts/:accId` | Remove account |
 | POST | `/api/providers/:id/accounts/:accId/test` | Live test → `{ ok, latencyMs, error? }` |
 | POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, `warmup_status`, upstream status, latency, and detail. Copilot warmup starts its local sidecar and preserves SDK errors; xAI OAuth retries one transient connection failure; Blackbox uses a minimal chat completion. |
 | POST | `/api/providers/:id/test` | Connectivity test against the upstream `/models` endpoint → `{ ok, status, latency_ms, account }`. For OAuth accounts: a token refresh stands in for the test (Codex backend has no `/models`) |
-| POST | `/api/providers/:id/sync` | Fetch full model list from upstream `/models` and register all → `{ synced, models }`. For OAuth accounts: syncs the live Codex catalog (`{codex}/models?client_version=1.0.0`) |
+| POST | `/api/providers/:id/sync` | Fetch full model list from upstream `/models` and register all → `{ synced, models, pruned }`. For OAuth accounts: syncs the live Codex catalog (`{codex}/models?client_version=1.0.0`). Sync only adds/updates models; previously synced models are removed (`pruned`) only when the `model_sync_prune` setting is enabled (default off). Upstream null/empty metadata never erases values already stored for a model. |
 | POST | `/api/providers/:id/models/:modelId/test` | Per-model test: tiny chat completion (`max_tokens: 16`) against the upstream → `{ ok, status, latency_ms, model, detail? }`. For OAuth accounts: a streaming Codex `/responses` call (backend requires `stream: true`) |
 | GET | `/api/providers/:id/models` | Models known for this provider |
 | GET | `/api/xai/farm/check` | xAI Farm prerequisite report for IMAP settings, Python, Python packages, and Camoufox browser. |
@@ -213,7 +214,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/settings` | Token saver toggle/rules, terse mode, retention days, server info |
+| GET | `/api/settings` | Token saver toggle/rules, terse mode, retention days, `model_sync_mode` (`curated`/`all`), `model_sync_prune` (default `false` — sync never auto-deletes models), server info |
 | PATCH | `/api/settings` | Update any of the above |
 | GET | `/api/settings/export` | Full config export (JSON, secrets redacted) |
 | POST | `/api/settings/import` | Import config (merge) |

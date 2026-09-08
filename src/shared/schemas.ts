@@ -322,6 +322,7 @@ export const settingsUpdateSchema = z.object({
     host: z.enum(["0.0.0.0", "127.0.0.1"]),
   }).optional(),
   model_sync_mode: z.enum(["curated", "all"]).optional(),
+  model_sync_prune: z.boolean().optional(),
   routing_policy: z.object({
     mode: z.enum(["balanced", "priority"]).optional(),
     preferProviders: z.array(z.string().min(1)).max(20).optional(),

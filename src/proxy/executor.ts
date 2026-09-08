@@ -437,9 +437,20 @@ export async function executeRequest(
       const latencyMs = Date.now() - started;
       const gErr = toGatewayError(err);
       const payloadTooLarge = gErr.status === 413 && ctx.allowPayloadTooLargeFallback;
-      const retriable = gErr instanceof GatewayError
+      // Copilot's SDK catalog advertises retired models the backend rejects at
+      // inference time. When that happens, disable the model so it stops being
+      // offered (row is kept — a sync can re-enable it if upstream restores it),
+      // and fail over to another candidate instead of cooling the account down.
+      const copilotModelRetired = candidate.provider.type === "github-copilot"
+        && gErr instanceof GatewayError
+        && /model_not_available_for_integrator/i.test(gErr.message);
+      if (copilotModelRetired && providersRepo) {
+        providersRepo.upsertModel(candidate.provider.id, candidate.modelId, { enabled: false });
+        log.warn("copilot model retired upstream — disabled", { provider: candidate.provider.name, model: candidate.modelId });
+      }
+      const retriable = copilotModelRetired || (gErr instanceof GatewayError
         ? isRetriableStatus(gErr.status) || gErr.type === "authentication_error" || payloadTooLarge
-        : true;
+        : true);
 
       attempts.push({
         provider: candidate.provider.name,
@@ -462,7 +473,7 @@ export async function executeRequest(
         // it as a short cooldown would make the gateway fail over to other
         // exhausted accounts and force clients into repeated recovery+retry
         // loops that replay the same answer.
-        if (!payloadTooLarge) markCooldown(cdKey, cooldownMs);
+        if (!payloadTooLarge && !copilotModelRetired) markCooldown(cdKey, cooldownMs);
         if (cooldownMs && providersRepo) {
           // Persist the window so the account is skipped on the next request
           // (not just in-memory) and recovers automatically once it passes.

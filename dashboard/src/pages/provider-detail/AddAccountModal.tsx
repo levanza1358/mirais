@@ -48,7 +48,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
   });
 
   const confirmCopilot = useMutation({
-    mutationFn: () => providers.copilotStatus(copilotAccountId!),
+    mutationFn: () => providers.copilotFinalize(copilotAccountId!),
     onSuccess: (status) => {
       if (status.duplicate) {
         setDupe({ login: status.login ?? "?", accountId: copilotAccountId! });
@@ -89,10 +89,10 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
   }, [mode, reconnectAccount]);
 
   useEffect(() => {
-    if (!oauthState && !copilotAccountId) return;
+    if ((!oauthState && !copilotAccountId) || dupe) return;
     const t = setInterval(async () => {
       try {
-        const s = copilotAccountId ? await providers.copilotStatus(copilotAccountId) : await providers.oauthStatus(oauthState!);
+        const s = copilotAccountId ? await providers.copilotFinalize(copilotAccountId) : await providers.oauthStatus(oauthState!);
         if (copilotAccountId && s.duplicate && !overwriteRef.current) {
           clearInterval(t);
           setDupe({ login: s.login ?? "?", accountId: copilotAccountId });
@@ -115,7 +115,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
     }, 2000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oauthState, copilotAccountId]);
+  }, [oauthState, copilotAccountId, dupe]);
 
   // Poll device-code for Copilot manual login (device flow, not web-flow)
   useEffect(() => {

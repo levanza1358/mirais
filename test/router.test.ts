@@ -224,6 +224,79 @@ describe("combo streaming failover", () => {
     }
   });
 
+  test("falls back to the sidecar when the direct backend does not support the model", async () => {
+    const p = providers.create({ name: "gh", type: "github-copilot" });
+    const account = providers.addAccount(p.id, { label: "main", baseUrl: "http://127.0.0.1:4141/v1" });
+    providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+    providers.upsertModel(p.id, "claude-opus-4.8-fast");
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/quota")) return Response.json({ quotaSnapshots: {} });
+      if (url.includes("/endpoint")) {
+        return Response.json({ baseUrl: "https://api.copilot.example.com", apiKey: "k", headers: {} });
+      }
+      // The direct backend must never be contacted for Claude models — it
+      // leaves streaming requests open until timeout instead of answering.
+      if (url.startsWith("https://api.copilot.example.com")) {
+        throw new Error("direct backend should not be called for Claude models");
+      }
+      // Sidecar SDK route handles Claude models the direct backend rejects.
+      if (url === "http://127.0.0.1:4141/v1/chat/completions") {
+        return new Response('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+    try {
+      const result = await executeRequest(
+        { model: "gh/claude-opus-4.8-fast", messages: [{ role: "user", content: "hi" }], stream: true },
+        router.resolve("gh/claude-opus-4.8-fast").candidates,
+        {},
+        providers,
+      );
+      expect(result.kind).toBe("stream");
+      if (result.kind !== "stream") return;
+      expect(await new Response(result.stream).text()).toContain('"content":"OK"');
+      // Model stays enabled — it works through the sidecar.
+      expect(providers.getProviderModel(p.id, "claude-opus-4.8-fast")?.enabled).toBe(1);
+      expect(urls).toContain("http://127.0.0.1:4141/v1/chat/completions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("disables a retired Copilot model and fails over instead of cooling down", async () => {
+    const p = providers.create({ name: "gh", type: "github-copilot" });
+    const account = providers.addAccount(p.id, { label: "main", baseUrl: "http://127.0.0.1:4141/v1" });
+    providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+    providers.upsertModel(p.id, "claude-retired");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/quota")) return Response.json({ quotaSnapshots: {} });
+      if (url.includes("/endpoint")) {
+        return Response.json({ baseUrl: "https://api.copilot.example.com", apiKey: "k", headers: {} });
+      }
+      return new Response(JSON.stringify({
+        error: { message: 'The requested model is not available for integrator "copilot-developer-cli". Available models: [gpt-4.1]', code: "model_not_available_for_integrator" },
+      }), { status: 400 });
+    }) as unknown as typeof fetch;
+    try {
+      await expect(executeRequest(
+        { model: "gh/claude-retired", messages: [{ role: "user", content: "hi" }], stream: true },
+        router.resolve("gh/claude-retired").candidates,
+        {},
+        providers,
+      )).rejects.toThrow(/not available for integrator/);
+      expect(providers.getProviderModel(p.id, "claude-retired")?.enabled).toBe(0);
+      expect(providers.getAccount(account.id)?.rate_limited_until).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("tries the next model when a 200 SSE stream ends before output", async () => {
     seedProvider("first", "openai", ["m1"], 10);
     seedProvider("second", "openai", ["m2"], 20);
@@ -331,14 +404,71 @@ describe("provider account strategy", () => {
 });
 
 describe("model sync provenance", () => {
-  test("prunes stale synced models but preserves manual models", () => {
+  test("prunes stale synced models but preserves manual models when prune enabled", () => {
     const p = seedProvider("provider", "openai", []);
     providers.upsertModel(p.id, "manual-model");
     providers.upsertModel(p.id, "stale-model", { source: "sync" });
     providers.upsertModel(p.id, "kept-model", { source: "sync" });
-    const pruned = providers.replaceSyncedModels(p.id, [{ id: "kept-model", contextLength: 1000, maxOutputTokens: 100, capabilities: [] }]);
+    const pruned = providers.replaceSyncedModels(p.id, [{ id: "kept-model", contextLength: 1000, maxOutputTokens: 100, capabilities: [] }], true);
     expect(pruned).toBe(1);
     expect(providers.listModels(p.id).map((model) => model.model_id).sort()).toEqual(["kept-model", "manual-model"]);
     expect(providers.getProviderModel(p.id, "manual-model")?.source).toBe("manual");
+  });
+
+  test("keeps stale synced models by default (no prune)", () => {
+    const p = seedProvider("provider", "openai", []);
+    providers.upsertModel(p.id, "stale-model", { source: "sync" });
+    providers.upsertModel(p.id, "kept-model", { source: "sync" });
+    const pruned = providers.replaceSyncedModels(p.id, [{ id: "kept-model", contextLength: 1000, maxOutputTokens: 100, capabilities: [] }]);
+    expect(pruned).toBe(0);
+    expect(providers.listModels(p.id).map((model) => model.model_id).sort()).toEqual(["kept-model", "stale-model"]);
+  });
+
+  test("sync does not clobber manually curated metadata with upstream nulls", () => {
+    const p = seedProvider("provider", "openai", []);
+    providers.upsertModel(p.id, "curated-model", { contextLength: 128_000, maxOutputTokens: 4096, capabilities: ["tools"] });
+    // Upstream catalog omits all metadata → nulls must not erase the curated values.
+    providers.replaceSyncedModels(p.id, [{ id: "curated-model", contextLength: null, maxOutputTokens: null, capabilities: null }]);
+    const model = providers.getProviderModel(p.id, "curated-model");
+    expect(model?.source).toBe("manual");
+    expect(model?.context_length).toBe(128_000);
+    expect(model?.max_output_tokens).toBe(4096);
+    expect(model?.capabilities).toBe(JSON.stringify(["tools"]));
+  });
+
+  for (const source of ["manual", "sync"] as const) {
+    for (const capabilities of [null, []]) {
+      test(`sync preserves ${source} metadata with ${JSON.stringify(capabilities)} capabilities`, () => {
+        const p = seedProvider("provider", "openai", []);
+        providers.upsertModel(p.id, "model", { source, contextLength: 128_000, maxOutputTokens: 4096, capabilities: ["tools"] });
+        providers.replaceSyncedModels(p.id, [{ id: "model", contextLength: null, maxOutputTokens: null, capabilities }]);
+        const model = providers.getProviderModel(p.id, "model");
+        expect(model?.source).toBe(source);
+        expect(model?.context_length).toBe(128_000);
+        expect(model?.max_output_tokens).toBe(4096);
+        expect(model?.capabilities).toBe(JSON.stringify(["tools"]));
+      });
+    }
+    test(`manual edits can clear ${source} metadata`, () => {
+      const p = seedProvider("provider", "openai", []);
+      providers.upsertModel(p.id, "model", { source, contextLength: 128_000, maxOutputTokens: 4096, capabilities: ["tools"] });
+      providers.upsertModel(p.id, "model", { contextLength: null, maxOutputTokens: null, capabilities: [] });
+      const model = providers.getProviderModel(p.id, "model");
+      expect(model?.context_length).toBeNull();
+      expect(model?.max_output_tokens).toBeNull();
+      expect(model?.capabilities).toBe("[]");
+      providers.upsertModel(p.id, "model", { capabilities: null });
+      expect(providers.getProviderModel(p.id, "model")?.capabilities).toBeNull();
+    });
+  }
+
+  test("sync fills metadata for synced models when upstream provides it", () => {
+    const p = seedProvider("provider", "openai", []);
+    providers.upsertModel(p.id, "synced-model", { source: "sync", contextLength: 128_000 });
+    providers.replaceSyncedModels(p.id, [{ id: "synced-model", contextLength: 200_000, maxOutputTokens: 8192, capabilities: ["vision"] }]);
+    const model = providers.getProviderModel(p.id, "synced-model");
+    expect(model?.context_length).toBe(200_000);
+    expect(model?.max_output_tokens).toBe(8192);
+    expect(model?.capabilities).toBe(JSON.stringify(["vision"]));
   });
 });

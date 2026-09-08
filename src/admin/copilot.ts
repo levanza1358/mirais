@@ -14,7 +14,7 @@ import { ProvidersRepo } from "../store/repos/providers";
 const sidecarDir = path.resolve("scripts", "copilot-sidecar");
 const sidecarScript = path.join(sidecarDir, "server.mjs");
 const cliScript = path.join(sidecarDir, "node_modules", "@github", "copilot", "npm-loader.js");
-const homesDir = path.join(config.dataDir, "copilot");
+let spawnImpl: typeof spawn = spawn;
 const children = new Map<string, ChildProcess>();
 interface LoginFlow {
   proc: ChildProcess;
@@ -92,7 +92,7 @@ function portFor(accountId: string): number {
 }
 
 function homeFor(accountId: string): string {
-  return path.join(homesDir, accountId);
+  return path.join(config.dataDir, "copilot", accountId);
 }
 
 export function copilotLoginFromConfig(content: string): string | null {
@@ -125,7 +125,8 @@ function envFor(accountId: string): NodeJS.ProcessEnv {
   delete env.COPILOT_GITHUB_TOKEN;
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
-  return { ...env, COPILOT_HOME: homeFor(accountId), GH_CONFIG_DIR: path.join(homeFor(accountId), "gh"), PORT: String(portFor(accountId)) };
+  // The direct-backend proxy needs the SDK's provider.getEndpoint RPC.
+  return { ...env, COPILOT_HOME: homeFor(accountId), GH_CONFIG_DIR: path.join(homeFor(accountId), "gh"), PORT: String(portFor(accountId)), COPILOT_ALLOW_GET_PROVIDER_ENDPOINT: "true" };
 }
 
 function listCopilotCredentialTargets(): Set<string> {
@@ -218,9 +219,20 @@ async function githubLogin(token: string): Promise<string | null> {
   }
 }
 
+export function _setSpawnForTests(impl: typeof spawn): void {
+  spawnImpl = impl;
+}
+
+export function _resetCopilotStateForTests(): void {
+  loginFlows.clear();
+  children.clear();
+  bulkJobs.clear();
+  latestBulkJob.clear();
+}
+
 function beginLogin(accountId: string, reconnect = false): void {
   fs.mkdirSync(homeFor(accountId), { recursive: true });
-  const login = spawn("node", [cliScript, "login", "--device-code"], {
+  const login = spawnImpl("node", [cliScript, "login", "--device-code"], {
     cwd: sidecarDir,
     env: { ...envFor(accountId), BROWSER: "none" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -267,7 +279,7 @@ function beginLogin(accountId: string, reconnect = false): void {
 function start(accountId: string): void {
   if (children.has(accountId)) return;
   fs.mkdirSync(homeFor(accountId), { recursive: true });
-  const child = spawn("node", [sidecarScript], { cwd: sidecarDir, env: envFor(accountId), stdio: "ignore", windowsHide: true });
+  const child = spawnImpl("node", [sidecarScript], { cwd: sidecarDir, env: envFor(accountId), stdio: "ignore", windowsHide: true });
   children.set(accountId, child);
   child.once("exit", (code) => { children.delete(accountId); if (code !== 0) log.warn("copilot sidecar exited", { accountId, code }); });
 }
@@ -284,9 +296,11 @@ async function waitReady(accountId: string, timeoutMs = 20_000): Promise<void> {
   }
 }
 
-async function health(accountId: string): Promise<{ ok: boolean; login: string | null; message: string | null }> {
-  start(accountId);
-  await waitReady(accountId);
+async function health(accountId: string, ensureStarted = true): Promise<{ ok: boolean; login: string | null; message: string | null }> {
+  if (ensureStarted) {
+    start(accountId);
+    await waitReady(accountId);
+  }
   try {
     const res = await fetch(`http://127.0.0.1:${portFor(accountId)}/health`, { signal: AbortSignal.timeout(15_000) });
     const body = await res.json() as { ok?: boolean; login?: string | null; message?: string | null };
@@ -373,6 +387,16 @@ export function copilotRoutes(db: Database) {
       const flow = loginFlows.get(account.id);
       if (flow && !flow.done) return { done: false, ok: false, message: "Waiting for GitHub device authorization…" };
       if (flow?.done && flow.exitCode !== 0) return { done: true, ok: false, message: flow.error ?? "GitHub Copilot login failed" };
+      const status = await health(account.id, false);
+      return { done: !!account.enabled && status.ok, ok: status.ok, message: status.message, login: status.login };
+    })
+    .post("/:accountId/finalize", async ({ params }) => {
+      const account = repo.getAccount(params.accountId);
+      if (!account) throw new AdminError(404, "Account not found");
+      const flow = loginFlows.get(account.id);
+      if (!flow) throw new AdminError(409, "No login flow for this account");
+      if (!flow.done) return { done: false, ok: false, message: "Waiting for GitHub device authorization…" };
+      if (flow?.done && flow.exitCode !== 0) return { done: true, ok: false, message: flow.error ?? "GitHub Copilot login failed" };
       let status = await health(account.id);
       // If the login flow finished but the sidecar still reports "Not authenticated",
       // the new token is in the credential manager but the SDK failed to read it back.
@@ -416,9 +440,7 @@ export function copilotRoutes(db: Database) {
         const other = status.login
           ? repo.listAccounts(account.provider_id).find((a) => a.id !== account.id && a.label === status.login)
           : undefined;
-        if (other && !other.enabled) {
-          repo.removeAccount(other.id);
-        } else if (other && !loginFlows.has(other.id)) {
+        if (other && !loginFlows.has(other.id)) {
           const flow = loginFlows.get(account.id);
           // Grace period: if the authorization just completed (<60s), the token in the old home may
           // not have refreshed yet → poll again instead of immediately offering an overwrite.
@@ -537,11 +559,7 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
         job.results.push({ email, success: false, error: "Account already exists" });
         continue;
       }
-      const dup = repo.listAccounts(job.providerId).find((a) => a.label.toLowerCase() === email.toLowerCase());
-      if (dup) {
-        log(`FORCE: removing existing account ${email}...`);
-        repo.removeAccount(dup.id);
-      }
+      // The existing account is only replaced AFTER the new login succeeds (see below).
       existing.delete(email.toLowerCase());
     }
 
@@ -558,7 +576,7 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
     await fsp.writeFile(accountsFile, line, "utf-8");
 
     log(`Spawning bot for ${email}...`);
-    const proc = spawn(venvPython, [
+    const proc = spawnImpl(venvPython, [
       path.join(bulkDir, "copilot-bulk-login.py"),
       "--accounts", accountsFile,
       "--output", outputFile,
@@ -585,9 +603,21 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
     await fsp.unlink(outputFile).catch(() => {});
 
     const first = result[0];
-    if (first && first.success) {
+    if (exitCode === 0 && first?.success) {
+      if (!repo.updateAccount(account.id, { enabled: true, lastWarmupStatus: "healthy", lastWarmupAt: new Date().toISOString(), lastWarmupDetail: "Bulk login successful" })) {
+        throw new Error("Replacement account no longer exists");
+      }
+      if (force) {
+        const dup = repo.listAccounts(job.providerId).find((a) => a.id !== account.id && a.label.toLowerCase() === email.toLowerCase());
+        if (dup) {
+          log(`FORCE: replacing existing account ${email}...`);
+          children.get(dup.id)?.kill();
+          children.delete(dup.id);
+          loginFlows.delete(dup.id);
+          repo.removeAccount(dup.id);
+        }
+      }
       log(`SUCCESS: ${email}`);
-      repo.updateAccount(account.id, { enabled: true, lastWarmupStatus: "healthy", lastWarmupAt: new Date().toISOString(), lastWarmupDetail: "Bulk login successful" });
       job.results.push({ email, success: true });
     } else {
       const errMsg = first?.error ?? `Exit ${exitCode}`;

@@ -229,14 +229,15 @@ export class ProvidersRepo {
       .get(providerId, modelId) as { id: string } | null;
     if (existing) {
       const cur = this.db.query("SELECT * FROM provider_models WHERE id = ?").get(existing.id) as ProviderModel;
+      const isSync = patch?.source === "sync";
       this.db
         .query("UPDATE provider_models SET display_name=?, enabled=?, context_length=?, max_output_tokens=?, capabilities=?, credit_rate=?, credit_unit=?, source=? WHERE id=?")
         .run(
           patch?.displayName ?? cur.display_name,
           patch?.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
-          patch?.contextLength !== undefined ? patch.contextLength : cur.context_length,
-          patch?.maxOutputTokens !== undefined ? patch.maxOutputTokens : cur.max_output_tokens,
-          caps !== undefined ? caps : cur.capabilities,
+          patch?.contextLength !== undefined && !(isSync && patch.contextLength === null) ? patch.contextLength : cur.context_length,
+          patch?.maxOutputTokens !== undefined && !(isSync && patch.maxOutputTokens === null) ? patch.maxOutputTokens : cur.max_output_tokens,
+          caps !== undefined && !(isSync && !patch?.capabilities?.length) ? caps : cur.capabilities,
           patch?.creditRate !== undefined ? patch.creditRate : cur.credit_rate,
           patch?.creditUnit !== undefined ? patch.creditUnit : cur.credit_unit,
           cur.source === "manual" ? "manual" : (patch?.source ?? cur.source),
@@ -261,7 +262,7 @@ export class ProvidersRepo {
     }
   }
 
-  replaceSyncedModels(providerId: string, models: Array<{ id: string; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>): number {
+  replaceSyncedModels(providerId: string, models: Array<{ id: string; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }>, prune = false): number {
     const kept = new Set(models.map((model) => model.id));
     return this.db.transaction(() => {
       for (const model of models) {
@@ -272,6 +273,7 @@ export class ProvidersRepo {
           source: "sync",
         });
       }
+      if (!prune) return 0;
       let pruned = 0;
       for (const existing of this.listModels(providerId)) {
         if (existing.source === "sync" && !kept.has(existing.model_id)) {

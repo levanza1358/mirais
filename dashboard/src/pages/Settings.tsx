@@ -470,7 +470,14 @@ function ModelSyncSection() {
     onError: (e) => toast(e.message, "error"),
   });
 
+  const savePrune = useMutation({
+    mutationFn: (prune: boolean) => settings.update({ model_sync_prune: prune }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Model sync prune saved"); },
+    onError: (e) => toast(e.message, "error"),
+  });
+
   const mode = s.data?.model_sync_mode ?? "curated";
+  const prune = s.data?.model_sync_prune ?? false;
 
   return (
     <Card>
@@ -502,7 +509,17 @@ function ModelSyncSection() {
           </button>
         ))}
       </div>
-      <p className="mt-3 text-xs text-text-muted">Re-sync a provider to apply. Models that no longer pass the filter are removed automatically.</p>
+      <div className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-border p-3">
+        <div>
+          <span className="block text-sm font-medium text-text-primary">Prune removed models</span>
+          <span className="block text-xs text-text-muted">
+            When off (default), syncing only adds or updates models — previously synced models are never deleted automatically.
+            Turn on to also remove synced models that disappear from the upstream catalog.
+          </span>
+        </div>
+        <Switch checked={prune} onChange={(v) => savePrune.mutate(v)} disabled={savePrune.isPending} aria-label="Prune removed models" />
+      </div>
+      <p className="mt-3 text-xs text-text-muted">Re-sync a provider to apply.{prune ? " Models that no longer pass the filter are removed." : " Models that no longer pass the filter are kept."}</p>
     </Card>
   );
 }

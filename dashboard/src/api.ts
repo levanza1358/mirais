@@ -271,6 +271,7 @@ export interface Settings {
   session_remember_default: boolean;
   network_binding?: { exposed: boolean; host: "0.0.0.0" | "127.0.0.1" };
   model_sync_mode: "curated" | "all";
+  model_sync_prune: boolean;
   warmup_config?: { enabled: boolean; interval_minutes: number } | null;
   ui: { theme?: string; accent?: string } | null;
   xai_imap?: {
@@ -315,7 +316,9 @@ export const providers = {
   copilotReconnect: (accountId: string) =>
     req<{ accountId: string; url: string }>(`/api/copilot/${encodeURIComponent(accountId)}/reconnect`, { method: "POST" }),
   copilotStatus: (accountId: string) =>
-    req<{ done: boolean; ok?: boolean; message?: string; duplicate?: boolean; login?: string | null; existingAccountId?: string }>(`/api/copilot/${encodeURIComponent(accountId)}/status`),
+    req<{ done: boolean; ok: boolean; message?: string | null; login?: string | null }>(`/api/copilot/${encodeURIComponent(accountId)}/status`),
+  copilotFinalize: (accountId: string) =>
+    req<{ done: boolean; ok: boolean; message?: string | null; duplicate?: boolean; login?: string | null; existingAccountId?: string }>(`/api/copilot/${encodeURIComponent(accountId)}/finalize`, { method: "POST" }),
   copilotOverwrite: (accountId: string) =>
     req<{ ok: boolean }>(`/api/copilot/${encodeURIComponent(accountId)}/overwrite`, { method: "POST" }),
   copilotLoginInfo: (accountId: string) =>

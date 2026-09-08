@@ -59,6 +59,7 @@ export function settingsRoutes(db: Database) {
       session_remember_default: settings.get("session_remember_default") === "1",
       network_binding: currentNetworkBinding(),
       model_sync_mode: settings.getJson("model_sync_mode") ?? "curated",
+      model_sync_prune: settings.getJson<boolean>("model_sync_prune") ?? false,
       routing_policy: normalizeRoutingPolicy(settings.getJson("routing_policy")),
       ui: settings.getJson("ui"),
       xai_imap: settings.getJson("xai_imap"),
@@ -88,6 +89,9 @@ export function settingsRoutes(db: Database) {
       if (parsed.data.network_binding) settings.setJson("network_binding", parsed.data.network_binding);
       if (parsed.data.model_sync_mode !== undefined) {
         settings.setJson("model_sync_mode", parsed.data.model_sync_mode);
+      }
+      if (parsed.data.model_sync_prune !== undefined) {
+        settings.setJson("model_sync_prune", parsed.data.model_sync_prune);
       }
       if (parsed.data.routing_policy) {
         const current = normalizeRoutingPolicy(settings.getJson("routing_policy"));

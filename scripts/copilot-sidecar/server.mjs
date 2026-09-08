@@ -154,11 +154,17 @@ const server = http.createServer(async (req, res) => {
       await start();
       return json(res, 200, await client.rpc.account.getQuota({}));
     }
-    if (req.method === "GET" && req.url?.startsWith("/v1/endpoint")) {
+    // The gateway strips the /v1 prefix from the account base URL before
+    // calling this endpoint, so accept both /endpoint and /v1/endpoint.
+    if (req.method === "GET" && (req.url?.startsWith("/v1/endpoint") || req.url?.startsWith("/endpoint"))) {
       await start();
       const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
       const modelId = url.searchParams.get("model") || undefined;
-      const session = await client.createSession({ model: modelId ?? "gpt-4o", streaming: false, enableSessionStore: false });
+      // Mode "empty" requires every session to declare its tools, even one
+      // that only lives long enough to fetch the provider endpoint.
+      const availableTools = new ToolSet();
+      availableTools.addBuiltIn(BuiltInTools.Isolated);
+      const session = await client.createSession({ model: modelId ?? "gpt-4o", streaming: false, availableTools, enableSessionStore: false });
       try {
         const ep = await session.rpc.provider.getEndpoint({ modelId });
         await session.disconnect();

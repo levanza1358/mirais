@@ -877,6 +877,7 @@ export function providerRoutes(db: Database) {
       const accounts = repo.listAccounts(p.id).filter((a) => a.enabled && a.last_warmup_status === "healthy");
       if (!accounts.length) throw new AdminError(400, "No healthy account to sync with. Run account warmup first.");
       const account = accounts[0]!;
+      const prune = settings.getJson<boolean>("model_sync_prune") ?? false;
 
       if (isCodeBuddyProviderType(p.type)) {
         const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
@@ -891,7 +892,7 @@ export function providerRoutes(db: Database) {
               capabilities: meta?.capabilities ?? null,
             };
           });
-        const pruned = repo.replaceSyncedModels(p.id, syncedModels);
+        const pruned = repo.replaceSyncedModels(p.id, syncedModels, prune);
         const kept = syncedModels.map((model) => model.id);
         log.info("codebuddy models synced", { provider: p.name, count: kept.length, mode });
         return { synced: kept.length, pruned, models: kept, mode };
@@ -911,7 +912,7 @@ export function providerRoutes(db: Database) {
         }
         if (!byId.size) throw new AdminError(502, failures[0] ?? "No Grok model catalog available");
         const models = [...byId.values()];
-        const pruned = repo.replaceSyncedModels(p.id, models);
+        const pruned = repo.replaceSyncedModels(p.id, models, prune);
         log.info("xai models synced", { provider: p.name, count: models.length, pruned, accounts: accounts.length, failures: failures.length });
         return { synced: models.length, pruned, models: models.map((model) => model.id) };
       }
@@ -941,7 +942,7 @@ export function providerRoutes(db: Database) {
         }
         const models = [...byId.values()];
         const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
-        const pruned = repo.replaceSyncedModels(p.id, models);
+        const pruned = repo.replaceSyncedModels(p.id, models, prune);
         log.info("codex models synced", { provider: p.name, count: models.length, pruned, mode, accounts: oauthAccounts.length, failures: failures.length });
         return { synced: models.length, pruned, mode, models: models.map((m) => m.id) };
       }
@@ -1027,10 +1028,11 @@ export function providerRoutes(db: Database) {
       }
 
       // Remove previously-synced models that no longer pass the filter so the
-      // catalog stays clean (only when we actually got a non-empty upstream list).
+      // catalog stays clean (only when pruning is enabled and we actually got
+      // a non-empty upstream list).
       let pruned = 0;
       if (entries.length > 0) {
-        pruned = repo.replaceSyncedModels(p.id, syncedModels);
+        pruned = repo.replaceSyncedModels(p.id, syncedModels, prune);
       }
 
       log.info("models synced", { provider: p.name, kept: kept.length, dropped, pruned, mode });

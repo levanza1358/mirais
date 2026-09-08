@@ -88,32 +88,74 @@ function buildHeaders(ep: CopilotEndpoint): Record<string, string> {
   return headers;
 }
 
+// Copilot access tokens are short-lived; a cached endpoint can go stale
+// mid-window. On 401/403 drop the cache and retry once with a fresh endpoint
+// before surfacing the error (the executor then fails over to other accounts).
+async function fetchWithFreshEndpoint(
+  sidecarUrl: string,
+  modelId: string,
+  init: (ep: CopilotEndpoint) => { url: string; options: RequestInit },
+): Promise<Response> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ep = await getEndpoint(sidecarUrl, modelId);
+    const { url, options } = init(ep);
+    assertSafeUpstreamUrl(url, { allowPrivate: false });
+    const res = await fetchNoCrossHostRedirect(url, options, 3, { allowPrivate: false });
+    if ((res.status === 401 || res.status === 403) && attempt === 0) {
+      clearEndpointCache(sidecarUrl);
+      continue;
+    }
+    return res;
+  }
+  throw new GatewayError(502, "server_error", "Copilot direct API retry exhausted");
+}
+
+async function sidecarChat(sidecarUrl: string, req: CanonicalRequest, modelId: string, stream: boolean): Promise<Response> {
+  return fetch(`${sidecarUrl.replace(/\/+$/, "")}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(stream ? { accept: "text/event-stream" } : {}) },
+    body: JSON.stringify({ ...req, model: modelId, stream }),
+    signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+  });
+}
+
+// Copilot's raw provider endpoint supports GPT-family models. Anthropic,
+// Gemini, and other SDK-routed models can leave the direct streaming request
+// open until timeout, so route them through the sidecar from the start.
+function useDirectBackend(modelId: string): boolean {
+  return /^(?:openai\/)?(?:gpt-|o\d)/i.test(modelId);
+}
+
+function modelUnsupported(status: number, text: string): boolean {
+  return status === 400 && /model_not_supported|requested model is not supported/i.test(text);
+}
+
 export async function directChatCompletions(
   sidecarUrl: string,
   req: CanonicalRequest,
   modelId: string,
 ): Promise<CanonicalResponse> {
-  const ep = await getEndpoint(sidecarUrl, modelId);
-  const url = `${ep.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-
-  assertSafeUpstreamUrl(url, { allowPrivate: false });
-
-  const body = { ...req, model: ep.sessionToken?.model ?? modelId, stream: false };
-
-  const res = await fetchNoCrossHostRedirect(url, {
-    method: "POST",
-    headers: buildHeaders(ep),
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.upstreamTimeoutMs),
-    keepalive: true,
-  }, 3, { allowPrivate: false });
+  let res = useDirectBackend(modelId)
+    ? await fetchWithFreshEndpoint(sidecarUrl, modelId, (ep) => ({
+    url: `${ep.baseUrl.replace(/\/+$/, "")}/chat/completions`,
+    options: {
+      method: "POST",
+      headers: buildHeaders(ep),
+      body: JSON.stringify({ ...req, model: ep.sessionToken?.model ?? modelId, stream: false }),
+      signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+      keepalive: true,
+    },
+  }))
+    : await sidecarChat(sidecarUrl, req, modelId, false);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    if (res.status === 401 || res.status === 403) {
-      clearEndpointCache(sidecarUrl);
-    }
-    throw new GatewayError(res.status, "server_error", `Copilot direct API error: HTTP ${res.status} ${text}`);
+    if (modelUnsupported(res.status, text)) res = await sidecarChat(sidecarUrl, req, modelId, false);
+    else throw new GatewayError(res.status, "server_error", `Copilot direct API error: HTTP ${res.status} ${text}`);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new GatewayError(res.status, "server_error", `Copilot sidecar API error: HTTP ${res.status} ${text}`);
   }
 
   const data = (await res.json()) as CanonicalResponse;
@@ -126,32 +168,32 @@ export async function directChatCompletionsStream(
   req: CanonicalRequest,
   modelId: string,
 ): Promise<{ stream: ReadableStream<Uint8Array>; usagePromise: Promise<Usage | null> }> {
-  const ep = await getEndpoint(sidecarUrl, modelId);
-  const url = `${ep.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-
-  assertSafeUpstreamUrl(url, { allowPrivate: false });
-
-  const body = { ...req, model: ep.sessionToken?.model ?? modelId, stream: true };
-
-  const res = await fetchNoCrossHostRedirect(url, {
-    method: "POST",
-    headers: {
-      ...buildHeaders(ep),
-      accept: "text/event-stream",
+  let res = useDirectBackend(modelId)
+    ? await fetchWithFreshEndpoint(sidecarUrl, modelId, (ep) => ({
+    url: `${ep.baseUrl.replace(/\/+$/, "")}/chat/completions`,
+    options: {
+      method: "POST",
+      headers: {
+        ...buildHeaders(ep),
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify({ ...req, model: ep.sessionToken?.model ?? modelId, stream: true }),
+      signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+      keepalive: true,
     },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.upstreamTimeoutMs),
-    keepalive: true,
-  }, 3, { allowPrivate: false });
+  }))
+    : await sidecarChat(sidecarUrl, req, modelId, true);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    if (res.status === 401 || res.status === 403) {
-      clearEndpointCache(sidecarUrl);
-    }
-    throw new GatewayError(res.status, "server_error", `Copilot direct API error: HTTP ${res.status} ${text}`);
+    if (modelUnsupported(res.status, text)) res = await sidecarChat(sidecarUrl, req, modelId, true);
+    else throw new GatewayError(res.status, "server_error", `Copilot direct API error: HTTP ${res.status} ${text}`);
   }
-  if (!res.body) throw new GatewayError(502, "server_error", "Copilot direct API returned no body");
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new GatewayError(res.status, "server_error", `Copilot sidecar API error: HTTP ${res.status} ${text}`);
+  }
+  if (!res.body) throw new GatewayError(502, "server_error", "Copilot API returned no body");
 
   const parser = new SseParser();
   let usage: Usage | null = null;
