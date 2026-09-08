@@ -36,6 +36,17 @@ curl -fsSL https://raw.githubusercontent.com/levanza1358/mirais/main/install.sh 
 irm https://raw.githubusercontent.com/levanza1358/mirais/main/install.ps1 | iex
 ```
 
+**Repair a broken install** — wipe every Mirais artifact (database, logs,
+`.env`, backups) and reinstall from scratch:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/levanza1358/mirais/main/install.ps1))) -ForceClean
+```
+
+This stops Mirais and its sidecars, removes the Startup launcher, the
+`C:\Windows\mirais.cmd` shim, the install metadata, and the install directory
+itself before cloning again. All local data is permanently lost.
+
 Then:
 
 ```bash
@@ -45,6 +56,45 @@ mirais status
 ```
 
 The global `mirais` command remembers the install location — no `cd` needed.
+
+## Uninstall
+
+**Back up first.** Uninstall permanently deletes the Mirais install directory,
+SQLite database, logs, `.env`, and `data/backups`. Use the dashboard's **Backup
+now** action or copy the data directory while Mirais is stopped. Keep any
+backups you want to preserve outside the install directory.
+
+Windows PowerShell:
+
+```powershell
+mirais uninstall --yes
+```
+
+The command stops Mirais, removes autostart, and deletes the install data.
+The administrator-installed `C:\Windows\mirais.cmd` shim may remain; remove it
+manually from an elevated PowerShell if it is no longer needed:
+
+```powershell
+Remove-Item C:\Windows\mirais.cmd
+```
+
+Ubuntu:
+
+```bash
+mirais uninstall --yes
+```
+
+The command stops Mirais, removes autostart, and deletes the install data.
+If systemd autostart was enabled, it disables and removes `mirais.service`.
+If the install was managed manually instead, stop and remove that service first:
+
+```bash
+sudo systemctl disable --now mirais
+sudo rm -f /etc/systemd/system/mirais.service
+sudo systemctl daemon-reload
+```
+
+Do not run `mirais uninstall --yes` until the backup warning above is addressed.
 
 ## First run
 
