@@ -44,6 +44,8 @@ describe("phase-one observability", () => {
 
   test("key usage reports totals and top models", () => {
     const db = freshDb();
+    db.query("INSERT INTO gateway_keys (id, label, key_hash, key_prefix) VALUES (?, ?, ?, ?)")
+      .run("key-1", "test key", "hash-key-1", "test-");
     const logs = new LogsRepo(db);
     const entry = { keyId: "key-1", endpoint: "/v1/chat/completions", requestedModel: "m", provider: "openai", model: "m", attempts: 1, status: "success" as const, httpStatus: 200, error: null, inputTokens: 10, outputTokens: 5, latencyMs: 10, tokensSaved: 0 };
     logs.insert(entry);
