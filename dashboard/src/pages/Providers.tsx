@@ -33,7 +33,7 @@ export default function Providers() {
 
   const createAndOpen = useMutation({
     mutationFn: (preset: ProviderPreset) =>
-      providers.create({ name: preset.name, type: preset.type, baseUrl: preset.baseUrl }),
+      providers.create({ name: preset.name, displayName: preset.displayName, type: preset.type, baseUrl: preset.baseUrl }),
     onSuccess: (p) => {
       invalidate();
       toast("Provider created");
@@ -43,14 +43,14 @@ export default function Providers() {
   });
 
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", baseUrl: "" });
+  const [form, setForm] = useState({ name: "", displayName: "", baseUrl: "" });
   const createCustom = useMutation({
     mutationFn: () =>
-      providers.create({ name: form.name.trim(), type: "custom", baseUrl: form.baseUrl.trim() || undefined }),
+      providers.create({ name: form.name.trim(), displayName: form.displayName.trim() || form.name.trim(), type: "custom", baseUrl: form.baseUrl.trim() || undefined }),
     onSuccess: (p) => {
       invalidate();
       setAddOpen(false);
-      setForm({ name: "", baseUrl: "" });
+      setForm({ name: "", displayName: "", baseUrl: "" });
       toast("Custom provider created");
       navigate(`/dashboard/providers/${p.id}`);
     },
@@ -118,6 +118,10 @@ export default function Providers() {
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
             <span className="mt-1 block text-[11px] text-text-muted/70">Lowercase letters, digits, dash, underscore. Must be unique.</span>
+          </label>
+          <label className="block text-xs text-text-muted">
+            Display name
+            <Input className="mt-1" required maxLength={256} placeholder="My provider" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} />
           </label>
           <label className="block text-xs text-text-muted">
             Base URL
@@ -319,12 +323,10 @@ function ProviderCard({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold">{provider?.name ?? preset.displayName}</h3>
+              <h3 className="truncate text-sm font-semibold">{provider?.display_name || provider?.name || preset.displayName}</h3>
               {provider && !provider.enabled && <Badge tone="warning">disabled</Badge>}
             </div>
-            <p className="mt-0.5 truncate text-xs text-text-muted">
-              {(!isCatalogPreset(preset) && provider?.base_url) || preset.description}
-            </p>
+            <p className="mt-0.5 truncate text-xs text-text-muted">{provider?.name ?? preset.description}</p>
           </div>
           <ChevronRight size={16} className="mt-1 shrink-0 text-text-muted/40 transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
         </div>

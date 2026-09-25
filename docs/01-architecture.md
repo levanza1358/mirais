@@ -131,7 +131,7 @@ The gateway's internal canonical format is **OpenAI Chat Completions**.
 
 ## 4.2 OAuth (ChatGPT / Codex) Upstream
 
-Accounts added via **ChatGPT login** (`auth_kind = 'oauth'`) cannot call `api.openai.com` — OAuth access tokens are rejected there (403). They only work against the **ChatGPT Codex backend** (`https://chatgpt.com/backend-api/codex`), which speaks the **Responses API**, not Chat Completions. [src/proxy/codex.ts](../src/proxy/codex.ts) handles this path:
+OAuth accounts under the `openai` provider and imported accounts under `codex` cannot call `api.openai.com` — OAuth access tokens are rejected there (403). OpenAI OAuth accounts are created through browser OAuth; `codex` accounts are imported from access/refresh-token JSON. Both use the **ChatGPT Codex backend** (`https://chatgpt.com/backend-api/codex`), which speaks the **Responses API**, not Chat Completions. [src/proxy/codex.ts](../src/proxy/codex.ts) handles this path. OpenAI API-key and ChatGPT OAuth accounts intentionally share the same provider tile; only Codex remains separate:
 
 - **Token refresh** — access tokens are refreshed near expiry and persisted. Refresh is single-flight per account, so concurrent callers share one operation. Permanent refresh failures persist `reauth_required`; routing skips that account until reconnection stores fresh tokens.
 - **Request translation** — canonical Chat Completions → Responses API: `messages` → `input` items (`input_text` / `output_text` / `input_image` / `function_call` / `function_call_output`), `system` → top-level `instructions`, `tools` → Responses function tools. `store: false` is always set.

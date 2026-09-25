@@ -120,7 +120,10 @@ export interface CanonicalResponse {
 // ── Domain entities ──
 
 export type ProviderType =
+  /** OpenAI-compatible API-key provider. */
   | "openai"
+  /** Codex provider imported from OAuth token JSON. */
+  | "codex"
   | "anthropic"
   | "deepseek"
   | "xai"
@@ -134,6 +137,7 @@ export type ProviderType =
 export interface Provider {
   id: string;
   name: string;
+  display_name: string | null;
   type: ProviderType;
   base_url: string | null;
   enabled: number;
@@ -233,6 +237,8 @@ export interface GatewayKey {
   rate_limit_rpm: number | null;
   concurrency: number | null;
   daily_token_budget: number | null;
+  /** Lifetime token ceiling; null means unlimited. */
+  token_budget: number | null;
   expires_at: string | null;
   created_at: string;
   last_used_at: string | null;

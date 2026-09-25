@@ -29,12 +29,21 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     type: "openai",
     name: "openai",
-    displayName: "OpenAI (Codex)",
-    description: "GPT models & Codex via the OpenAI API",
+    displayName: "OpenAI",
+    description: "GPT models via the OpenAI API",
     textIcon: "OA",
     iconSrc: openaiIcon,
     color: "#FFFFFF",
     credentialUrl: "https://platform.openai.com/api-keys",
+  },
+  {
+    type: "codex",
+    name: "codex",
+    displayName: "OpenAI Codex",
+    description: "Codex models via imported OAuth tokens",
+    textIcon: "CX",
+    iconSrc: openaiIcon,
+    color: "#A78BFA",
   },
   {
     type: "anthropic",

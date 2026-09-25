@@ -142,6 +142,11 @@ export function v1Routes(db: Database) {
     authorizeModel(key, req.model);
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
+      if (key.token_budget) {
+        const used = new LogsRepo(db).keyUsage(key.id).tokens_total;
+        const message = used >= key.token_budget ? "Your token limit has been reached for this API key" : "Rate limit exceeded";
+        if (used >= key.token_budget) throw new GatewayError(429, "rate_limit_error", message, "token_limit_reached");
+      }
       set.status = 429;
       set.headers["retry-after"] = String(rl.retryAfterSec);
       logRequest(key.id === "anonymous" ? null : key.id, "/v1/chat/completions", req.model, null, null, 1, "rate_limited", 429, "rate limit", started, undefined, 0, undefined, undefined, "request", reasoningEffort(req));
@@ -223,7 +228,10 @@ export function v1Routes(db: Database) {
     let req = responsesRequestToCanonical(parsed.data);
     authorizeModel(key, req.model);
     const rl = checkRateLimit(db, key);
-    if (rl.retryAfterSec !== undefined) throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
+    if (rl.retryAfterSec !== undefined) {
+      if (key.token_budget && new LogsRepo(db).keyUsage(key.id).tokens_total >= key.token_budget) throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
+      throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
+    }
     const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
       ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
       : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
@@ -301,6 +309,7 @@ export function v1Routes(db: Database) {
     authorizeModel(key, req.model);
     const rl = checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
+      if (key.token_budget && new LogsRepo(db).keyUsage(key.id).tokens_total >= key.token_budget) throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
       set.status = 429;
       set.headers["retry-after"] = String(rl.retryAfterSec);
       return { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } };
@@ -486,6 +495,11 @@ export function v1Routes(db: Database) {
   }
 
   function summarizeRequest(r: CanonicalRequest): string {
+    // Persist a machine-readable canonical request when TRACK_PAYLOADS=full so
+    // the admin UI can offer an explicit, non-streaming replay. The stored
+    // payload remains governed by the existing seven-day body retention.
+    return JSON.stringify(r);
+    /*
     const parts: string[] = [];
 
     parts.push(`model: ${r.model}`);
@@ -523,6 +537,7 @@ export function v1Routes(db: Database) {
 
     const joined = parts.join("\n").trim();
     return joined.length > 12000 ? joined.slice(0, 12000) + "\n…[truncated]" : joined;
+    */
   }
 
   function summarizeResponse(resp: CanonicalResponse | null, errMsg: string | null): string {

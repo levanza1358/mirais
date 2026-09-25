@@ -137,8 +137,30 @@ export class LogsRepo {
       .all(`-${days} days`) as never;
   }
 
+  keyUsage(keyId: string): { requests_today: number; tokens_today: number; tokens_total: number; requests_minute: number; requests_total: number; input_tokens_total: number; output_tokens_total: number; top_models: Array<{ model: string; requests: number; tokens: number }> } {
+    const total = this.db.query("SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ?").get(keyId) as { tokens: number };
+    const today = this.db.query("SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ? AND ts >= datetime('now', 'start of day')").get(keyId) as { requests: number; tokens: number };
+    const minute = this.db.query("SELECT COUNT(*) AS requests FROM request_logs WHERE key_id = ? AND ts >= datetime('now', '-1 minute')").get(keyId) as { requests: number };
+    const totals = this.db.query("SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens FROM request_logs WHERE key_id = ?").get(keyId) as { requests: number; input_tokens: number; output_tokens: number };
+    const topModels = this.db.query("SELECT COALESCE(model, requested_model) AS model, COUNT(*) AS requests, COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ? GROUP BY COALESCE(model, requested_model) ORDER BY tokens DESC LIMIT 5").all(keyId) as Array<{ model: string; requests: number; tokens: number }>;
+    return { requests_today: today.requests, tokens_today: today.tokens, tokens_total: total.tokens, requests_minute: minute.requests, requests_total: totals.requests, input_tokens_total: totals.input_tokens, output_tokens_total: totals.output_tokens, top_models: topModels };
+  }
+
   getById(id: string): RequestLog | null {
     return (this.db.query("SELECT * FROM request_logs WHERE id = ?").get(id) as RequestLog) ?? null;
+  }
+
+  getReplayBody(id: string): { endpoint: string; body: Record<string, unknown> } | null {
+    const row = this.getById(id);
+    if (!row || row.kind !== "request" || !row.request_body) return null;
+    try {
+      const parsed = JSON.parse(row.request_body) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+      const body = { ...(parsed as Record<string, unknown>), stream: false };
+      return { endpoint: "/v1/chat/completions", body };
+    } catch {
+      return null;
+    }
   }
 
   purgeOlderThan(days: number): number {
@@ -229,6 +251,20 @@ export class LogsRepo {
          GROUP BY provider ORDER BY requests DESC`,
       )
       .all(`-${days} days`);
+  }
+
+  providerHealth(days = 7): Array<{ provider: string; requests: number; errors: number; error_rate: number; avg_latency_ms: number; last_request_at: string | null }> {
+    return this.db.query(
+      `SELECT provider,
+              COUNT(*) AS requests,
+              SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS errors,
+              SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS error_rate,
+              ROUND(COALESCE(AVG(latency_ms), 0)) AS avg_latency_ms,
+              MAX(ts) AS last_request_at
+       FROM request_logs
+       WHERE kind = 'request' AND provider IS NOT NULL AND ts >= datetime('now', ?)
+       GROUP BY provider ORDER BY requests DESC`,
+    ).all(`-${days} days`) as Array<{ provider: string; requests: number; errors: number; error_rate: number; avg_latency_ms: number; last_request_at: string | null }>;
   }
 
   /**

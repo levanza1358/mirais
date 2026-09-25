@@ -32,7 +32,7 @@ type CodexPlanRequirement = "Plus / Pro" | "Pro";
 
 /** Informational minimum ChatGPT subscription tiers for Codex-only models. */
 function codexPlanRequirement(provider: Provider, modelId: string): CodexPlanRequirement | null {
-  if (provider.type !== "openai") return null;
+  if (provider.type !== "openai" && provider.type !== "codex") return null;
   const id = modelId.toLowerCase();
   if (/^gpt-5\.3-codex-spark(?:$|-)/.test(id)) return "Pro";
   if (/^gpt-5\.6-sol(?:$|-)/.test(id)) return "Plus / Pro";

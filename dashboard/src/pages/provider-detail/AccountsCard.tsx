@@ -10,6 +10,7 @@ import { ACCOUNT_PAGE_SIZE_OPTIONS, DEFAULT_ACCOUNTS_PER_PAGE } from "./types";
 import { downloadCsv, toCsv } from "../../utils/csv";
 
 type AccountStatusTab = "healthy" | "rate_limited" | "failing" | "unknown";
+type DeleteScope = "all" | AccountStatusTab;
 
 const ACCOUNT_STATUS_TABS: Array<{ id: AccountStatusTab; label: string; activeClassName: string }> = [
   { id: "healthy", label: "Healthy", activeClassName: "border-success bg-success/10 text-success" },
@@ -24,6 +25,8 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const [reconnecting, setReconnecting] = useState<ProviderAccount | null>(null);
   const [removing, setRemoving] = useState<ProviderAccount | null>(null);
   const [removingAll, setRemovingAll] = useState(false);
+  const [deleteScopeMenu, setDeleteScopeMenu] = useState(false);
+  const [deleteScope, setDeleteScope] = useState<DeleteScope | null>(null);
   const [bulkDelete, setBulkDelete] = useState<{ total: number; removed: number; failed: number; running: boolean } | null>(null);
   const [quotaFor, setQuotaFor] = useState<ProviderAccount | null>(null);
   const [page, setPage] = useState(1);
@@ -76,6 +79,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
     onSuccess: ({ removed, failed }) => {
       invalidate();
       setRemovingAll(false);
+      setDeleteScope(null);
       setRemovingSelected(false);
       setSelected(new Set());
       setPage(1);
@@ -110,6 +114,33 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   });
 
   const accounts = provider.accounts ?? [];
+  const accountsForDelete = (scope: DeleteScope) => scope === "all"
+    ? accounts
+    : scope === "unknown"
+      ? accounts.filter((account) => !account.last_warmup_status)
+      : accounts.filter((account) => account.last_warmup_status === scope);
+  const deleteScopeLabel = (scope: DeleteScope) => scope === "all" ? "all" : scope === "rate_limited" ? "rate limited" : scope;
+
+  const claimAll = useMutation({
+    mutationFn: async () => {
+      const targets = accounts.filter((account) => account.enabled);
+      let claimed = 0;
+      let failed = 0;
+      for (const account of targets) {
+        const result = await providers.checkinAccount(account.id);
+        if (result.ok) claimed += 1;
+        else failed += 1;
+      }
+      return { total: targets.length, claimed, failed };
+    },
+    onSuccess: (result) => {
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ["codex-quota"] });
+      toast(result.failed ? `Claimed ${result.claimed}/${result.total}; ${result.failed} failed` : `Claimed all ${result.claimed} accounts`, result.failed ? "error" : "success");
+    },
+    onError: (error: Error) => toast(error.message, "error"),
+  });
+
   const exportAccounts = useMutation({
     mutationFn: () => providers.exportAccounts(provider.id),
     onSuccess: (rows) => {
@@ -141,7 +172,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const filteredAccounts = statusTab === "unknown"
     ? accounts.filter((account) => !account.last_warmup_status)
     : accounts.filter((account) => account.last_warmup_status === statusTab);
-  const codexAccounts = accounts.filter((account) => account.auth_kind === "oauth" && provider.type === "openai");
+  const codexAccounts = accounts.filter((account) => account.auth_kind === "oauth" && (provider.type === "openai" || provider.type === "codex"));
   const codexQuotaQueries = useQueries({
     queries: codexAccounts.map((account) => ({
       queryKey: ["codex-quota", account.id],
@@ -210,7 +241,8 @@ export function AccountsCard({ provider }: { provider: Provider }) {
           <div className="flex items-center gap-2">
             {selected.size > 0 && <Button variant="ghost" size="sm" onClick={() => setRemovingSelected(true)} aria-label={`Remove ${selected.size} selected accounts`}><Trash2 size={14} className="text-danger" /> Delete {selected.size} selected</Button>}
             {accounts.length > 0 && <Button variant="ghost" size="sm" disabled={exportAccounts.isPending} onClick={() => exportAccounts.mutate()} aria-label={`Export all ${accounts.length} accounts`} title="Download every account with its credentials (CSV)">{exportAccounts.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export</Button>}
-            {accounts.length > 0 && <Button variant="ghost" size="sm" onClick={() => setRemovingAll(true)} aria-label={`Remove all ${accounts.length} accounts`}><Trash2 size={14} className="text-danger" /> Delete all</Button>}
+            {provider.type === "codebuddy-cn" && accounts.length > 0 && <Button variant="ghost" size="sm" disabled={claimAll.isPending} onClick={() => claimAll.mutate()} aria-label="Claim daily bonus for all CodeBuddy China accounts" title="Run CodeBuddy China daily claim for every enabled account">{claimAll.isPending ? <Loader2 size={14} className="animate-spin" /> : <CalendarCheck size={14} />} Claim all</Button>}
+            {accounts.length > 0 && <Button variant="ghost" size="sm" onClick={() => setDeleteScopeMenu(true)} aria-label="Delete accounts"><Trash2 size={14} className="text-danger" /> Delete</Button>}
             <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add account</Button>
           </div>
         </div>
@@ -335,7 +367,18 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       {editingMeta && <AccountMetaModal account={editingMeta} loading={updateMeta.isPending} onClose={() => setEditingMeta(null)} onSave={(notes, tags, sessionCookie) => updateMeta.mutate({ accountId: editingMeta.id, notes, tags, sessionCookie })} />}
 
       <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => removing && removeAccount.mutate(removing.id)} title="Remove account" message={`Remove account "${removing?.label}" from ${provider.name}? Requests will no longer use this key.`} danger loading={removeAccount.isPending} />
-      <ConfirmModal open={removingAll} onClose={() => setRemovingAll(false)} onConfirm={() => removeAllAccounts.mutate(accounts.map((account) => account.id))} title="Remove all accounts" message={`Remove all ${accounts.length} accounts from ${provider.name}? This cannot be undone and requests will no longer use this provider.`} danger loading={removeAllAccounts.isPending} />
+      <Modal open={deleteScopeMenu} onClose={() => setDeleteScopeMenu(false)} title="Delete accounts">
+        <div className="space-y-2">
+          <p className="mb-3 text-xs text-text-muted">Choose which accounts to delete. This action cannot be undone.</p>
+          {(["all", ...ACCOUNT_STATUS_TABS.map((tab) => tab.id)] as DeleteScope[]).map((scope) => {
+            const count = accountsForDelete(scope).length;
+            return <Button key={scope} variant="outline" className="w-full justify-between" disabled={count === 0} onClick={() => { setDeleteScopeMenu(false); setDeleteScope(scope); setRemovingAll(true); }}>
+              <span>Delete {deleteScopeLabel(scope)}</span><span className="text-text-muted">{count}</span>
+            </Button>;
+          })}
+        </div>
+      </Modal>
+      <ConfirmModal open={removingAll} onClose={() => { setRemovingAll(false); setDeleteScope(null); }} onConfirm={() => { if (deleteScope) removeAllAccounts.mutate(accountsForDelete(deleteScope).map((account) => account.id)); }} title={`Delete ${deleteScopeLabel(deleteScope ?? "all")} accounts`} message={`Delete ${accountsForDelete(deleteScope ?? "all").length} ${deleteScopeLabel(deleteScope ?? "all")} account${accountsForDelete(deleteScope ?? "all").length === 1 ? "" : "s"} from ${provider.name}? This cannot be undone.`} danger loading={removeAllAccounts.isPending} />
       <ConfirmModal open={removingSelected} onClose={() => setRemovingSelected(false)} onConfirm={() => removeAllAccounts.mutate([...selected])} title="Remove selected accounts" message={`Remove ${selected.size} selected account${selected.size === 1 ? "" : "s"} from ${provider.name}? This cannot be undone.`} danger loading={removeAllAccounts.isPending} />
       <Modal open={!!bulkDelete} onClose={() => { if (!bulkDelete?.running) setBulkDelete(null); }} title="Deleting accounts">
         {bulkDelete && (() => {

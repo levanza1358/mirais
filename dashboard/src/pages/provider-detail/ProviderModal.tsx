@@ -5,13 +5,13 @@ import { providers } from "../../api";
 import { Button, Input, Modal, Select, toast } from "../../components/ui";
 import { TYPES } from "./types";
 
-export function ProviderModal({ provider, onClose }: { provider: { id: string; name: string; base_url?: string | null; priority: number; account_strategy: "priority" | "round_robin" }; onClose: () => void }) {
+export function ProviderModal({ provider, onClose }: { provider: { id: string; name: string; display_name?: string | null; base_url?: string | null; priority: number; account_strategy: "priority" | "round_robin" }; onClose: () => void }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({ name: provider.name, baseUrl: provider.base_url ?? "", priority: provider.priority, accountStrategy: provider.account_strategy });
+  const [form, setForm] = useState({ name: provider.name, displayName: provider.display_name ?? provider.name, baseUrl: provider.base_url ?? "", priority: provider.priority, accountStrategy: provider.account_strategy });
   const [error, setError] = useState("");
 
   const save = useMutation({
-    mutationFn: () => providers.update(provider.id, { name: form.name, baseUrl: form.baseUrl || null, priority: form.priority, accountStrategy: form.accountStrategy }),
+    mutationFn: () => providers.update(provider.id, { name: form.name, displayName: form.displayName.trim() || form.name, baseUrl: form.baseUrl || null, priority: form.priority, accountStrategy: form.accountStrategy }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["providers"] });
       toast("Provider updated");
@@ -26,6 +26,10 @@ export function ProviderModal({ provider, onClose }: { provider: { id: string; n
         <div>
           <label className="mb-1 block text-xs text-text-muted">Name</label>
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-text-muted">Display name</label>
+          <Input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} maxLength={256} required />
         </div>
         <div>
           <label className="mb-1 block text-xs text-text-muted">Base URL <span className="text-text-muted/50">(blank = default for type)</span></label>
@@ -60,11 +64,11 @@ export function ProviderModal({ provider, onClose }: { provider: { id: string; n
 export function NewProviderModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [form, setForm] = useState<{ name: string; type: typeof TYPES[number]; baseUrl: string; priority: number }>({ name: "", type: "openai", baseUrl: "", priority: 0 });
+  const [form, setForm] = useState<{ name: string; displayName: string; type: typeof TYPES[number]; baseUrl: string; priority: number }>({ name: "", displayName: "", type: "openai", baseUrl: "", priority: 0 });
   const [error, setError] = useState("");
 
   const save = useMutation({
-    mutationFn: () => providers.create({ name: form.name, type: form.type, baseUrl: form.baseUrl || undefined, priority: form.priority }),
+    mutationFn: () => providers.create({ name: form.name, displayName: form.displayName.trim() || form.name, type: form.type, baseUrl: form.baseUrl || undefined, priority: form.priority }),
     onSuccess: (p) => {
       qc.invalidateQueries({ queryKey: ["providers"] });
       toast("Provider added");
@@ -82,9 +86,13 @@ export function NewProviderModal({ onClose }: { onClose: () => void }) {
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="my-openai" required />
         </div>
         <div>
+          <label className="mb-1 block text-xs text-text-muted">Display name</label>
+          <Input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="My OpenAI" maxLength={256} />
+        </div>
+        <div>
           <label className="mb-1 block text-xs text-text-muted">Type</label>
           <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as typeof TYPES[number] })}>
-            {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            {TYPES.map((t) => <option key={t} value={t}>{t === "openai" ? "OpenAI / ChatGPT" : t === "codex" ? "OpenAI Codex" : t}</option>)}
           </Select>
         </div>
         <div>

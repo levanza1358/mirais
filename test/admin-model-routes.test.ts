@@ -32,6 +32,66 @@ describe("model admin routes", () => {
     expect(await response.json()).toEqual({ error: "Quota is only available for GitHub Copilot accounts" });
   });
 
+  test("imports Codex OAuth JSON into a codex provider", async () => {
+    const repo = new ProvidersRepo(db);
+    const provider = repo.create({ name: "codex", type: "codex" });
+    const app = adminApp(providerRoutes(db));
+    const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        email: "codex@example.com",
+        expiresAt: "2026-10-03T09:07:36.000Z",
+        providerSpecificData: { chatgptPlanType: "free" },
+        priority: 1,
+      }),
+    }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { label: string; api_key: string; refresh_token: string | null };
+    expect(body.label).toBe("codex@example.com");
+    expect(body.api_key).not.toBe("access-token");
+    expect(body.refresh_token).toBeNull();
+    const account = repo.listAccounts(provider.id)[0]!;
+    expect(account.auth_kind).toBe("oauth");
+    expect(account.api_key).toBe("access-token");
+    expect(account.refresh_token).toBe("refresh-token");
+    expect(account.plan_type).toBe("free");
+    expect(account.expires_at).toBe(Date.parse("2026-10-03T09:07:36.000Z"));
+  });
+
+  test("imports Codex OAuth JSON arrays and skips duplicate tokens", async () => {
+    const repo = new ProvidersRepo(db);
+    const provider = repo.create({ name: "codex", type: "codex" });
+    const app = adminApp(providerRoutes(db));
+    const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([
+        { accessToken: "access-1", refreshToken: "refresh-1", email: "one@example.com" },
+        { accessToken: "access-2", refreshToken: "refresh-2", email: "two@example.com" },
+        { accessToken: "access-1", refreshToken: "refresh-1", email: "duplicate@example.com" },
+      ]),
+    }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ added: 2, skipped: 1 });
+    expect(repo.listAccounts(provider.id)).toHaveLength(2);
+  });
+
+  test("rejects Codex import on non-Codex providers", async () => {
+    const repo = new ProvidersRepo(db);
+    const provider = repo.create({ name: "openai", type: "openai" });
+    const app = adminApp(providerRoutes(db));
+    const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accessToken: "a", refreshToken: "r" }),
+    }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Codex import requires a codex provider" });
+  });
+
   test("lists provider models and validates updates", async () => {
     const repo = new ProvidersRepo(db);
     const provider = repo.create({ name: "p", type: "openai" });

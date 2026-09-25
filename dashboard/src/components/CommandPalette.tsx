@@ -5,9 +5,10 @@ import {
   GitBranch,
   KeyRound,
   LayoutDashboard,
-  Music,
   ScrollText,
   Settings as SettingsIcon,
+  ShieldCheck,
+  SlidersHorizontal,
   BarChart3,
   Search as SearchIcon,
 } from "lucide-react";
@@ -29,8 +30,9 @@ const COMMANDS: Command[] = [
   { id: "nav-keys", label: "Open API Keys", icon: KeyRound, run: ({ navigate, close }) => { navigate("/dashboard/keys"); close(); } },
   { id: "nav-logs", label: "Open Logs", icon: ScrollText, run: ({ navigate, close }) => { navigate("/dashboard/logs"); close(); } },
   { id: "nav-usage", label: "Open Usage", icon: BarChart3, run: ({ navigate, close }) => { navigate("/dashboard/usage"); close(); } },
-  { id: "nav-music", label: "Open Music", icon: Music, run: ({ navigate, close }) => { navigate("/dashboard/music"); close(); } },
   { id: "nav-settings", label: "Open Settings", icon: SettingsIcon, run: ({ navigate, close }) => { navigate("/dashboard/settings"); close(); } },
+  { id: "nav-audit", label: "Open Audit log", icon: ShieldCheck, run: ({ navigate, close }) => { navigate("/dashboard/audit"); close(); } },
+  { id: "nav-capabilities", label: "Open Model capabilities", icon: SlidersHorizontal, run: ({ navigate, close }) => { navigate("/dashboard/capabilities"); close(); } },
   { id: "nav-landing", label: "Back to landing page", icon: LayoutDashboard, run: ({ navigate, close }) => { navigate("/"); close(); } },
 ];
 

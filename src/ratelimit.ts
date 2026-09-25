@@ -41,6 +41,15 @@ export function checkRateLimit(db: Database, key: GatewayKey): { retryAfterSec?:
     }
   }
 
+  if (key.token_budget) {
+    const row = db
+      .query("SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) as t FROM request_logs WHERE key_id = ?")
+      .get(key.id) as { t: number };
+    if (row.t >= key.token_budget) {
+      return { retryAfterSec: 0 };
+    }
+  }
+
   return {};
 }
 

@@ -23,7 +23,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE providers (
   id          TEXT PRIMARY KEY,              -- ulid
   name        TEXT NOT NULL UNIQUE,          -- "openai", "my-groq"
-  type        TEXT NOT NULL,                 -- openai|anthropic|gemini|openrouter|deepseek|groq|xai|glm|custom
+  type        TEXT NOT NULL,                 -- openai (API key or browser OAuth)|codex (imported OAuth)|anthropic|gemini|openrouter|deepseek|groq|xai|glm|custom
   base_url    TEXT,                          -- override; null → type default
   enabled     INTEGER NOT NULL DEFAULT 1,
   priority    INTEGER NOT NULL DEFAULT 100,  -- lower = preferred when routing ambiguous
@@ -128,6 +128,8 @@ CREATE TABLE gateway_keys (
   last_used_at       TEXT
 );
 
+`gateway_keys` supports multiple independent client credentials. Each key can have its own model allowlist, RPM limit, concurrency limit, expiration, enabled state, and non-resetting `token_budget`. Request usage is associated through `request_logs.key_id`, so token budgets are enforced per key rather than globally.
+
 -- ── Request logs ──────────────────────────────────────────
 CREATE TABLE request_logs (
   id              TEXT PRIMARY KEY,
@@ -158,6 +160,21 @@ CREATE INDEX idx_logs_ts       ON request_logs(ts DESC);
 CREATE INDEX idx_logs_model    ON request_logs(model);
 CREATE INDEX idx_logs_provider ON request_logs(provider);
 CREATE INDEX idx_logs_key      ON request_logs(key_id);
+
+### Admin audit log
+
+Migration `0033_audit_log.sql` adds a metadata-only audit trail for dashboard configuration changes. It stores action, resource, resource ID, and sanitized JSON detail; credentials, tokens, passwords, request bodies, and response bodies must never be written here.
+
+```sql
+CREATE TABLE admin_audit_log (
+  id          TEXT PRIMARY KEY,
+  ts          TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  resource    TEXT NOT NULL,
+  resource_id TEXT,
+  detail      TEXT
+);
+```
 
 -- ── Settings (singleton KV) ───────────────────────────────
 CREATE TABLE settings (

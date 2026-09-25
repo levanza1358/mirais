@@ -121,7 +121,7 @@ export function quotaTitle(providerType: string, resolved = false): string {
   return "ChatGPT / Codex quota";
 }
 
-function CodeBuddyQuotaCard({ data }: {
+function CodeBuddyQuotaCard({ data, hideResidualBalance = false }: {
   data: {
     plan?: string | null;
     quotas?: {
@@ -134,12 +134,18 @@ function CodeBuddyQuotaCard({ data }: {
       };
     } | null;
   };
+  hideResidualBalance?: boolean;
 }) {
   const credits = data.quotas?.Credits;
-  const total = credits?.total ?? 0;
+  const rawTotal = credits?.total ?? 0;
   const used = credits?.used ?? 0;
-  const remaining = credits?.remaining ?? Math.max(0, total - used);
-  const remainingPercentage = Math.max(0, Math.min(100, credits?.remainingPercentage ?? (total > 0 ? (remaining / total) * 100 : 0)));
+  const rawRemaining = credits?.remaining ?? Math.max(0, rawTotal - used);
+  const unusableResidual = hideResidualBalance ? 500 : 0;
+  const total = Math.max(0, rawTotal - unusableResidual);
+  const remaining = Math.max(0, rawRemaining - unusableResidual);
+  const effectiveUsed = Math.min(total, used);
+  const remainingPercentage = Math.max(0, Math.min(100, total > 0 ? (remaining / total) * 100 : 0));
+  const displayUsed = hideResidualBalance ? effectiveUsed : used;
   const usedPercentage = Math.max(0, Math.min(100, total > 0 ? 100 - remainingPercentage : 0));
   return (
     <div className="space-y-4">
@@ -156,11 +162,11 @@ function CodeBuddyQuotaCard({ data }: {
         <div className="h-2.5 w-full overflow-hidden rounded-full bg-bg-base">
           <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${usedPercentage}%` }} />
         </div>
-        <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-text-muted">
+        {!hideResidualBalance && <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-text-muted">
           <div><div className="text-text-primary">{fmtNum(total)}</div><div>Total</div></div>
-          <div><div className="text-text-primary">{fmtNum(used)}</div><div>Used</div></div>
+          <div><div className="text-text-primary">{fmtNum(displayUsed)}</div><div>Used</div></div>
           <div><div className="text-text-primary">{fmtNum(remaining)}</div><div>Remaining</div></div>
-        </div>
+        </div>}
         <div className="mt-2 flex items-center justify-between text-[11px] text-text-muted">
           <span>{Math.round(remainingPercentage)}% remaining</span>
           <span>resets {fmtQuotaReset(credits?.resetAt)}</span>
@@ -198,7 +204,7 @@ export function CodexQuotaModal({ account, providerType, onClose }: { account: P
       {q.isError && <p className="py-4 text-xs text-danger">{(q.error as Error).message}</p>}
       {d && (
         <div className="space-y-4">
-          {codeBuddy ? <CodeBuddyQuotaCard data={d} /> : (
+          {codeBuddy ? <CodeBuddyQuotaCard data={d} hideResidualBalance={providerType === "codebuddy-cn"} /> : (
             <>
               <div className="flex items-center gap-2 text-xs">
                 {d.plan_type && <Badge>{d.plan_type}</Badge>}

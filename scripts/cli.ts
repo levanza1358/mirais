@@ -16,7 +16,6 @@ import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { autostartStatus, setAutostart } from "./autostart";
 import { readInstallRoot } from "./install-path";
-import { ensureExtras, ensureExtrasQuiet, ensureYtDlp } from "./extras";
 
 const installRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
 
@@ -64,7 +63,21 @@ async function waitForHealth(timeoutMs: number): Promise<boolean> {
   return false;
 }
 
+async function ensureDashboardBuild(): Promise<void> {
+  const distDir = path.join(installRoot, "dashboard", "dist");
+  if (fs.existsSync(path.join(distDir, "index.html"))) return;
+  console.log("Dashboard build missing — building dashboard...");
+  await shell("bun", ["run", "build"], installRoot);
+}
+
 async function start(): Promise<void> {
+  try {
+    await ensureDashboardBuild();
+  } catch (err) {
+    console.error(`dashboard build failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+    return;
+  }
   const existing = readPid();
   if (existing && isRunning(existing)) {
     console.log(`mirais is already running (pid ${existing}) — ${baseUrl}`);
@@ -184,9 +197,6 @@ async function updateApp(): Promise<void> {
     await quietShell("bun", ["install"], path.join(installRoot, "dashboard"));
     await quietShell("bun", ["run", "build"], installRoot);
     await restart();
-    // Optional helpers are best-effort and must not make an application update
-    // look failed. Their detailed output is intentionally suppressed here.
-    try { await ensureExtrasQuiet(); } catch { /* optional */ }
     console.log(`Update successful. Check dashboard at ${displayUrl}`);
   } catch (err) {
     console.error(`Update failed. ${err instanceof Error ? err.message : String(err)}`);
@@ -201,7 +211,6 @@ async function fix(): Promise<void> {
   await shell("bun", ["install"], path.join(installRoot, "dashboard"));
   await shell("bun", ["run", "build"], installRoot);
   try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-  await ensureExtras();
   await start();
   console.log("Mirais fixed");
 }
@@ -322,12 +331,6 @@ async function doctor(json = false): Promise<void> {
     await check("service process", !!pid && isRunning(pid));
   }
 
-  // yt-dlp is optional — the Music page falls back to Invidious when it's
-  // missing. Doctor still surfaces it so the user knows the upgrade path.
-  const ytdlp = await ensureYtDlp();
-  say(`${ytdlp.ok ? "OK" : "WARN"}  yt-dlp (Music) — ${ytdlp.message}${ytdlp.via ? ` [${ytdlp.via}]` : ""}`);
-  checks.push({ name: "yt-dlp (Music)", status: ytdlp.ok ? "ok" : "warn", detail: ytdlp.message });
-
   if (json) {
     console.log(JSON.stringify({
       ok: !failed,
@@ -384,8 +387,7 @@ switch (cmd) {
     else await doctor(process.argv.includes("--json"));
     break;
   case "fix": await fix(); break;
-  case "extras": await ensureExtras(); break;
   default:
-    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix|--json]|fix|update|extras|autostart on|off|status|expose on|off|uninstall --yes>");
+    console.log("Usage: mirais <start|stop|restart|status|doctor [--fix|--json]|fix|update|autostart on|off|status|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;
 }

@@ -9,10 +9,11 @@ import {
   ScrollText,
   BarChart3,
   Settings as SettingsIcon,
+  ShieldCheck,
+  SlidersHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   ChevronDown,
-  Music,
   Menu,
   MessageSquare,
   X,
@@ -51,7 +52,6 @@ const GROUPS: NavGroup[] = [
       { to: "/dashboard/logs", label: "Logs", icon: ScrollText },
       { to: "/dashboard/usage", label: "Usage", icon: BarChart3 },
 
-      { to: "/dashboard/music", label: "Music", icon: Music },
     ],
   },
   {
@@ -59,6 +59,8 @@ const GROUPS: NavGroup[] = [
     label: "System",
     items: [
       { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
+      { to: "/dashboard/audit", label: "Audit log", icon: ShieldCheck },
+      { to: "/dashboard/capabilities", label: "Capabilities", icon: SlidersHorizontal },
     ],
   },
 ];

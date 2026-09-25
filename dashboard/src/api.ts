@@ -35,6 +35,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export interface Provider {
   id: string;
   name: string;
+  display_name: string | null;
   type: string;
   base_url: string | null;
   base_url_effective?: string;
@@ -69,6 +70,18 @@ export interface ProviderAccount {
   last_warmup_latency_ms?: number | null;
   last_warmup_detail?: string | null;
   base_url?: string | null;
+}
+
+export interface CodexImportPayload {
+  accessToken: string;
+  refreshToken: string;
+  email?: string;
+  provider?: "codex";
+  providerSpecificData?: { chatgptPlanType?: string };
+  expiresAt?: string;
+  name?: string;
+  priority?: number;
+  isActive?: boolean;
 }
 
 export interface ProviderModel {
@@ -136,6 +149,7 @@ export interface GatewayKey {
   rate_limit_rpm: number | null;
   concurrency: number | null;
   daily_token_budget: number | null;
+  token_budget: number | null;
   expires_at: string | null;
   created_at: string;
   last_used_at: string | null;
@@ -227,6 +241,22 @@ export const healthInfo = {
   detailed: () => req<HealthInfo>("/api/health"),
 };
 
+export interface ProviderHealth {
+  provider: string;
+  requests: number;
+  errors: number;
+  error_rate: number;
+  avg_latency_ms: number;
+  last_request_at: string | null;
+}
+
+export const providerHealth = {
+  list: (days = 7) => req<ProviderHealth[]>(`/api/provider-health?days=${days}`),
+};
+
+export interface AuditEntry { id: string; ts: string; action: string; resource: string; resource_id: string | null; detail: string | null }
+export const audit = { list: (page = 1, limit = 50) => req<{ items: AuditEntry[]; total: number }>(`/api/audit?page=${page}&limit=${limit}`) };
+
 export interface AutostartStatus {
   platform: string;
   method: "windows-startup" | "systemd" | "unsupported";
@@ -291,15 +321,17 @@ export interface Settings {
 export const providers = {
   list: () => req<Provider[]>("/api/providers"),
   models: (id: string) => req<ProviderModel[]>(`/api/providers/${id}/models`),
-  create: (input: { name: string; type: string; baseUrl?: string; priority?: number; accountStrategy?: Provider["account_strategy"] }) =>
+  create: (input: { name: string; displayName?: string | null; type: string; baseUrl?: string; priority?: number; accountStrategy?: Provider["account_strategy"] }) =>
     req<Provider>("/api/providers", { method: "POST", body: JSON.stringify(input) }),
-  update: (id: string, patch: Partial<{ name: string; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>) =>
+  importCodexAccount: (providerId: string, payload: CodexImportPayload | CodexImportPayload[] | { accounts: CodexImportPayload[] }) =>
+    req<ProviderAccount | { added: number; skipped: number; accounts: ProviderAccount[] }>(`/api/providers/${providerId}/codex-import`, { method: "POST", body: JSON.stringify(payload) }),
+  update: (id: string, patch: Partial<{ name: string; displayName: string | null; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>) =>
     req<Provider>(`/api/providers/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id: string) => req<{ ok: boolean }>(`/api/providers/${id}`, { method: "DELETE" }),
   addAccount: (id: string, input: { label: string; apiKey?: string; baseUrl?: string; priority?: number }) =>
     req<ProviderAccount>(`/api/providers/${id}/accounts`, { method: "POST", body: JSON.stringify(input) }),
-  addAccountsBulk: (id: string, apiKeys: string[], labelPrefix?: string) =>
-    req<{ added: number; skipped: number }>(`/api/providers/${id}/accounts/bulk`, { method: "POST", body: JSON.stringify({ apiKeys, labelPrefix }) }),
+  addAccountsBulk: (id: string, apiKeys: string[], labelPrefix?: string, accounts?: Array<{ apiKey: string; refreshToken?: string | null; accountId?: string | null; label?: string }>) =>
+    req<{ added: number; skipped: number; duplicates?: string[] }>(`/api/providers/${id}/accounts/bulk`, { method: "POST", body: JSON.stringify(accounts ? { accounts, labelPrefix } : { apiKeys, labelPrefix }) }),
   removeAllAccounts: (id: string) => req<{ ok: boolean; removed: number }>(`/api/providers/${id}/accounts`, { method: "DELETE" }),
   exportAccounts: (id: string) => req<ProviderAccount[]>(`/api/providers/${id}/accounts/export`),
   accountUsage: (id: string) =>
@@ -362,8 +394,9 @@ export const providers = {
   warmupAllAccountsStream: async (
     id: string,
     onEvent: (event: string, data: Record<string, unknown>) => void,
+    status: "all" | "healthy" | "rate_limited" | "failing" | "unknown" = "all",
   ) => {
-    const res = await fetch(`/api/providers/${id}/warmup/stream`, { method: "POST", credentials: "same-origin" });
+    const res = await fetch(`/api/providers/${id}/warmup/stream?status=${status}`, { method: "POST", credentials: "same-origin" });
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
       try {
@@ -513,8 +546,8 @@ export const aliases = {
 
 export const combos = {
   list: () => req<Combo[]>("/api/combos"),
-  create: (name: string, chain: string[]) => req<Combo>("/api/combos", { method: "POST", body: JSON.stringify({ name, chain }) }),
-  update: (id: string, patch: { name?: string; chain?: string[] }) =>
+  create: (name: string, chain: string[], strategy: "sequential" | "round_robin" = "sequential") => req<Combo>("/api/combos", { method: "POST", body: JSON.stringify({ name, chain, strategy }) }),
+  update: (id: string, patch: { name?: string; chain?: string[]; strategy?: "sequential" | "round_robin" }) =>
     req<Combo>(`/api/combos/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   remove: (id: string) => req<{ ok: boolean }>(`/api/combos/${id}`, { method: "DELETE" }),
   test: (id: string) => req<ComboDiagnostic>(`/api/combos/${id}/test`, { method: "POST" }),
@@ -523,11 +556,12 @@ export const combos = {
 // ── keys ──
 export const keys = {
   list: () => req<GatewayKey[]>("/api/keys"),
-  create: (input: { label: string; allowedModels?: string[]; rateLimitRpm?: number; concurrency?: number; dailyTokenBudget?: number; expiresAt?: string }) =>
+  create: (input: { label: string; allowedModels?: string[]; rateLimitRpm?: number; concurrency?: number; dailyTokenBudget?: number; tokenBudget?: number; expiresAt?: string }) =>
     req<GatewayKey & { plaintext: string }>("/api/keys", { method: "POST", body: JSON.stringify(input) }),
   rotate: (id: string) => req<GatewayKey & { plaintext: string }>(`/api/keys/${id}/rotate`, { method: "POST" }),
-  update: (id: string, patch: Partial<{ label: string; enabled: boolean; allowedModels: string[] | null; rateLimitRpm: number | null; concurrency: number | null; dailyTokenBudget: number | null; expiresAt: string | null }>) =>
+  update: (id: string, patch: Partial<{ label: string; enabled: boolean; allowedModels: string[] | null; rateLimitRpm: number | null; concurrency: number | null; dailyTokenBudget: number | null; tokenBudget: number | null; expiresAt: string | null }>) =>
     req<GatewayKey>(`/api/keys/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  remove: (id: string) => req<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
 };
 
 // ── backups ──
@@ -605,7 +639,9 @@ export const logs = {
     return req<{ items: RequestLog[]; total: number }>(`/api/logs?${q}`);
   },
   get: (id: string) => req<RequestLog & { attempts_detail?: unknown }>(`/api/logs/${id}`),
+  replay: (id: string) => req<Record<string, unknown>>(`/api/logs/${id}/replay`, { method: "POST" }),
   usage: (days = 7) => req<UsageRow[]>(`/api/logs/usage?days=${days}`),
+  usageByKey: (keyId: string) => req<{ requests_today: number; tokens_today: number; tokens_total: number; requests_minute: number; requests_total: number; input_tokens_total: number; output_tokens_total: number; top_models: Array<{ model: string; requests: number; tokens: number }> }>(`/api/logs/usage-by-key?key_id=${encodeURIComponent(keyId)}`),
   clearUsage: () => req<{ ok: boolean; cleared: number }>("/api/logs/usage", { method: "DELETE" }),
 };
 
@@ -639,48 +675,3 @@ export const auth = {
     }),
 };
 
-// -- music --
-export interface MusicTrack {
-  id: string;
-  playlist_id: string;
-  source: string;
-  source_id: string;
-  title: string;
-  channel: string | null;
-  duration_sec: number | null;
-  thumbnail_url: string | null;
-  position: number;
-  created_at: string;
-}
-
-export interface MusicPlaylist {
-  id: string;
-  name: string;
-  created_at: string;
-  updated_at: string;
-  tracks?: MusicTrack[];
-}
-
-export interface MusicSearchResult {
-  id: string;
-  title: string;
-  channel: string | null;
-  duration_sec: number | null;
-  thumbnail_url: string | null;
-  source: "youtube";
-}
-
-export const music = {
-  search: (q: string, limit = 20, page = 1) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/search?q=${encodeURIComponent(q)}&limit=${limit}&page=${page}`),
-  trending: (limit = 20, page = 1, force = false) => req<{ source: "yt-dlp" | "invidious"; results: MusicSearchResult[] }>(`/api/music/trending?limit=${limit}&page=${page}${force ? "&force=1" : ""}`),
-  listPlaylists: () => req<{ playlists: MusicPlaylist[] }>("/api/music/playlists"),
-  createPlaylist: (name: string) => req<MusicPlaylist>("/api/music/playlists", { method: "POST", body: JSON.stringify({ name }) }),
-  getPlaylist: (id: string) => req<MusicPlaylist>(`/api/music/playlists/${id}`),
-  renamePlaylist: (id: string, name: string) => req<MusicPlaylist>(`/api/music/playlists/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
-  deletePlaylist: (id: string) => req<{ ok: boolean }>(`/api/music/playlists/${id}`, { method: "DELETE" }),
-  addTrack: (playlistId: string, input: { url?: string; videoId?: string; title: string; channel?: string; durationSec?: number; thumbnailUrl?: string; source?: string }) =>
-    req<MusicTrack>(`/api/music/playlists/${playlistId}/tracks`, { method: "POST", body: JSON.stringify(input) }),
-  removeTrack: (trackId: string) => req<{ ok: boolean }>(`/api/music/tracks/${trackId}`, { method: "DELETE" }),
-  streamUrl: (videoId: string) => `/api/music/stream?id=${encodeURIComponent(videoId)}`,
-  videoStreamUrl: (videoId: string) => `/api/music/video-stream?id=${encodeURIComponent(videoId)}`,
-};

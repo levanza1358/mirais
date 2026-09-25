@@ -8,9 +8,8 @@ import { oauthRoutes } from "./admin/oauth";
 import { copilotRoutes, startCopilotSidecars, waitCopilotSidecar } from "./admin/copilot";
 import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
-import { settingsRoutes, statsRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
+import { settingsRoutes, statsRoutes, providerHealthRoutes, auditRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
 import { backupRoutes } from "./admin/backups";
-import { musicRoutes } from "./admin/musicRoutes";
 import { xaiAdminRoutes } from "./admin/xai-routes";
 import { v1Routes } from "./proxy/routes";
 import { sweepCooldowns } from "./proxy/executor";
@@ -19,7 +18,7 @@ import { LogsRepo } from "./store/repos/logs";
 import { SettingsRepo } from "./store/repos/settings";
 import { ProvidersRepo } from "./store/repos/providers";
 import { baseUrlFor } from "./proxy/router";
-import { codexQuotaDetail, ensureFreshToken, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount } from "./proxy/codex";
+import { codexQuotaDetail, ensureFreshToken, fetchCodexUsage, isCodexAccount, isCodexQuotaExhausted } from "./proxy/codex";
 import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/codebuddy-provider";
 import { log, setLogLevel } from "./utils/logger";
 
@@ -149,7 +148,7 @@ async function runAutoWarmups() {
             ok = res.ok;
             status = res.status;
             detail = res.ok ? "Blackbox chat warmup ok" : `HTTP ${res.status}`;
-          } else if (isOAuthAccount(acc)) {
+          } else if (isCodexAccount(p.type, acc)) {
             const accessToken = await ensureFreshToken(providersRepo, acc as never);
             const usage = await fetchCodexUsage(acc as never, accessToken);
             planType = usage.plan_type;
@@ -299,9 +298,10 @@ const app = new Elysia()
   .use(settingsRoutes(db))
   .use(autostartRoutes())
   .use(backupRoutes(db))
-  .use(musicRoutes(db))
   .use(xaiAdminRoutes(db))
   .use(statsRoutes(db))
+  .use(providerHealthRoutes(db))
+  .use(auditRoutes(db))
   .use(logRoutes(db))
   .use(v1Routes(db))
   // ── static dashboard + SPA fallback ──

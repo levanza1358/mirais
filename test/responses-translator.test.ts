@@ -16,6 +16,26 @@ describe("Responses compatibility translator", () => {
     expect(args).toContain('"index":1');
   });
 
+  test("streams the function-call name even when the item arrives before the chunk preamble", () => {
+    // The Codex backend emits response.output_item.added with the function name
+    // and never a message preamble. The translator must still surface the name
+    // (a delta without `name` is ignored by OpenAI clients like Cline/Codex).
+    const translator = new ResponsesToChatStreamTranslator("gpt-5.5");
+    const lines = translator.handleEvent("response.output_item.added", JSON.stringify({
+      type: "response.output_item.added",
+      item: { id: "fc_1", type: "function_call", status: "in_progress", arguments: "", call_id: "call_1", name: "get_weather" },
+      output_index: 0,
+    })).join("");
+    expect(lines).toContain('"name":"get_weather"');
+    expect(lines).toContain('"id":"call_1"');
+    const delta = translator.handleEvent("response.function_call_arguments.delta", JSON.stringify({
+      type: "response.function_call_arguments.delta", item_id: "fc_1", output_index: 0, delta: '{"city":"Jakarta"}',
+    })).join("");
+    expect(delta).toContain('"arguments":"{\\"city\\":\\"Jakarta\\"}"');
+    const done = translator.handleEvent("response.completed", JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } })).join("");
+    expect(done).toContain('"finish_reason":"tool_calls"');
+  });
+
   test("maps string input, instructions, limits and function tools", () => {
     const req = responsesRequestToCanonical({
       model: "combo:smart",

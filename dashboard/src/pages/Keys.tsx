@@ -1,312 +1,75 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, KeyRound, Pencil, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
-import { keys, type GatewayKey } from "../api";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Eye, EyeOff, KeyRound, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { keys, logs, type GatewayKey } from "../api";
 import { forgetKey, rememberKey, storedKeyFor } from "../keyStore";
-import { Button, Card, CopyButton, EmptyState, Input, Modal, Skeleton, Switch, fmtTime, toast } from "../components/ui";
+import { Button, Card, ConfirmModal, CopyButton, EmptyState, Input, Modal, Skeleton, Switch, fmtNum, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
-function fmtDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
-}
-
-/** `allowed_models` is stored as a JSON array; a malformed value means "no restriction". */
 function parseAllowedModels(raw: string | null | undefined): string[] {
   if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
+  try { const value = JSON.parse(raw) as unknown; return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; } catch { return []; }
 }
-
-function Stat({ label, value, tone = "muted" }: { label: string; value: string; tone?: "muted" | "success" | "warning" | "danger" }) {
-  const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "danger" ? "text-danger" : "text-text-primary";
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 backdrop-blur">
-      <p className="text-[10px] uppercase tracking-[0.18em] text-text-muted">{label}</p>
-      <p className={`mt-1 text-xs font-medium ${toneClass}`}>{value}</p>
-    </div>
-  );
+function usagePercent(used: number, limit: number | null): number { return limit && limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0; }
+function TokenProgress({ used, limit }: { used: number; limit: number | null }) {
+  const percent = usagePercent(used, limit);
+  return <div className="mt-3"><div className="flex justify-between text-[11px] text-text-muted"><span>Lifetime token usage</span><span className={percent >= 100 ? "text-danger" : percent >= 80 ? "text-warning" : "text-text-primary"}>{limit ? `${fmtNum(used)} / ${fmtNum(limit)} (${percent}%)` : `${fmtNum(used)} · unlimited`}</span></div>{limit && <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-border"><div className={`h-full rounded-full ${percent >= 100 ? "bg-danger" : percent >= 80 ? "bg-warning" : "bg-accent"}`} style={{ width: `${percent}%` }} /></div>}</div>;
 }
 
 export default function Keys() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<GatewayKey | null>(null);
-  const [rotatedKey, setRotatedKey] = useState<{ label: string; key: string } | null>(null);
-  const [copied, setCopied] = useState(false);
-
+  const [creating, setCreating] = useState(false);
+  const [removing, setRemoving] = useState<GatewayKey | null>(null);
+  const [visible, setVisible] = useState<Set<string>>(new Set());
+  const [newKey, setNewKey] = useState<{ label: string; key: string } | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "disabled" | "exhausted">("all");
   const list = useQuery({ queryKey: ["keys"], queryFn: keys.list });
-  const primaryKey = useMemo(() => (list.data ?? [])[0] ?? null, [list.data]);
-  // Key is persisted plaintext server-side — always visible and copyable.
-  const remembered = primaryKey ? (primaryKey.key ?? storedKeyFor(primaryKey.key_prefix) ?? null) : null;
+  const allKeys = list.data ?? [];
+  const usageQueries = useQueries({ queries: allKeys.map((key) => ({ queryKey: ["key-usage", key.id], queryFn: () => logs.usageByKey(key.id), refetchInterval: 30_000 })) });
+  const usageById = useMemo(() => new Map(allKeys.map((key, index) => [key.id, usageQueries[index]?.data])), [allKeys, usageQueries]);
+  const filteredKeys = allKeys.filter((key) => {
+    const usage = usageById.get(key.id);
+    const exhausted = !!key.token_budget && (usage?.tokens_total ?? 0) >= key.token_budget;
+    const matchesSearch = !search.trim() || `${key.label} ${key.key_prefix}`.toLowerCase().includes(search.trim().toLowerCase());
+    const matchesStatus = statusFilter === "all" || statusFilter === "active" && !!key.enabled && !exhausted || statusFilter === "disabled" && !key.enabled || statusFilter === "exhausted" && exhausted;
+    return matchesSearch && matchesStatus;
+  });
   const invalidate = () => qc.invalidateQueries({ queryKey: ["keys"] });
+  const remove = useMutation({ mutationFn: (key: GatewayKey) => keys.remove(key.id), onSuccess: () => { invalidate(); setRemoving(null); toast("API key deleted"); }, onError: (error) => toast(error.message, "error") });
+  const toggle = useMutation({ mutationFn: (key: GatewayKey) => keys.update(key.id, { enabled: !key.enabled }), onSuccess: invalidate, onError: (error) => toast(error.message, "error") });
+  const rotate = useMutation({ mutationFn: (key: GatewayKey) => keys.rotate(key.id), onSuccess: (key) => { forgetKey(key.key_prefix); rememberKey(key.key_prefix, key.key ?? key.plaintext); setNewKey({ label: key.label, key: key.key ?? key.plaintext }); invalidate(); }, onError: (error) => toast(error.message, "error") });
 
-  const toggle = useMutation({
-    mutationFn: (k: GatewayKey) => keys.update(k.id, { enabled: !k.enabled }),
-    onSuccess: invalidate,
-    onError: (e) => toast(e.message, "error"),
-  });
-
-  const createFirst = useMutation({
-    mutationFn: () => keys.create({ label: "default" }),
-    onSuccess: (k) => {
-      rememberKey(k.key_prefix, k.key ?? k.plaintext);
-      invalidate();
-      setRotatedKey({ label: k.label, key: k.key ?? k.plaintext });
-      toast("Global API key generated");
-    },
-    onError: (e) => toast(e.message, "error"),
-  });
-
-  const rotate = useMutation({
-    mutationFn: (k: GatewayKey) => keys.rotate(k.id),
-    onSuccess: (k) => {
-      const previousPrefix = rotate.variables?.key_prefix;
-      if (previousPrefix) forgetKey(previousPrefix);
-      rememberKey(k.key_prefix, k.key ?? k.plaintext);
-      invalidate();
-      setRotatedKey({ label: k.label, key: k.key ?? k.plaintext });
-      toast("API key rotated");
-    },
-    onError: (e) => toast(e.message, "error"),
-  });
-
-  function copyRotatedKey() {
-    if (!rotatedKey) return;
-    navigator.clipboard.writeText(rotatedKey.key).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <div>
-      <PageHeader title="API key">
-        {primaryKey ? (
-          <Button variant="outline" onClick={() => rotate.mutate(primaryKey)} loading={rotate.isPending && rotate.variables?.id === primaryKey.id}>
-            <RefreshCw size={16} /> Generate new key
-          </Button>
-        ) : (
-          <Button onClick={() => createFirst.mutate()} loading={createFirst.isPending}>
-            <RefreshCw size={16} /> Generate new key
-          </Button>
-        )}
-      </PageHeader>
-
-      {list.isLoading ? (
-        <Card>
-          <Skeleton className="h-40 w-full" />
-        </Card>
-      ) : !primaryKey ? (
-        <Card>
-          <EmptyState
-            icon={<KeyRound size={32} />}
-            title="No API key available"
-            hint="Mirais uses one global key. Generate it once and rotate it any time you need to invalidate it."
-            action={<Button onClick={() => createFirst.mutate()} loading={createFirst.isPending}><RefreshCw size={16} /> Generate new key</Button>}
-          />
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          <Card className="overflow-hidden border-accent/20">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0 flex-1 space-y-4">
-                <div className="flex items-start gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent">
-                    <KeyRound size={18} />
-                  </span>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.24em] text-accent/80">Global gateway key</p>
-                    <h2 className="mt-1 text-xl font-semibold tracking-tight text-white">{primaryKey.label}</h2>
-                    <p className="mt-1 max-w-xl text-xs leading-5 text-text-muted">Use this single credential for every OpenAI-compatible client pointing at <code className="text-text-primary">/v1/*</code>.</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <Stat label="Status" value={primaryKey.enabled ? "Active" : "Disabled"} tone={primaryKey.enabled ? "success" : "muted"} />
-                  <Stat label="Created" value={fmtDateTime(primaryKey.created_at)} />
-                  <Stat label="Last used" value={primaryKey.last_used_at ? fmtDateTime(primaryKey.last_used_at) : "Never"} />
-                  <Stat label="Expires" value={primaryKey.expires_at ? fmtDateTime(primaryKey.expires_at) : "Never"} />
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur">
-                  <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-text-muted">
-                    <span>Secret</span>
-                    <span className="text-text-muted/70">Visible to you only</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <code className="min-w-0 flex-1 truncate rounded-xl border border-white/10 bg-bg-base/80 px-3 py-2 font-mono text-xs text-accent">
-                      {remembered ?? `${primaryKey.key_prefix}••••••••••••••••`}
-                    </code>
-                    <CopyButton text={remembered ?? ""} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex w-full shrink-0 flex-col gap-3 lg:w-64">
-                <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
-                  <div className="flex items-center gap-2">
-                    {primaryKey.enabled ? <ShieldCheck size={15} className="text-success" /> : <ShieldOff size={15} className="text-text-muted" />}
-                    <span className="text-sm font-medium">Key active</span>
-                  </div>
-                  <Switch
-                    checked={!!primaryKey.enabled}
-                    onChange={() => toggle.mutate(primaryKey)}
-                    disabled={toggle.isPending && toggle.variables?.id === primaryKey.id}
-                    aria-label={`Enable key ${primaryKey.label}`}
-                  />
-                </div>
-                <Button variant="outline" className="justify-start" onClick={() => setEditing(primaryKey)}>
-                  <Pencil size={14} /> Edit details
-                </Button>
-                <Button className="justify-start" onClick={() => rotate.mutate(primaryKey)} loading={rotate.isPending && rotate.variables?.id === primaryKey.id}>
-                  <RefreshCw size={14} /> Generate new key
-                </Button>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <h3 className="mb-2 text-sm font-semibold text-text-primary">How to use this key</h3>
-            <ul className="grid gap-2 text-xs text-text-muted sm:grid-cols-2">
-              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
-                <span className="block text-text-primary">Base URL</span>
-                <code className="font-mono text-[11px] text-accent">http://{typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"}:1463/v1</code>
-              </li>
-              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
-                <span className="block text-text-primary">Auth header</span>
-                <code className="font-mono text-[11px] text-accent">Authorization: Bearer &lt;this-key&gt;</code>
-              </li>
-              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
-                <span className="block text-text-primary">Compatible with</span>
-                <span>OpenAI / Anthropic SDKs via Mirais translation.</span>
-              </li>
-              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
-                <span className="block text-text-primary">Rotate</span>
-                <span>Generates a new secret and invalidates the old one.</span>
-              </li>
-              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
-                <span className="block text-text-primary">Use without a key</span>
-                <span>
-                  Set <code className="font-mono text-[11px] text-accent">MIRAIS_AUTH_REQUIRED=off</code> on the server. Requests with no <code className="font-mono text-[11px] text-accent">Authorization</code> header (or the placeholder <code className="font-mono text-[11px] text-accent">Bearer anonymous</code>) are accepted. Only safe when Mirais listens on 127.0.0.1 / a trusted network.
-                </span>
-              </li>
-              <li className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2">
-                <span className="block text-text-primary">Rotate = pause</span>
-                <span>The AI coding agent must never rotate this key on its own. Confirm with you before any change.</span>
-              </li>
-            </ul>
-          </Card>
-        </div>
-      )}
-
-      {editing && <KeyModal key0={editing} onClose={() => setEditing(null)} />}
-
-      <Modal open={!!rotatedKey} onClose={() => setRotatedKey(null)} title="API key rotated">
-        <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <span>Copy this key now. This global secret will <strong>never be shown again</strong>, and any previous key is no longer valid.</span>
-        </div>
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-bg-base px-3 py-2">
-          <code className="flex-1 break-all font-mono text-xs text-accent">{rotatedKey?.key}</code>
-          <button onClick={copyRotatedKey} className="shrink-0 text-text-muted hover:text-text-primary" aria-label="Copy key">
-            {copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
-          </button>
-        </div>
-        <div className="flex justify-end">
-          <Button onClick={() => setRotatedKey(null)}>Done</Button>
-        </div>
-      </Modal>
-    </div>
-  );
+  return <div>
+    <PageHeader title="API keys"><Button onClick={() => setCreating(true)}><Plus size={16} /> Create API key</Button></PageHeader>
+    <p className="mb-5 text-sm text-text-muted">Create separate credentials for each app, agent, or user. Every key has its own limits and lifetime token budget.</p>
+    {list.isLoading ? <Card><Skeleton className="h-48 w-full" /></Card> : !allKeys.length ? <Card><EmptyState icon={<KeyRound size={32} />} title="No API keys" hint="Create a key to authenticate requests to /v1/*." action={<Button onClick={() => setCreating(true)}><Plus size={15} /> Create API key</Button>} /></Card> : <><Card className="mb-4"><div className="flex flex-col gap-2 sm:flex-row"><label className="relative flex-1"><Search size={15} className="absolute left-3 top-2.5 text-text-muted" /><Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search label or key prefix" /></label><select className="h-9 rounded-md border border-border bg-bg-base px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">All keys</option><option value="active">Active</option><option value="disabled">Disabled</option><option value="exhausted">Exhausted</option></select></div><p className="mt-2 text-xs text-text-muted">Showing {filteredKeys.length} of {allKeys.length} keys</p></Card>{!filteredKeys.length ? <Card><EmptyState icon={<Search size={28} />} title="No matching keys" hint="Try another search or clear the status filter." /></Card> : <div className="grid gap-4 xl:grid-cols-2">{filteredKeys.map((key) => {
+      const usage = usageById.get(key.id); const isVisible = visible.has(key.id); const secret = key.key ?? storedKeyFor(key.key_prefix) ?? ""; const exhausted = !!key.token_budget && (usage?.tokens_total ?? 0) >= key.token_budget;
+      return <Card key={key.id} className="border-border/80"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-accent"><KeyRound size={18} /></span><div className="min-w-0"><h2 className="truncate text-base font-semibold">{key.label}</h2><p className="text-xs text-text-muted">{key.enabled ? "Active" : "Disabled"} · created {new Date(key.created_at).toLocaleDateString()}</p></div></div><span className={`rounded-full px-2 py-1 text-[10px] ${exhausted ? "bg-danger/15 text-danger" : key.enabled ? "bg-success/15 text-success" : "bg-border text-text-muted"}`}>{exhausted ? "EXHAUSTED" : key.enabled ? "ACTIVE" : "OFF"}</span></div>
+        <div className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-bg-base px-3 py-2"><code className="min-w-0 flex-1 truncate font-mono text-xs text-accent">{isVisible && secret ? secret : `${key.key_prefix}••••••••••••`}</code>{secret && <CopyButton text={secret} />}<button type="button" className="text-text-muted hover:text-text-primary" aria-label={isVisible ? `Hide API key ${key.label}` : `Show API key ${key.label}`} onClick={() => setVisible((current) => { const next = new Set(current); if (next.has(key.id)) next.delete(key.id); else next.add(key.id); return next; })}>{isVisible ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>
+        <TokenProgress used={usage?.tokens_total ?? 0} limit={key.token_budget} />
+        <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-text-muted"><span>RPM: {key.rate_limit_rpm ?? "∞"}</span><span>Concurrent: {key.concurrency ?? "∞"}</span><span>Used/min: {usage?.requests_minute ?? 0}</span></div>
+        {usage?.top_models?.length ? <div className="mt-3 border-t border-border/60 pt-3"><p className="text-[10px] uppercase tracking-[0.16em] text-text-muted">Top models</p><div className="mt-2 flex flex-wrap gap-2">{usage.top_models.map((model) => <span key={model.model} className="rounded-md bg-bg-base px-2 py-1 text-[11px] text-text-muted">{model.model}: {fmtNum(model.tokens)} tokens</span>)}</div></div> : null}
+        <div className="mt-4 flex flex-wrap justify-end gap-2"><Switch checked={!!key.enabled} onChange={() => toggle.mutate(key)} aria-label={`Enable API key ${key.label}`} /><Button size="sm" variant="outline" onClick={() => setEditing(key)}><Pencil size={13} /> Edit</Button><Button size="sm" variant="outline" onClick={() => rotate.mutate(key)} loading={rotate.isPending && rotate.variables?.id === key.id}><RefreshCw size={13} /> Rotate</Button><Button size="sm" variant="danger" onClick={() => setRemoving(key)} aria-label={`Delete API key ${key.label}`}><Trash2 size={13} /></Button></div>
+      </Card>;
+    })}</div>}</>}
+    <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => removing && remove.mutate(removing)} title="Delete API key" message={`Delete "${removing?.label ?? ""}"? Any client using it will immediately lose access. This cannot be undone.`} danger loading={remove.isPending} />
+    {creating && <CreateKeyModal onClose={() => setCreating(false)} onCreated={(key) => { setCreating(false); setNewKey(key); invalidate(); }} />}
+    <Modal open={!!newKey} onClose={() => setNewKey(null)} title="API key generated"><div className="space-y-4"><p className="text-xs text-warning">Copy this key now. You can reveal it later from this page, but treat it as a secret.</p><code className="block break-all rounded-lg border border-border bg-bg-base p-3 text-xs text-accent">{newKey?.key}</code><div className="flex justify-end"><Button onClick={() => setNewKey(null)}>Done</Button></div></div></Modal>
+    {editing && <KeyModal key0={editing} onClose={() => setEditing(null)} />}
+  </div>;
 }
 
-function KeyModal({ key0, onClose }: { key0?: GatewayKey; onClose: () => void }) {
-  const qc = useQueryClient();
-  const [form, setForm] = useState({
-    label: key0?.label ?? "",
-    rateLimitRpm: key0?.rate_limit_rpm?.toString() ?? "",
-    concurrency: key0?.concurrency?.toString() ?? "",
-    dailyTokenBudget: key0?.daily_token_budget?.toString() ?? "",
-    allowedModels: parseAllowedModels(key0?.allowed_models).join("\n"),
-    expiresAt: key0?.expires_at?.slice(0, 10) ?? "",
-  });
-  const [error, setError] = useState("");
+function CreateKeyModal({ onClose, onCreated }: { onClose: () => void; onCreated: (key: { label: string; key: string }) => void }) {
+  const [label, setLabel] = useState(""); const [budget, setBudget] = useState("");
+  const create = useMutation({ mutationFn: () => keys.create({ label: label.trim(), tokenBudget: budget ? Number(budget) : undefined }), onSuccess: (key) => onCreated({ label: key.label, key: key.key ?? key.plaintext }), onError: (error) => toast(error.message, "error") });
+  return <Modal open onClose={onClose} title="Create API key"><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><label className="block text-xs text-text-muted">Label<Input className="mt-1" autoFocus required value={label} onChange={(event) => setLabel(event.target.value)} placeholder="my-app" /></label><label className="block text-xs text-text-muted">Maximum lifetime tokens<Input className="mt-1" type="number" min={1} value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="Unlimited" /></label><div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" loading={create.isPending}>Generate</Button></div></form></Modal>;
+}
 
-  const save = useMutation({
-    mutationFn: async () => {
-      const models = form.allowedModels
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const body = {
-        label: form.label.trim(),
-        rateLimitRpm: form.rateLimitRpm ? Number(form.rateLimitRpm) : null,
-        concurrency: form.concurrency ? Number(form.concurrency) : null,
-        dailyTokenBudget: form.dailyTokenBudget ? Number(form.dailyTokenBudget) : null,
-        // An empty list means "no restriction" rather than "deny everything".
-        allowedModels: models.length ? models : null,
-        expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
-      };
-      if (!key0) throw new Error("Key not found");
-      await keys.update(key0.id, body);
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["keys"] });
-      toast("Key updated");
-      onClose();
-    },
-    onError: (e) => setError(e.message),
-  });
-
-  return (
-    <Modal open onClose={onClose} title="Edit key">
-      <form onSubmit={(e) => { e.preventDefault(); setError(""); save.mutate(); }} className="space-y-3">
-        <div>
-          <label className="mb-1 block text-xs text-text-muted">Label</label>
-          <Input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="e.g. my-app, ci-pipeline" required autoFocus />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="mb-1 block text-xs text-text-muted">Rate limit (req/min)</label>
-            <Input type="number" min={1} value={form.rateLimitRpm} onChange={(e) => setForm({ ...form, rateLimitRpm: e.target.value })} placeholder="unlimited" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-text-muted">Daily token budget</label>
-            <Input type="number" min={1} value={form.dailyTokenBudget} onChange={(e) => setForm({ ...form, dailyTokenBudget: e.target.value })} placeholder="unlimited" />
-          </div>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-text-muted">Max concurrent requests</label>
-          <Input type="number" min={1} value={form.concurrency} onChange={(e) => setForm({ ...form, concurrency: e.target.value })} placeholder="unlimited" />
-          <p className="mt-1 text-xs text-text-muted">Requests beyond this limit get a 429 with a short retry-after.</p>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-text-muted">Allowed models <span className="text-text-muted/50">(one per line)</span></label>
-          <textarea
-            value={form.allowedModels}
-            onChange={(e) => setForm({ ...form, allowedModels: e.target.value })}
-            placeholder={"leave empty to allow every model\nopenai/gpt-5\ncombo:fallback\nanthropic/*"}
-            rows={4}
-            className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none"
-          />
-          <p className="mt-1 text-xs text-text-muted">Accepts exact ids, aliases, <code>combo:name</code>, and <code>*</code> wildcards. Models not listed are rejected and hidden from <code>/v1/models</code>.</p>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-text-muted">Expires at <span className="text-text-muted/50">(optional)</span></label>
-          <Input type="date" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} />
-        </div>
-        {error && <p className="text-xs text-danger">{error}</p>}
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={save.isPending} disabled={!form.label.trim()}>Save</Button>
-        </div>
-      </form>
-    </Modal>
-  );
+function KeyModal({ key0, onClose }: { key0: GatewayKey; onClose: () => void }) {
+  const qc = useQueryClient(); const [error, setError] = useState("");
+  const [form, setForm] = useState({ label: key0.label, rateLimitRpm: key0.rate_limit_rpm?.toString() ?? "", concurrency: key0.concurrency?.toString() ?? "", tokenBudget: key0.token_budget?.toString() ?? "", allowedModels: parseAllowedModels(key0.allowed_models).join("\n"), expiresAt: key0.expires_at?.slice(0, 10) ?? "" });
+  const save = useMutation({ mutationFn: () => keys.update(key0.id, { label: form.label.trim(), rateLimitRpm: form.rateLimitRpm ? Number(form.rateLimitRpm) : null, concurrency: form.concurrency ? Number(form.concurrency) : null, tokenBudget: form.tokenBudget ? Number(form.tokenBudget) : null, allowedModels: form.allowedModels.split(/\r?\n/).map((value) => value.trim()).filter(Boolean), expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["keys"] }); toast("API key updated"); onClose(); }, onError: (err) => setError(err.message) });
+  return <Modal open onClose={onClose} title={`Edit ${key0.label}`}><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); setError(""); save.mutate(); }}><label className="block text-xs text-text-muted">Label<Input className="mt-1" required value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label><div className="grid grid-cols-2 gap-3"><label className="text-xs text-text-muted">Rate limit<Input className="mt-1" type="number" min={1} value={form.rateLimitRpm} onChange={(event) => setForm({ ...form, rateLimitRpm: event.target.value })} placeholder="Unlimited" /></label><label className="text-xs text-text-muted">Concurrency<Input className="mt-1" type="number" min={1} value={form.concurrency} onChange={(event) => setForm({ ...form, concurrency: event.target.value })} placeholder="Unlimited" /></label></div><label className="block text-xs text-text-muted">Maximum lifetime tokens<Input className="mt-1" type="number" min={1} value={form.tokenBudget} onChange={(event) => setForm({ ...form, tokenBudget: event.target.value })} placeholder="Unlimited" /></label><label className="block text-xs text-text-muted">Allowed models<textarea value={form.allowedModels} onChange={(event) => setForm({ ...form, allowedModels: event.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs" placeholder="empty = all models" /></label><label className="block text-xs text-text-muted">Expires at<Input className="mt-1" type="date" value={form.expiresAt} onChange={(event) => setForm({ ...form, expiresAt: event.target.value })} /></label>{error && <p className="text-xs text-danger">{error}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onClose}>Cancel</Button><Button type="submit" loading={save.isPending}>Save</Button></div></form></Modal>;
 }

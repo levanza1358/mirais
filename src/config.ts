@@ -7,7 +7,7 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   DATA_DIR: z.string().default("./data"),
   TOKEN_SAVER: z.enum(["on", "off"]).default("on"),
-  TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("meta"),
+  TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("full"),
   REQUEST_BODY_LIMIT_MB: z.coerce.number().positive().default(25),
   // Server-level cap for file uploads (backup restore). Bun rejects larger
   // request bodies with 413 before any route runs.

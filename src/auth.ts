@@ -23,6 +23,7 @@ const ANONYMOUS_KEY: GatewayKey = {
   rate_limit_rpm: null,
   concurrency: null,
   daily_token_budget: null,
+  token_budget: null,
   expires_at: null,
   created_at: "",
   last_used_at: null,

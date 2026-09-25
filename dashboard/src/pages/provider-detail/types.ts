@@ -1,6 +1,6 @@
 import type { Provider, ProviderAccount } from "../../api";
 
-export const TYPES = ["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "custom"] as const;
+export const TYPES = ["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "custom"] as const;
 export const DEFAULT_ACCOUNTS_PER_PAGE = 10;
 export const ACCOUNT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 

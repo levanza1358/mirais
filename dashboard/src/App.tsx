@@ -1,12 +1,10 @@
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
-import { music as musicApiClient, settings as settingsApi } from "./api";
+import { settings as settingsApi } from "./api";
 import { Layout } from "./components/Layout";
 import { AuthGate } from "./components/AuthGate";
 import { Splash } from "./components/Splash";
 import { ToastHost } from "./components/ui";
-import { MusicPlayerProvider } from "./hooks/useMusicPlayer";
-import MusicMiniPlayer from "./components/MusicMiniPlayer";
 import Landing from "./pages/Landing";
 
 const Overview = lazy(() => import("./pages/Overview"));
@@ -20,7 +18,8 @@ const WarmupLogsRedirect = lazy(() => import("./pages/WarmupLogs"));
 const TestLogsRedirect = lazy(() => import("./pages/TestLogs"));
 const UsageLog = lazy(() => import("./pages/UsageLog"));
 const Settings = lazy(() => import("./pages/Settings"));
-const Music = lazy(() => import("./pages/Music"));
+const Audit = lazy(() => import("./pages/Audit"));
+const Capabilities = lazy(() => import("./pages/Capabilities"));
 
 const ACCENT_STORAGE_KEY = "mirais.ui.accent";
 const ACCENT_DEFAULT = "#7c5cff";
@@ -82,11 +81,6 @@ function AccentBoot() {
   return null;
 }
 
-function DashboardMusicMiniPlayer() {
-  const location = useLocation();
-  return location.pathname === "/dashboard/music" ? null : <MusicMiniPlayer />;
-}
-
 export default function App() {
   return (
     <>
@@ -95,8 +89,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/dashboard/*" element={
-            <MusicPlayerProvider streamUrlFor={musicApiClient.streamUrl}>
-              <Layout>
+            <Layout>
                 <Suspense fallback={<Splash />}>
                   <Routes>
                     <Route index element={<Overview />} />
@@ -110,13 +103,12 @@ export default function App() {
                     <Route path="test-logs" element={<TestLogsRedirect />} />
                     <Route path="usage" element={<UsageLog />} />
                     <Route path="settings" element={<Settings />} />
-                    <Route path="music" element={<Music />} />
+                    <Route path="audit" element={<Audit />} />
+                    <Route path="capabilities" element={<Capabilities />} />
                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
                   </Routes>
                 </Suspense>
               </Layout>
-              <DashboardMusicMiniPlayer />
-            </MusicPlayerProvider>
           } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

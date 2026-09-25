@@ -6,6 +6,24 @@ export const oauthCallbackUrlSchema = z.object({
   url: z.string().min(1).max(16_384),
 });
 
+export const codexImportSchema = z.object({
+  accessToken: z.string().trim().min(1).max(65_536),
+  refreshToken: z.string().trim().min(1).max(65_536),
+  email: z.string().trim().email().max(320).optional(),
+  provider: z.literal("codex").optional(),
+  providerSpecificData: z.object({ chatgptPlanType: z.string().trim().max(256).optional() }).optional(),
+  expiresAt: z.string().datetime().optional(),
+  name: z.string().trim().min(1).max(256).optional(),
+  priority: z.number().int().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const codexImportBatchSchema = z.union([
+  codexImportSchema,
+  codexImportSchema.array().min(1).max(2000),
+  z.object({ accounts: codexImportSchema.array().min(1).max(2000) }),
+]);
+
 export const copilotLoginSchema = z.object({
   providerId: z.string().min(1),
   label: z.string().max(128).default(""),
@@ -155,7 +173,8 @@ export const anthropicMessagesSchema = z.object({
 
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/, "lowercase letters, digits, dash, underscore"),
-  type: z.enum(["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
+  displayName: z.string().trim().min(1).max(256).nullable().optional(),
+  type: z.enum(["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
   baseUrl: upstreamBaseUrlSchema.optional().nullable(),
   enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
@@ -172,8 +191,18 @@ export const accountCreateSchema = z.object({
 });
 
 export const accountBulkCreateSchema = z.object({
-  apiKeys: z.array(z.string().min(1)).min(1).max(2000),
+  apiKeys: z.array(z.string().min(1)).max(2000).optional(),
   labelPrefix: z.string().min(1).max(48).optional(),
+  accounts: z.array(z.object({
+    apiKey: z.string().min(1),
+    refreshToken: z.string().optional().nullable(),
+    accountId: z.string().optional().nullable(),
+    label: z.string().min(1).max(64).optional(),
+  })).min(1).max(2000).optional(),
+}).superRefine((value, ctx) => {
+  if ((!value.apiKeys || value.apiKeys.length === 0) && (!value.accounts || value.accounts.length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provide apiKeys or accounts" });
+  }
 });
 
 export const accountUpdateSchema = z.object({
@@ -207,7 +236,7 @@ export const accountBackupSchema = z.object({
   exported_at: z.string().datetime(),
   providers: z.array(z.object({
     name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
-    type: z.enum(["openai", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
+    type: z.enum(["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
     base_url: upstreamBaseUrlSchema.nullable(),
     enabled: z.boolean(),
     priority: z.number().int(),
@@ -267,6 +296,7 @@ export const keyCreateSchema = z.object({
   rateLimitRpm: z.number().int().positive().optional().nullable(),
   concurrency: z.number().int().positive().optional().nullable(),
   dailyTokenBudget: z.number().int().positive().optional().nullable(),
+  tokenBudget: z.number().int().positive().optional().nullable(),
   expiresAt: z.string().datetime().optional().nullable(),
 });
 
@@ -276,6 +306,7 @@ export const keyUpdateSchema = z.object({
   rateLimitRpm: z.number().int().positive().optional().nullable(),
   concurrency: z.number().int().positive().optional().nullable(),
   dailyTokenBudget: z.number().int().positive().optional().nullable(),
+  tokenBudget: z.number().int().positive().optional().nullable(),
   expiresAt: z.string().datetime().optional().nullable(),
   enabled: z.boolean().optional(),
 });

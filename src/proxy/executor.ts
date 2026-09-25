@@ -4,7 +4,7 @@ import { baseUrlFor, upstreamFormat } from "./router";
 import { openaiToAnthropicRequest } from "./translator/anthropic-to-openai";
 import { anthropicToOpenaiResponse } from "./translator/openai-to-anthropic";
 import { AnthropicToOpenAIStreamTranslator, SseParser } from "./translator/stream";
-import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexRequestBody, codexUrl, ensureFreshToken, isOAuthAccount, responsesStreamToChat } from "./codex";
+import { aggregateChatCompletionsStream, aggregateResponsesStream, codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexRequestBody, codexUrl, ensureFreshToken, isCodexAccount, responsesStreamToChat } from "./codex";
 import { aggregateXaiChatCompletionsStream, aggregateXaiResponsesStream, ensureFreshXaiToken, fetchXaiChatCompletions, fetchXaiResponses, supportsReasoningEffort, xaiChatCompletionsBody, xaiChatCompletionsStreamToChat, xaiHeaders, xaiRequestBody, xaiRequestContext, xaiResponsesStreamToChat } from "./xai";
 import { directChatCompletions, directChatCompletionsStream } from "./copilot-direct";
 import { metaForModel } from "./modelMeta";
@@ -164,6 +164,24 @@ function withRequiredSystemMessage(req: CanonicalRequest): CanonicalRequest {
   };
 }
 
+function toCodeBuddyRequest(req: CanonicalRequest, model: string): Record<string, unknown> {
+  return {
+    model,
+    messages: withRequiredSystemMessage(req).messages,
+    stream: true,
+    ...(req.max_tokens === undefined ? {} : { max_tokens: req.max_tokens }),
+    ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
+    ...(req.top_p === undefined ? {} : { top_p: req.top_p }),
+    ...(req.stop === undefined ? {} : { stop: req.stop }),
+    ...(req.tools === undefined ? {} : { tools: req.tools }),
+    ...(req.tool_choice === undefined ? {} : { tool_choice: req.tool_choice }),
+    ...(req.parallel_tool_calls === undefined
+      ? {}
+      : { parallel_tool_calls: req.parallel_tool_calls }),
+    ...(req.response_format === undefined ? {} : { response_format: req.response_format }),
+  };
+}
+
 function openAiHeaders(apiKey: string, accept?: string): Record<string, string> {
   return { "content-type": "application/json", ...(accept ? { accept } : {}), ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) };
 }
@@ -176,6 +194,7 @@ function codeBuddyHeaders(apiKey: string, accept: "text/event-stream" | "applica
     "X-Product": "SaaS",
     "X-IDE-Type": "CLI",
     "X-IDE-Name": "CLI",
+    "x-requested-with": "XMLHttpRequest",
     "x-codebuddy-request": "1",
     accept,
   };
@@ -248,7 +267,7 @@ export async function executeRequest(
     ? orderedPlan
     : orderedPlan.filter(({ candidate, account }) =>
       account.auth_kind !== "oauth"
-      || candidate.provider.type !== "openai"
+      || !isCodexAccount(candidate.provider.type, account)
       || codexPlanAllowsModel(account.plan_type, candidate.modelId),
     );
   if (!planEligible.length) {
@@ -285,7 +304,7 @@ export async function executeRequest(
         && supportsReasoningEffort(candidate.modelId)
         && effectiveReq.reasoning?.enabled !== false
         && !hasTools;
-      if (isOAuthAccount(account) || isXaiOAuth) {
+      if (isCodexAccount(candidate.provider.type, account) || isXaiOAuth) {
         if (!providersRepo) throw new GatewayError(500, "server_error", "OAuth account requires a providers repo in the executor");
         const accessToken = isXaiOAuth
           ? await ensureFreshXaiToken(providersRepo, account)
@@ -466,7 +485,7 @@ export async function executeRequest(
 
       if (retriable) {
         if (payloadTooLarge) payloadRejectedCandidates.add(candidate);
-        const quotaExhausted = gErr.status === 429 && /free-usage-exhausted|usage limit has been reached|limit has been reached|quota/i.test(gErr.message);
+        const quotaExhausted = gErr.status === 429 && /free-usage-exhausted|usage limit has been reached|limit has been reached|quota|resource.?exhausted|insufficient.?credit|credits?.*exhausted/i.test(`${gErr.message} ${gErr.code ?? ""}`);
         const cooldownMs = quotaExhausted ? 24 * 60 * 60_000 : gErr.status === 429 ? (retryAfterMsFrom(gErr) ?? 60_000) : undefined;
         // A "quota exhausted" 429 is not a transient rate limit — the account
         // stays out of rotation until the window resets (up to ~24h). Treating
@@ -535,11 +554,10 @@ async function callUpstream(
   const fetchUpstream = (url: string, init: RequestInit) => upstreamFetch(url, init, 3, upstreamUrlOptions);
 
   if (isCodeBuddyProvider(candidate.provider.type)) {
-    const forced = withRequiredSystemMessage(req);
     const res = await upstreamFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
-      body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
+      body: JSON.stringify(toCodeBuddyRequest(req, candidate.modelId)),
       signal: combined,
     });
     if (!res.ok) throw await upstreamError(res);
@@ -607,11 +625,10 @@ async function openUpstreamStream(
 
   let res: Response;
   if (isCodeBuddyProvider(candidate.provider.type)) {
-    const forced = withRequiredSystemMessage(req);
     res = await upstreamFetch(`${base}/chat/completions`, {
       method: "POST",
       headers: codeBuddyHeaders(apiKey, "text/event-stream"),
-      body: JSON.stringify({ ...forced, model: candidate.modelId, stream: true }),
+      body: JSON.stringify(toCodeBuddyRequest(req, candidate.modelId)),
       signal: combined,
     }, 3, upstreamUrlOptions);
   } else if (format === "anthropic") {

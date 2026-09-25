@@ -17,7 +17,10 @@ export function readInstallRoot(fallback?: string): string {
   try {
     const raw = fs.readFileSync(installInfoPath, "utf8");
     const parsed = JSON.parse(raw) as { root?: string };
-    if (parsed.root) return path.resolve(parsed.root);
+    if (parsed.root) {
+      const root = path.resolve(parsed.root);
+      if (fs.existsSync(path.join(root, "src", "server.ts"))) return root;
+    }
   } catch {
     // ignore
   }

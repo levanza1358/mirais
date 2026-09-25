@@ -34,6 +34,11 @@ export function isOAuthAccount(account: ProviderAccount): boolean {
   return account.auth_kind === "oauth";
 }
 
+/** Codex transport for ChatGPT/Codex providers plus legacy OpenAI OAuth accounts. */
+export function isCodexAccount(providerType: string, account: ProviderAccount): boolean {
+  return isOAuthAccount(account) && (providerType === "codex" || providerType === "openai");
+}
+
 function isCodeBuddyToken(account: ProviderAccount): boolean {
   return account.api_key.startsWith("eyJ") && !!account.refresh_token;
 }
@@ -127,16 +132,16 @@ export interface CheckinResult {
 
 /**
  * Attempt the daily check-in for a CodeBuddy CN account.
- * The /activity/* area is gated by the APISIX web gateway and normally
- * requires a browser session cookie. We try the API token first (some
- * gateways accept it), then the stored session cookie when present.
+ * CodeBuddy exposes this through the billing meter API and accepts the CLI
+ * bearer token directly; the old /activity/check-in endpoint is a web-only
+ * endpoint and returns an unrelated APISIX response.
  */
 export async function attemptCodeBuddyCheckin(
   account: ProviderAccount,
   providerBaseUrl?: string | null,
 ): Promise<CheckinResult> {
   const base = (providerBaseUrl?.trim() || "https://copilot.tencent.com/v2").replace(/\/+$/, "");
-  const url = `${base}/activity/check-in`;
+  const url = `${base}/billing/meter/daily-checkin`;
 
   const safeUsage = async (): Promise<number | null> => {
     try {
@@ -149,69 +154,71 @@ export async function attemptCodeBuddyCheckin(
 
   const beforeTotal = await safeUsage();
 
-  const attempts: Record<string, string>[] = [
-    codeBuddyHeaders(account),
-  ];
+  // The billing endpoint is stricter than chat completions: send the exact
+  // documented bearer request first. CLI product headers can make APISIX
+  // classify this call as an API-key request and reject the path/method.
+  const attempts: Record<string, string>[] = [{
+    Authorization: `Bearer ${account.api_key}`,
+    "content-type": "application/json",
+    accept: "application/json",
+  }];
   if (account.session_cookie) {
     attempts.push({
-      ...codeBuddyHeaders(account),
-      cookie: account.session_cookie.includes("=")
-        ? account.session_cookie
-        : `session=${account.session_cookie}`,
+      ...attempts[0],
+      cookie: account.session_cookie.includes("=") ? account.session_cookie : `session=${account.session_cookie}`,
     });
   }
 
-  let lastStatus = 0;
-  for (const headers of attempts) {
-    let res: Response;
-    try {
-      res = await fetch(url, {
+  try {
+    for (const headers of attempts) {
+      const res = await fetch(url, {
         method: "POST",
         headers,
         body: "{}",
         signal: AbortSignal.timeout(10_000),
       });
-    } catch {
-      continue;
-    }
-    lastStatus = res.status;
-    const text = await res.text().catch(() => "");
-    if (text.trimStart().startsWith("<")) continue; // APISIX HTML rejection
-    if (!res.ok) continue;
+      const text = await res.text().catch(() => "");
+      type CheckinPayload = { code?: unknown; msg?: unknown; message?: unknown; data?: { code?: unknown; msg?: unknown; message?: unknown } };
+      let parsed: CheckinPayload | null = null;
+      try {
+        const value: unknown = JSON.parse(text);
+        if (typeof value === "object" && value !== null) parsed = value as CheckinPayload;
+      } catch { /* non-JSON body */ }
 
-    let parsed: { code?: unknown; msg?: unknown } | null = null;
-    try {
-      const value: unknown = JSON.parse(text);
-      if (typeof value === "object" && value !== null) parsed = value as { code?: unknown; msg?: unknown };
-    } catch { /* non-JSON body */ }
-    if (parsed && typeof parsed.code === "number" && parsed.code !== 0) {
-      const msg = typeof parsed.msg === "string" ? parsed.msg : "check-in rejected";
+      const responseCode = parsed?.data?.code ?? parsed?.code;
+      const responseMessage = parsed?.data?.msg ?? parsed?.data?.message ?? parsed?.msg ?? parsed?.message;
+      log.info("codebuddy daily claim response", {
+        account: account.label,
+        status: res.status,
+        code: typeof responseCode === "string" || typeof responseCode === "number" ? responseCode : null,
+        message: typeof responseMessage === "string" ? responseMessage.slice(0, 300) : null,
+        hasSessionCookie: Boolean(headers.cookie),
+      });
+      if (!res.ok || (typeof responseCode === "number" && responseCode !== 0)) {
+      const msg = typeof responseMessage === "string" ? responseMessage : `Check-in failed (HTTP ${res.status})`;
       if (/already|重复|已|signed/i.test(msg)) {
         return { ok: true, message: "Already checked in today", quotaTotal: beforeTotal };
       }
+        if (/api key not allowed|api key.*not allowed/i.test(msg) && headers === attempts[0] && attempts.length > 1) continue;
       return { ok: false, message: msg, quotaTotal: beforeTotal };
-    }
+      }
 
     // Verify by re-fetching the quota — a total increase confirms credit.
     const afterTotal = await safeUsage();
-    if (beforeTotal !== null && afterTotal !== null && afterTotal > beforeTotal) {
-      return { ok: true, message: `Checked in — quota +${afterTotal - beforeTotal} credits`, quotaTotal: afterTotal };
+      if (beforeTotal !== null && afterTotal !== null && afterTotal > beforeTotal) {
+        return { ok: true, message: `Checked in — quota +${afterTotal - beforeTotal} credits`, quotaTotal: afterTotal };
+      }
+      if (parsed) {
+        const msg = typeof responseMessage === "string" && responseMessage ? responseMessage : "check-in response received";
+        return { ok: true, message: /already|重复|已|signed/i.test(msg) ? "Already checked in today" : msg, quotaTotal: afterTotal };
+      }
+      return { ok: true, message: "Check-in request accepted", quotaTotal: afterTotal };
     }
-    if (parsed) {
-      const msg = typeof parsed.msg === "string" && parsed.msg ? parsed.msg : "check-in response received";
-      return { ok: true, message: /already|重复|已|signed/i.test(msg) ? "Already checked in today" : msg, quotaTotal: afterTotal };
-    }
-    return { ok: true, message: "Check-in request accepted", quotaTotal: afterTotal };
+  } catch {
+    log.warn("codebuddy daily claim request failed", { account: account.label, hasSessionCookie: Boolean(account.session_cookie) });
+    return { ok: false, message: "Check-in failed (network error)", quotaTotal: beforeTotal };
   }
-
-  if (lastStatus === 401 || lastStatus === 403) {
-    return {
-      ok: false,
-      message: "Check-in needs a web session cookie — paste it in the account's edit dialog (session cookie field), or check in via the CodeBuddy website.",
-      quotaTotal: beforeTotal,
-    };
-  }
-  return { ok: false, message: `Check-in failed (HTTP ${lastStatus || "network error"})`, quotaTotal: beforeTotal };
+  return { ok: false, message: "Check-in rejected by CodeBuddy", quotaTotal: beforeTotal };
 }
 
 // ── usage / quota snapshot ──

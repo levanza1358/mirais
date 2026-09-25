@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, keepPreviousData, useMutation } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
   ChevronLeft,
@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   Flame,
+  CalendarCheck,
   ScrollText,
   TestTube2,
   TriangleAlert,
@@ -18,7 +19,7 @@ import { PageHeader } from "../components/Layout";
 // Labels show the full model id (no alias shortening).
 import { downloadCsv, toCsv } from "../utils/csv";
 
-type LogTab = "request" | "warmup" | "test";
+type LogTab = "request" | "warmup" | "claim" | "test";
 
 const PAGE_SIZE = 50;
 
@@ -37,6 +38,13 @@ const TAB_META: Record<LogTab, { label: string; icon: typeof ScrollText; subtitl
     emptyHint: "Warmup activity will appear here.",
     exportName: "mirais-warmups",
   },
+  claim: {
+    label: "Claims",
+    icon: CalendarCheck,
+    subtitle: "CodeBuddy China daily-claim results and failure reasons.",
+    emptyHint: "Daily claim activity will appear here.",
+    exportName: "mirais-claims",
+  },
   test: {
     label: "Model tests",
     icon: TestTube2,
@@ -46,10 +54,10 @@ const TAB_META: Record<LogTab, { label: string; icon: typeof ScrollText; subtitl
   },
 };
 
-const TABS: LogTab[] = ["request", "warmup", "test"];
+const TABS: LogTab[] = ["request", "warmup", "claim", "test"];
 
 function isLogTab(value: string | null): value is LogTab {
-  return value === "request" || value === "warmup" || value === "test";
+  return value === "request" || value === "warmup" || value === "claim" || value === "test";
 }
 
 export default function Logs() {
@@ -195,11 +203,12 @@ export default function Logs() {
               <p className="mt-3 max-w-2xl text-sm leading-6 text-text-muted">
                 {tab === "request" && "This view focuses on real client requests — useful for checking routing issues, token saver, upstream errors, and model performance."}
                 {tab === "warmup" && "This view is dedicated to warmups — check active accounts, frequently failing models, and latest warmup latency."}
+                {tab === "claim" && "Review which CodeBuddy China accounts claimed successfully and why others were rejected."}
                 {tab === "test" && "Use this view to compare model latency, surface broken upstreams, and see the preview text the probe produced."}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Metric icon={tab === "warmup" ? <Flame size={16} /> : tab === "test" ? <TestTube2 size={16} /> : <ScrollText size={16} />} label={tab === "warmup" ? "Warmups" : tab === "test" ? "Tests" : "Requests"} value={fmtNum(total)} />
+              <Metric icon={tab === "warmup" ? <Flame size={16} /> : tab === "claim" ? <CalendarCheck size={16} /> : tab === "test" ? <TestTube2 size={16} /> : <ScrollText size={16} />} label={tab === "warmup" ? "Warmups" : tab === "claim" ? "Claims" : tab === "test" ? "Tests" : "Requests"} value={fmtNum(total)} />
               <Metric icon={<TriangleAlert size={16} />} label="Errors" value={fmtNum(errorCount)} />
               <Metric icon={<Clock3 size={16} />} label="Avg latency" value={fmtMs(avgLatency)} />
             </div>
@@ -216,6 +225,7 @@ export default function Logs() {
             <p className="mt-4 text-xs text-text-muted">
               {tab === "request" && "Use filters to isolate a specific provider, model, or status when tracing problems."}
               {tab === "warmup" && "Filter warmup failures by provider or status to find problematic accounts faster."}
+              {tab === "claim" && "Filter claim results by provider or status to diagnose account-specific failures."}
               {tab === "test" && "Filter model probes by provider or status to compare which models are healthy."}
             </p>
           </Card>
@@ -293,6 +303,8 @@ export default function Logs() {
         </Card>
       ) : tab === "warmup" ? (
         <WarmupList items={items} />
+      ) : tab === "claim" ? (
+        <ClaimList items={items} />
       ) : tab === "test" ? (
         <TestList items={items} />
       ) : (
@@ -306,7 +318,7 @@ export default function Logs() {
 
       {items.length > 0 ? (
         <div className="mt-4 flex flex-col gap-2 text-xs text-text-muted sm:flex-row sm:items-center sm:justify-between">
-          <span>{fmtNum(total)} {tab === "request" ? "requests" : tab === "warmup" ? "warmup events" : "probes"}</span>
+          <span>{fmtNum(total)} {tab === "request" ? "requests" : tab === "warmup" ? "warmup events" : tab === "claim" ? "claim events" : "probes"}</span>
           <div className="flex items-center gap-2">
             <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="rounded p-1 hover:bg-bg-raised disabled:opacity-30" aria-label="Previous page">
               <ChevronLeft size={16} />
@@ -369,6 +381,11 @@ function RequestList({
 }
 
 function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; expanded: boolean; onToggle: () => void; modelMap: Map<string, string> }) {
+  const replay = useMutation({
+    mutationFn: () => logs.replay(l.id),
+    onSuccess: () => toast("Request replay completed"),
+    onError: (error) => toast(error.message, "error"),
+  });
   return (
     <>
       <div className="cursor-pointer px-5 py-4 hover:bg-bg-raised/30" onClick={onToggle}>
@@ -414,6 +431,7 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
           </div>
           <Payload title="Request body" value={l.request_body} />
           <Payload title="Response body" value={l.response_body} />
+          {l.request_body && l.kind === "request" && <div className="mt-4 flex items-center justify-between rounded-lg border border-warning/20 bg-warning/5 px-3 py-2"><span className="text-xs text-warning">Replay sends a new request and may consume provider quota.</span><Button size="sm" variant="outline" loading={replay.isPending} onClick={(event) => { event.stopPropagation(); if (window.confirm("Replay this request through the current routing configuration?")) replay.mutate(); }}>Replay request</Button></div>}
           {!l.request_body && !l.response_body && <p className="mt-4 text-xs text-text-muted">No payload was captured for this request. Set <code>TRACK_PAYLOADS=full</code>, restart Mirais, then send a new request.</p>}
         </div>
       ) : null}
@@ -489,6 +507,37 @@ function WarmupRow({ log }: { log: RequestLog }) {
         {log.error ? log.error : success ? "Warmup completed successfully." : "Warmup finished with an unknown failure."}
       </div>
     </div>
+  );
+}
+
+function ClaimList({ items }: { items: RequestLog[] }) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="divide-y divide-border">
+        {items.map((item) => {
+          const success = item.status === "success";
+          return (
+            <div key={item.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr_0.8fr_1.4fr] lg:items-center">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={success ? "success" : "danger"}>{success ? "claimed" : "failed"}</Badge>
+                  <span className="text-xs text-text-muted">{fmtTime(item.ts)}</span>
+                </div>
+                <p className="mt-2 font-mono text-sm text-text-primary">{item.account_label ?? item.requested_model}</p>
+                <p className="mt-1 text-xs text-text-muted">{item.provider ?? "—"}</p>
+              </div>
+              <div className="grid gap-1 text-xs text-text-muted">
+                <span>Latency: <span className="text-text-primary">{fmtMs(item.latency_ms)}</span></span>
+                <span>HTTP: <span className="text-text-primary">{item.http_status ?? "—"}</span></span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-xs text-text-muted">
+                {item.error ?? item.response_body ?? "Claim completed successfully."}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 

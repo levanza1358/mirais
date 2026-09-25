@@ -17,21 +17,22 @@ export class ProvidersRepo {
     return (this.db.query("SELECT * FROM providers WHERE lower(name) = lower(?)").get(name) as Provider) ?? null;
   }
 
-  create(input: { name: string; type: ProviderType; baseUrl?: string | null; enabled?: boolean; priority?: number; accountStrategy?: Provider["account_strategy"] }): Provider {
+  create(input: { name: string; displayName?: string | null; type: ProviderType; baseUrl?: string | null; enabled?: boolean; priority?: number; accountStrategy?: Provider["account_strategy"] }): Provider {
     const id = ulid();
     this.db
-      .query("INSERT INTO providers (id, name, type, base_url, enabled, priority, account_strategy) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(id, input.name, input.type, input.baseUrl ?? null, input.enabled === false ? 0 : 1, input.priority ?? 100, input.accountStrategy ?? "priority");
+      .query("INSERT INTO providers (id, name, display_name, type, base_url, enabled, priority, account_strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.name, input.displayName ?? null, input.type, input.baseUrl ?? null, input.enabled === false ? 0 : 1, input.priority ?? 100, input.accountStrategy ?? "priority");
     return this.get(id)!;
   }
 
-  update(id: string, patch: Partial<{ name: string; type: ProviderType; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>): Provider | null {
+  update(id: string, patch: Partial<{ name: string; displayName: string | null; type: ProviderType; baseUrl: string | null; enabled: boolean; priority: number; accountStrategy: Provider["account_strategy"] }>): Provider | null {
     const cur = this.get(id);
     if (!cur) return null;
     this.db
-      .query("UPDATE providers SET name=?, type=?, base_url=?, enabled=?, priority=?, account_strategy=?, updated_at=? WHERE id=?")
+      .query("UPDATE providers SET name=?, display_name=?, type=?, base_url=?, enabled=?, priority=?, account_strategy=?, updated_at=? WHERE id=?")
       .run(
         patch.name ?? cur.name,
+        patch.displayName !== undefined ? patch.displayName : cur.display_name,
         patch.type ?? cur.type,
         patch.baseUrl !== undefined ? patch.baseUrl : cur.base_url,
         patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
@@ -59,11 +60,11 @@ export class ProvidersRepo {
     return (this.db.query("SELECT * FROM provider_accounts WHERE id = ?").get(accId) as ProviderAccount) ?? null;
   }
 
-  addAccount(providerId: string, input: { label: string; apiKey?: string; baseUrl?: string | null; priority?: number }): ProviderAccount {
+  addAccount(providerId: string, input: { label: string; apiKey?: string; baseUrl?: string | null; priority?: number; authKind?: string; refreshToken?: string | null; accountId?: string | null }): ProviderAccount {
     const id = ulid();
     this.db
-      .query("INSERT INTO provider_accounts (id, provider_id, label, api_key, base_url, priority) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(id, providerId, input.label, input.apiKey ?? "", input.baseUrl ?? null, input.priority ?? 100);
+      .query("INSERT INTO provider_accounts (id, provider_id, label, api_key, base_url, priority, auth_kind, refresh_token, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, providerId, input.label, input.apiKey ?? "", input.baseUrl ?? null, input.priority ?? 100, input.authKind ?? "api_key", input.refreshToken ?? null, input.accountId ?? null);
     return this.getAccount(id)!;
   }
 

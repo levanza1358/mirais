@@ -6,12 +6,14 @@ import { Button, Input, Modal, toast } from "../../components/ui";
 
 export function AddAccountModal({ provider: p, accountCount, reconnectAccount, onClose }: { provider: Provider; accountCount: number; reconnectAccount?: ProviderAccount; onClose: () => void }) {
   const qc = useQueryClient();
-  const [mode, setMode] = useState<"pick" | "single" | "bulk" | "oauth">(reconnectAccount ? "oauth" : "pick");
+  const [mode, setMode] = useState<"pick" | "single" | "bulk" | "oauth" | "codex-import">(reconnectAccount ? "oauth" : "pick");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [codexJson, setCodexJson] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [bulk, setBulk] = useState("");
+  const [bulkFormatError, setBulkFormatError] = useState<string | null>(null);
   const [bulkProgress, setBulkProgress] = useState(0);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["providers"] });
   const [oauthState, setOauthState] = useState<string | null>(null);
@@ -151,7 +153,33 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
     onError: (e) => toast(e.message, "error"),
   });
 
+  const importCodex = useMutation({
+    mutationFn: () => {
+      const parsed = JSON.parse(codexJson) as Parameters<typeof providers.importCodexAccount>[1];
+      return providers.importCodexAccount(p.id, parsed);
+    },
+    onSuccess: (result) => { setCodexJson(""); invalidate(); onClose(); toast("added" in result ? `Imported ${result.added} Codex account${result.added === 1 ? "" : "s"}${result.skipped ? ` · ${result.skipped} duplicate${result.skipped === 1 ? "" : "s"} skipped` : ""}` : "Codex account imported"); },
+    onError: (e) => toast(e instanceof SyntaxError ? "Invalid JSON" : e.message, "error"),
+  });
+
   const bulkKeys = bulk.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean);
+
+  const codeBuddyBulk = () => {
+    const parsed: unknown = JSON.parse(bulk);
+    if (!Array.isArray(parsed)) throw new Error("CodeBuddy import must be a JSON array");
+    const accounts = parsed.map((item: unknown, index) => {
+      if (!item || typeof item !== "object") throw new Error(`Invalid CodeBuddy account at index ${index + 1}`);
+      const row = item as { access_token?: unknown; refresh_token?: unknown; uid?: unknown };
+      if (typeof row.access_token !== "string" || !row.access_token.trim()) throw new Error(`Missing access_token at index ${index + 1}`);
+      return {
+        apiKey: row.access_token,
+        refreshToken: typeof row.refresh_token === "string" ? row.refresh_token : null,
+        accountId: typeof row.uid === "string" ? row.uid : null,
+        label: typeof row.uid === "string" ? `${p.name}-${row.uid.slice(0, 8)}` : undefined,
+      };
+    });
+    return providers.addAccountsBulk(p.id, [], undefined, accounts);
+  };
 
   const copilotBulk = useMutation({
     mutationFn: () => providers.copilotBulk(p.id, bulk),
@@ -175,11 +203,13 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
 
   const addBulk = useMutation({
     mutationFn: () => {
+      setBulkFormatError(null);
       setBulkProgress(10);
       const interval = setInterval(() => {
         setBulkProgress((value) => (value < 85 ? value + Math.random() * 12 : value));
       }, 120);
-      return providers.addAccountsBulk(p.id, bulkKeys).finally(() => {
+      const request = p.type === "codebuddy-cn" ? codeBuddyBulk() : providers.addAccountsBulk(p.id, bulkKeys);
+      return request.finally(() => {
         clearInterval(interval);
         setBulkProgress(100);
       });
@@ -192,6 +222,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
     },
     onError: (e) => {
       setBulkProgress(0);
+      setBulkFormatError(e.message);
       toast(e.message, "error");
     },
   });
@@ -206,10 +237,15 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
               <ExternalLink size={14} /> Login with browser
             </Button>
           )}
-          <Button variant="outline" onClick={() => { const nextLabel = p.type === "github-copilot" ? "" : `${p.name}-${accountCount + 1}`; setLabel(nextLabel); if (p.type === "github-copilot") { setStartingCopilot(true); startCopilot.mutate(nextLabel); } else setMode("single"); }} loading={startingCopilot}>
+          {p.type === "codex" && (
+            <Button variant="outline" onClick={() => setMode("codex-import")}>
+              <Plus size={14} /> Paste Codex JSON
+            </Button>
+          )}
+          {p.type !== "codex" && <Button variant="outline" onClick={() => { const nextLabel = p.type === "github-copilot" ? "" : `${p.name}-${accountCount + 1}`; setLabel(nextLabel); if (p.type === "github-copilot") { setStartingCopilot(true); startCopilot.mutate(nextLabel); } else setMode("single"); }} loading={startingCopilot}>
             <Plus size={14} /> {p.type === "github-copilot" ? "Login with GitHub" : "Single API key"}
-          </Button>
-          {p.type !== "github-copilot" && <Button variant="outline" onClick={() => setMode("bulk")}>
+          </Button>}
+          {p.type !== "github-copilot" && p.type !== "codex" && <Button variant="outline" onClick={() => setMode("bulk")}>
             <ListChecks size={14} /> Bulk API keys
           </Button>}
           {p.type === "github-copilot" && <Button variant="outline" onClick={() => setMode("bulk")}>
@@ -293,6 +329,18 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
             </div>
           </div>
         </div>
+      ) : mode === "codex-import" ? (
+        <form onSubmit={(e) => { e.preventDefault(); importCodex.mutate(); }} className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs text-text-muted">Codex account JSON</label>
+            <textarea value={codexJson} onChange={(e) => setCodexJson(e.target.value)} placeholder={'[{"accessToken":"...","refreshToken":"...","email":"you@example.com","expiresAt":"2026-10-03T09:07:36.000Z"}]'} rows={10} autoFocus className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none" />
+            <p className="mt-1 text-[11px] text-text-muted">Tokens are stored locally in Mirais. Do not paste them into shared or public channels.</p>
+          </div>
+          <div className="flex justify-between">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setMode("pick")}>Back</Button>
+            <Button type="submit" size="sm" loading={importCodex.isPending} disabled={!codexJson.trim()}>Import Codex account</Button>
+          </div>
+        </form>
       ) : mode === "single" ? (
         <form onSubmit={(e) => { e.preventDefault(); addSingle.mutate(); }} className="space-y-3">
           <div>
@@ -330,8 +378,9 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
       ) : (
         <form onSubmit={(e) => { e.preventDefault(); addBulk.mutate(); }} className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs text-text-muted">API keys — one per line ({bulkKeys.length} detected)</label>
-            <textarea value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder={"sk-aaaa...\nsk-bbbb...\nsk-cccc..."} rows={8} autoFocus disabled={addBulk.isPending} className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none disabled:opacity-50" />
+            <label className="mb-1 block text-xs text-text-muted">{p.type === "codebuddy-cn" ? "CodeBuddy JSON array" : "API keys — one per line"} ({p.type === "codebuddy-cn" ? "access_token + refresh_token + uid" : `${bulkKeys.length} detected`})</label>
+            <textarea value={bulk} onChange={(e) => { setBulk(e.target.value); setBulkFormatError(null); }} placeholder={p.type === "codebuddy-cn" ? '[{"access_token":"eyJ...","refresh_token":"...","uid":"..."}]' : "sk-aaaa...\nsk-bbbb...\nsk-cccc..."} rows={8} autoFocus disabled={addBulk.isPending} className="w-full rounded-lg border border-border bg-bg-base px-3 py-2 font-mono text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none disabled:opacity-50" />
+            {bulkFormatError && <p className="text-xs text-danger">{bulkFormatError}</p>}
           </div>
           {bulkProgress > 0 && (
             <div className="space-y-1.5">
@@ -344,10 +393,10 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
               </div>
             </div>
           )}
-          <p className="text-[11px] text-text-muted">Labels are auto-generated ({p.name}-{accountCount + 1}, {p.name}-{accountCount + 2}, …). Duplicates and keys already added are skipped.</p>
+          <p className="text-[11px] text-text-muted">{p.type === "codebuddy-cn" ? "Existing accounts are matched by uid first, then access token, and skipped safely." : `Labels are auto-generated (${p.name}-${accountCount + 1}, ${p.name}-${accountCount + 2}, …). Duplicates and keys already added are skipped.`}</p>
           <div className="flex justify-between">
             <Button type="button" variant="ghost" size="sm" onClick={() => setMode("pick")} disabled={addBulk.isPending}>Back</Button>
-            <Button type="submit" size="sm" loading={addBulk.isPending} disabled={bulkKeys.length === 0}>Import {bulkKeys.length > 0 ? `${bulkKeys.length} key${bulkKeys.length === 1 ? "" : "s"}` : ""}</Button>
+            <Button type="submit" size="sm" loading={addBulk.isPending} disabled={p.type === "codebuddy-cn" ? !bulk.trim() : bulkKeys.length === 0}>Import</Button>
           </div>
         </form>
       )}

@@ -38,6 +38,21 @@ describe("KeysRepo", () => {
     expect(repo.getByPlaintextKey(plaintext)?.label).toBe("a");
   });
 
+  test("supports multiple independent keys with separate budgets", () => {
+    const first = repo.create({ label: "app-a", dailyTokenBudget: 1000 });
+    const second = repo.create({ label: "app-b", dailyTokenBudget: 2500 });
+    expect(repo.list()).toHaveLength(2);
+    expect(repo.getByPlaintextKey(first.plaintext)?.daily_token_budget).toBe(1000);
+    expect(repo.getByPlaintextKey(second.plaintext)?.daily_token_budget).toBe(2500);
+  });
+
+  test("lifetime token budget permanently blocks the key after usage", () => {
+    const { record } = repo.create({ label: "limited", tokenBudget: 100 });
+    db.query(`INSERT INTO request_logs (id, key_id, endpoint, requested_model, attempts, status, http_status, input_tokens, output_tokens, tokens_saved)
+      VALUES ('usage-1', ?, '/v1/chat/completions', 'm', 1, 'success', 200, 60, 40, 0)`).run(record.id);
+    expect(checkRateLimit(db, record).retryAfterSec).toBe(0);
+  });
+
   test("update patches fields", () => {
     const { record } = repo.create({ label: "x" });
     const updated = repo.update(record.id, { label: "y", enabled: false, rateLimitRpm: 10 });

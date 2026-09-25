@@ -5,6 +5,7 @@ import { GatewayError } from "../shared/errors";
 
 const DEFAULT_BASE_URLS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
+  codex: "https://chatgpt.com/backend-api/codex",
   anthropic: "https://api.anthropic.com",
   deepseek: "https://api.deepseek.com/v1",
   xai: "https://cli-chat-proxy.grok.com/v1",
@@ -42,7 +43,12 @@ export function baseUrlFor(provider: Provider, account?: ProviderAccount): strin
 }
 
 export function upstreamFormat(provider: Provider): "openai" | "anthropic" {
-  return provider.type === "anthropic" ? "anthropic" : "openai";
+  // Z.ai/BigModel Coding Plan uses Anthropic Messages while standard GLM API
+  // uses OpenAI Chat Completions. Base URL selects the GLM channel.
+  const base = (provider.base_url ?? "").toLowerCase();
+  return provider.type === "anthropic" || (provider.type === "glm" && base.includes("/anthropic"))
+    ? "anthropic"
+    : "openai";
 }
 
 /** Round-robin cursor per combo id, used by the `round_robin` combo strategy. */

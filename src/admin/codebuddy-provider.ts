@@ -16,6 +16,10 @@ export const CODEBUDDY_MODELS: Record<string, string[]> = {
   ],
 };
 
+// The CN billing endpoint exposes a residual 500-credit package that the chat
+// endpoint rejects with error 14018. It must not be presented as usable quota.
+export const CODEBUDDY_CN_UNUSABLE_CREDITS = 500;
+
 export function isCodeBuddyProviderType(type: string): boolean {
   return type === "codebuddy-global" || type === "codebuddy-cn";
 }
@@ -60,6 +64,32 @@ export async function requestCodeBuddyChat(
     }),
     signal: AbortSignal.timeout(30_000),
   });
+}
+
+/** Read an upstream CodeBuddy error without exposing credentials or payloads. */
+export async function codeBuddyErrorDetail(response: Response): Promise<string> {
+  const fallback = `HTTP ${response.status}`;
+  try {
+    const raw = (await response.text()).slice(0, 500);
+    if (!raw) return fallback;
+    try {
+      const payload = JSON.parse(raw) as {
+        error?: { message?: unknown; code?: unknown };
+        message?: unknown;
+        code?: unknown;
+        msg?: unknown;
+        data?: { code?: unknown; msg?: unknown; message?: unknown };
+      };
+      const message = payload.error?.message ?? payload.message ?? payload.msg ?? payload.data?.message ?? payload.data?.msg;
+      const code = payload.error?.code ?? payload.code ?? payload.data?.code;
+      if (message || code) return [code, message].filter(Boolean).join(": ");
+    } catch {
+      // Some CodeBuddy gateways return plain text.
+    }
+    return raw.replace(/[\r\n]+/g, " ").trim() || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function readCodeBuddyPreviewFromSse(body: ReadableStream<Uint8Array>): Promise<string | undefined> {

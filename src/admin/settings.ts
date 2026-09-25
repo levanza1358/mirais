@@ -13,6 +13,8 @@ import { cooldownSnapshot } from "../proxy/executor";
 import { totalInFlight } from "../ratelimit";
 import { autostartStatus, setAutostart } from "../../scripts/autostart";
 import { getAppVersion } from "../version";
+import { AuditRepo } from "../store/repos/audit";
+import { KeysRepo } from "../store/repos/keys";
 
 function fsSyncExists(p: string): boolean {
   try { return fs.statSync(p).isFile(); } catch { return false; }
@@ -39,6 +41,7 @@ function memorySnapshot() {
 
 export function settingsRoutes(db: Database) {
   const settings = new SettingsRepo(db);
+  const audit = new AuditRepo(db);
 
   const currentNetworkBinding = () => {
     const saved = settings.getJson<{ exposed?: boolean; host?: string }>("network_binding");
@@ -100,6 +103,7 @@ export function settingsRoutes(db: Database) {
       if (parsed.data.ui) settings.setJson("ui", parsed.data.ui);
       if (parsed.data.xai_imap) settings.setJson("xai_imap", parsed.data.xai_imap);
       log.info("settings updated", { keys: Object.keys(parsed.data) });
+      audit.record("updated", "settings", null, { fields: Object.keys(parsed.data) });
       return { ok: true };
     });
 }
@@ -117,8 +121,15 @@ export function statsRoutes(db: Database) {
     .get("/by-provider", ({ query }) => logs.statsByProvider(days(query.days)));
 }
 
+export function providerHealthRoutes(db: Database) {
+  const logs = new LogsRepo(db);
+  return new Elysia({ prefix: "/api/provider-health" })
+    .get("/", ({ query }) => logs.providerHealth(Number(query.days) || 7));
+}
+
 export function logRoutes(db: Database) {
   const logs = new LogsRepo(db);
+  const keys = new KeysRepo(db);
   const days = (raw: unknown) => {
     const n = Number(raw);
     return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.floor(n) : 7;
@@ -138,12 +149,40 @@ export function logRoutes(db: Database) {
       }),
     )
     .get("/usage", ({ query }) => logs.usageAggregate(days(query.days)))
+    .get("/usage-by-key", ({ query }) => {
+      if (typeof query.key_id !== "string" || !query.key_id) throw new AdminError(400, "key_id is required");
+      return logs.keyUsage(query.key_id);
+    })
     .delete("/usage", () => ({ ok: true, cleared: logs.clearAll() }))
+    .get("/:id/replay", ({ params }) => {
+      const replay = logs.getReplayBody(params.id);
+      if (!replay) throw new AdminError(409, "Replay is unavailable; enable TRACK_PAYLOADS=full and use a newly captured request");
+      return replay;
+    })
+    .post("/:id/replay", async ({ params }) => {
+      const replay = logs.getReplayBody(params.id);
+      if (!replay) throw new AdminError(409, "Replay is unavailable; enable TRACK_PAYLOADS=full and use a newly captured request");
+      const key = keys.list()[0];
+      if (!key?.key_plain || !key.enabled) throw new AdminError(409, "Replay requires an enabled gateway key");
+      const response = await fetch(`http://127.0.0.1:${config.port}${replay.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key.key_plain}`, "x-mirais-replay-of": params.id },
+        body: JSON.stringify(replay.body),
+      });
+      const body = await response.json().catch(() => ({ error: `Replay returned HTTP ${response.status}` }));
+      return new Response(JSON.stringify(body), { status: response.status, headers: { "content-type": "application/json" } });
+    })
     .get("/:id", ({ params }) => {
       const entry = logs.getById(params.id);
       if (!entry) throw new AdminError(404, "Log not found");
       return entry;
     });
+}
+
+export function auditRoutes(db: Database) {
+  const audit = new AuditRepo(db);
+  return new Elysia({ prefix: "/api/audit" })
+    .get("/", ({ query }) => audit.list(Number(query.page) || 1, Number(query.limit) || 50));
 }
 
 export function autostartRoutes() {

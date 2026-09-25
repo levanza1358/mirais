@@ -8,7 +8,7 @@ Two API surfaces:
 
 ### Payload logging
 
-Set `TRACK_PAYLOADS=full` in `.env` to retain request and response payloads for new gateway requests. The dashboard **Logs** detail view displays captured bodies and provides copy controls. This mode can contain user prompts, tool outputs, and model responses; use it only on a trusted machine and switch back to `meta` when troubleshooting is complete. Authorization headers and provider credentials are never recorded by request logging.
+`TRACK_PAYLOADS` defaults to `full`, retaining request and response payloads for new gateway requests. The dashboard **Logs** detail view displays captured bodies and provides copy controls. This mode can contain user prompts, tool outputs, and model responses; use it only on a trusted machine. Set it to `meta` or `none` when payload capture is not wanted. Authorization headers and provider credentials are never recorded by request logging.
 
 ---
 
@@ -110,15 +110,13 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | GET | `/api/health` | Runtime health: version, uptime, provider/account counts, storage, memory, in-flight requests, and active cooldowns |
 | GET | `/api/autostart` | Start-on-boot state → `{ platform, method: "windows-startup" \| "systemd" \| "unsupported", enabled, manageable, detail }` |
 | POST | `/api/autostart` | `{ enabled: boolean }` → enable/disable start-on-boot. Windows uses the per-user Startup folder; Linux writes a systemd unit and needs root or passwordless sudo (`400` with an actionable message otherwise) |
+| GET | `/api/provider-health?days=` | Per-provider request count, error count/rate, average latency, and last request time |
+| GET | `/api/audit?page=&limit=` | Paginated admin configuration changes. Secrets and request/response bodies are never recorded |
+| GET | `/api/logs/:id/replay` | Returns a captured canonical request payload when payload tracking is enabled |
+| POST | `/api/logs/:id/replay` | Explicitly re-routes a captured request through the current gateway configuration; may consume provider quota |
+| POST | `/api/providers/:id/warmup/stream?status=` | Streams warmup results for enabled accounts filtered by `all`, `healthy`, `rate_limited`, `failing`, or `unknown` |
 
-### Music
-
-| Method | Path | Notes |
-|--------|------|-------|
-| GET | `/api/music/search?q=&limit=&page=` | YouTube search results. Defaults to 30 results per page; `limit` is capped at 30 and pages are available through page 20. |
-| GET | `/api/music/trending?limit=&page=` | Paged music discovery feed. `limit` is capped at 50 and pages are available through page 20. |
-| GET | `/api/music/stream?id=` | Range-capable proxied audio stream for the Music player. |
-| GET | `/api/music/video-stream?id=` | Range-capable proxied progressive video stream for the muted, native Music visual player. |
+`GET /api/logs/usage-by-key?key_id=` returns lifetime and daily token usage, request counts, and the top five models for API-key administration.
 
 ### Providers & accounts
 
@@ -130,7 +128,8 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | POST | `/api/providers` | Create: `{ name, type, baseUrl?, enabled?, priority?, accountStrategy? }`; strategy is `priority` (default) or `round_robin` |
 | PATCH | `/api/providers/:id` | Update fields / enable-disable, including `accountStrategy` |
 | DELETE | `/api/providers/:id` | Remove (blocked if referenced by a combo) |
-| POST | `/api/providers/:id/accounts` | Add account: `{ label, apiKey?, baseUrl?, priority? }`. GitHub Copilot accounts require a per-account local sidecar `baseUrl`; `apiKey` is optional only when that loopback sidecar has no auth. |
+| POST | `/api/providers/:id/accounts` | Add API-key account: `{ label, apiKey?, baseUrl?, priority? }`. Codex providers reject this route; use Codex OAuth or JSON import. GitHub Copilot accounts require a per-account local sidecar `baseUrl`; `apiKey` is optional only when that loopback sidecar has no auth. |
+| POST | `/api/providers/:id/codex-import` | Import Codex OAuth accounts. Provider must have `type: "codex"`. Payload accepts either an array or `{ accounts: [...] }`, with each item shaped as `{ accessToken, refreshToken, email?, expiresAt?, providerSpecificData?: { chatgptPlanType? }, priority?, isActive? }`; response is `{ added, skipped, accounts }` with masked credentials. |
 | POST | `/api/providers/:id/accounts/bulk` | Bulk import: `{ apiKeys: string[], labelPrefix? }` (max 200) → `{ added, skipped }`; labels auto-generated, duplicates skipped |
 | DELETE | `/api/providers/:id/accounts` | Remove every account belonging to the provider → `{ ok: true, removed }` |
 | GET | `/api/providers/:id/accounts/usage` | Per-account usage from request logs → `[{ account, requests_today, tokens_today, requests_total, tokens_total }]` |
@@ -140,7 +139,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | GET | `/api/providers/accounts/:accId/copilot-quota` | Live GitHub Copilot quota snapshots keyed by type (`premium_interactions`, `chat`, `completions`) with remaining percentage, entitlement usage, and reset date |
 | GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
 | GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, cached_tokens, cache_write_tokens, avg_latency_ms, errors, last_ts }]` |
-| POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (openai-type providers only) |
+| POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (the unified `openai` provider) |
 | POST | `/api/copilot/start` | Start an isolated GitHub Copilot browser login: `{ providerId, label }` → `{ accountId, url }`. Opens GitHub's official login flow; no GitHub password is sent to Mirais. |
 | POST | `/api/copilot/:accountId/reconnect` | Restart GitHub device authorization for an existing Copilot account while preserving its ID, metadata, and usage history. |
 | GET | `/api/copilot/:accountId/login-info` | Poll the device code and terminal login result → `{ code, done, ok?, error?, url }`. |
@@ -160,6 +159,8 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | POST | `/api/xai/farm/install-missing` | Starts a fixed-command background installation job. Creates `<install-root>/.venv` when absent, installs its packages, and downloads Camoufox into `<install-root>/.camoufox`. Returns the initial job status; concurrent jobs return `409`. |
 | GET | `/api/xai/farm/install-status` | Current install job state: `{ status, progress, stage, error?, checks? }`; `progress` is stage-based from 0–100. |
 | PUT | `/api/providers/:id/models/:modelId` | Update one model's metadata (display name, enabled state, context/capability metadata, `creditRate` + `creditUnit` for cost estimation) |
+
+Gateway API keys support multiple independent credentials. Each key can have `rate_limit_rpm`, `concurrency`, a non-resetting `token_budget`, model allowlists, expiry, and enable/disable controls. Once lifetime usage reaches `token_budget`, the key is rejected with HTTP 429 and code `token_limit_reached` until an administrator raises or clears the limit. These limits are enforced on the client `/v1/*` path before routing.
 
 ### Aliases
 

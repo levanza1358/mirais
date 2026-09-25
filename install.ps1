@@ -204,13 +204,6 @@ $shim = @(
 ) -join "`r`n"
 Set-Content -Path 'C:\Windows\mirais.cmd' -Value $shim -Encoding Ascii
 
-try {
-  Invoke-NativeStep 'Installing optional helpers' 'bun.exe' @('run', 'scripts/extras.ts') $InstallDir
-} catch {
-  # Optional helpers do not block installation.
-  Write-Warning "Optional helper installation failed; run 'bun run extras' later if needed. $($_.Exception.Message)"
-}
-
 Write-Output "Installation successful. Check dashboard at http://localhost:1463"
 Write-Output "For removal, see the Uninstall section in README.md. Installer log: $installLog"
 if ($transcriptStarted) { Stop-Transcript | Out-Null }

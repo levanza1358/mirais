@@ -9,7 +9,7 @@ export class KeysRepo {
     return this.db
       .query(
         `SELECT id, label, key_prefix, key_plain, enabled, allowed_models, rate_limit_rpm, concurrency,
-                daily_token_budget, expires_at, created_at, last_used_at
+                daily_token_budget, token_budget, expires_at, created_at, last_used_at
          FROM gateway_keys ORDER BY created_at DESC`,
       )
       .all() as Array<Omit<GatewayKey, "key_hash">>;
@@ -34,18 +34,15 @@ export class KeysRepo {
     rateLimitRpm?: number | null;
     concurrency?: number | null;
     dailyTokenBudget?: number | null;
+    tokenBudget?: number | null;
     expiresAt?: string | null;
   }): { record: GatewayKey; plaintext: string } {
-    const existing = this.db.query("SELECT id FROM gateway_keys LIMIT 1").get() as { id: string } | null;
-    if (existing) {
-      throw new Error("Only one global API key is allowed");
-    }
     const plaintext = randomApiKey();
     const id = ulid();
     this.db
       .query(
-        `INSERT INTO gateway_keys (id, label, key_hash, key_plain, key_prefix, allowed_models, rate_limit_rpm, concurrency, daily_token_budget, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO gateway_keys (id, label, key_hash, key_plain, key_prefix, allowed_models, rate_limit_rpm, concurrency, daily_token_budget, token_budget, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -57,6 +54,7 @@ export class KeysRepo {
         input.rateLimitRpm ?? null,
         input.concurrency ?? null,
         input.dailyTokenBudget ?? null,
+        input.tokenBudget ?? null,
         input.expiresAt ?? null,
       );
     return { record: this.get(id)!, plaintext };
@@ -78,6 +76,7 @@ export class KeysRepo {
     rateLimitRpm: number | null;
     concurrency: number | null;
     dailyTokenBudget: number | null;
+    tokenBudget: number | null;
     expiresAt: string | null;
     enabled: boolean;
   }>): GatewayKey | null {
@@ -85,7 +84,7 @@ export class KeysRepo {
     if (!cur) return null;
     this.db
       .query(
-        `UPDATE gateway_keys SET label=?, allowed_models=?, rate_limit_rpm=?, concurrency=?, daily_token_budget=?, expires_at=?, enabled=? WHERE id=?`,
+        `UPDATE gateway_keys SET label=?, allowed_models=?, rate_limit_rpm=?, concurrency=?, daily_token_budget=?, token_budget=?, expires_at=?, enabled=? WHERE id=?`,
       )
       .run(
         patch.label ?? cur.label,
@@ -93,6 +92,7 @@ export class KeysRepo {
         patch.rateLimitRpm !== undefined ? patch.rateLimitRpm : cur.rate_limit_rpm,
         patch.concurrency !== undefined ? patch.concurrency : cur.concurrency,
         patch.dailyTokenBudget !== undefined ? patch.dailyTokenBudget : cur.daily_token_budget,
+        patch.tokenBudget !== undefined ? patch.tokenBudget : cur.token_budget,
         patch.expiresAt !== undefined ? patch.expiresAt : cur.expires_at,
         patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : cur.enabled,
         id,

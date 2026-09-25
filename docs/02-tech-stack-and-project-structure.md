@@ -148,7 +148,7 @@ SESSION_TTL_HOURS=12            # default login lifetime; configurable in Settin
 
 # ── Behaviour ──
 TOKEN_SAVER=on                 # on | off
-TRACK_PAYLOADS=meta            # none | meta | full   (full stores req/resp bodies)
+TRACK_PAYLOADS=full            # none | meta | full   (full stores req/resp bodies)
 REQUEST_BODY_LIMIT_MB=25
 UPSTREAM_TIMEOUT_MS=120000
 # Match this with `codex --version` after updating the official Codex CLI.

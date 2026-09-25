@@ -1,13 +1,14 @@
 import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
+import type { ProviderAccount } from "../shared/types";
 import { ProvidersRepo } from "../store/repos/providers";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
-import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema, providerModelUpdateSchema, upstreamModelsResponseSchema, copilotQuotaSchema } from "../shared/schemas";
-import type { z } from "zod";
+import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema, providerModelUpdateSchema, upstreamModelsResponseSchema, copilotQuotaSchema, codexImportBatchSchema } from "../shared/schemas";
+import { z } from "zod";
 import { AdminError } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "../proxy/router";
-import { codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexQuotaExhausted, isOAuthAccount, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
+import { codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexAccount, isCodexQuotaExhausted, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
 import { ensureFreshXaiToken, xaiHeaders } from "../proxy/xai";
 import { fetchXaiUsage } from "../proxy/xai-usage";
 import { checkCodexProviderQuota, fetchCodexProviderModels, testCodexProviderModel } from "./codex-provider";
@@ -16,12 +17,17 @@ import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
 import { SseParser } from "../proxy/translator/stream";
-import { CODEBUDDY_MODELS, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
+import { CODEBUDDY_CN_UNUSABLE_CREDITS, CODEBUDDY_MODELS, codeBuddyErrorDetail, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
 import { copilotEntitlementError, copilotLoginForAccount, copilotResolvedLabel, waitCopilotSidecar, checkCopilotQuota } from "./copilot";
+import { AuditRepo } from "../store/repos/audit";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
-  return /(rate limit|quota|429|exhausted|capacity|stream must be set to true|usage limit has been reached|limit has been reached)/i.test(detail);
+  // CodeBuddy CN returns 14018 with the Chinese message "额度已用尽" even
+  // when its billing endpoint still reports a residual 500-credit package.
+  // That residual package is not usable by the selected model/account, so
+  // the upstream response is the source of truth for rotation status.
+  return /(14018|额度已用尽|rate limit|quota|429|exhausted|capacity|stream must be set to true|usage limit has been reached|limit has been reached)/i.test(detail);
 }
 
 export function copilotWarmupError(body: unknown, status: number): string {
@@ -141,6 +147,7 @@ async function readCodexPreviewFromSse(body: ReadableStream<Uint8Array>): Promis
 
 export function providerRoutes(db: Database) {
   const repo = new ProvidersRepo(db);
+  const audit = new AuditRepo(db);
   const logs = new LogsRepo(db);
   const settings = new SettingsRepo(db);
 
@@ -165,7 +172,7 @@ export function providerRoutes(db: Database) {
           status: res.status,
           latency_ms: Date.now() - started,
           account: acc.label,
-          detail: res.ok ? "CodeBuddy chat warmup ok" : `HTTP ${res.status}`,
+          detail: res.ok ? "CodeBuddy chat warmup ok" : await codeBuddyErrorDetail(res),
         };
       } else if (provider.type === "xai" && acc.auth_kind === "oauth") {
         const accessToken = await ensureFreshXaiToken(repo, acc);
@@ -238,7 +245,7 @@ export function providerRoutes(db: Database) {
           account: acc.label,
           detail: res.ok ? "Blackbox chat warmup ok" : `HTTP ${res.status}`,
         };
-      } else if (isOAuthAccount(acc)) {
+      } else if (isCodexAccount(provider.type, acc)) {
         const { usage, exhausted: quotaExhausted } = await checkCodexProviderQuota(repo, acc);
         planType = usage.plan_type;
         result = {
@@ -338,6 +345,7 @@ export function providerRoutes(db: Database) {
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       if (repo.getByName(parsed.data.name)) throw new AdminError(409, `Provider '${parsed.data.name}' already exists`);
       const p = repo.create(parsed.data);
+      audit.record("created", "provider", p.id, { name: p.name, type: p.type });
       log.info("provider created", { name: p.name, type: p.type });
       return p;
     })
@@ -346,10 +354,48 @@ export function providerRoutes(db: Database) {
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       const p = repo.update(params.id, parsed.data);
       if (!p) throw new AdminError(404, "Provider not found");
+      audit.record("updated", "provider", p.id, { fields: Object.keys(parsed.data) });
       return p;
+    })
+    .post("/:id/codex-import", ({ params, body }) => {
+      const provider = repo.get(params.id);
+      if (!provider) throw new AdminError(404, "Provider not found");
+      if (provider.type !== "codex") throw new AdminError(400, "Codex import requires a codex provider");
+      const parsed = codexImportBatchSchema.safeParse(body);
+      if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid Codex account payload");
+      const single = !Array.isArray(parsed.data) && !("accounts" in parsed.data);
+      const accounts = Array.isArray(parsed.data) ? parsed.data : "accounts" in parsed.data ? parsed.data.accounts : [parsed.data];
+      const existing = new Set(repo.listAccounts(provider.id).map((account) => account.refresh_token ?? account.api_key));
+      const imported: ProviderAccount[] = [];
+      let skipped = 0;
+      for (const data of accounts) {
+        if (existing.has(data.refreshToken) || existing.has(data.accessToken)) { skipped += 1; continue; }
+        const email = data.email ?? data.name;
+        const label = email ?? `codex-${repo.listAccounts(provider.id).length + imported.length + 1}`;
+        const account = repo.addAccount(provider.id, {
+          label,
+          apiKey: data.accessToken,
+          priority: data.priority ?? 100,
+        });
+        repo.updateAccount(account.id, { enabled: data.isActive !== false });
+        repo.updateAccountOAuth(account.id, {
+          authKind: "oauth",
+          refreshToken: data.refreshToken,
+          expiresAt: data.expiresAt ? Date.parse(data.expiresAt) : null,
+        });
+        if (data.providerSpecificData?.chatgptPlanType) {
+          repo.updateAccount(account.id, { planType: data.providerSpecificData.chatgptPlanType });
+        }
+        existing.add(data.refreshToken);
+        existing.add(data.accessToken);
+        imported.push(repo.getAccount(account.id)!);
+      }
+      const masked = imported.map((account) => ({ ...account, api_key: mask(account.api_key), refresh_token: null }));
+      return single ? masked[0] : { added: imported.length, skipped, accounts: masked };
     })
     .delete("/:id", ({ params }) => {
       repo.remove(params.id);
+      audit.record("deleted", "provider", params.id);
       return { ok: true };
     })
     // ── accounts ──
@@ -359,8 +405,10 @@ export function providerRoutes(db: Database) {
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
       const provider = repo.get(params.id)!;
       if (provider.type === "github-copilot" && !parsed.data.baseUrl) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
+      if (provider.type === "codex") throw new AdminError(400, "Codex accounts require Codex JSON import");
       if (provider.type !== "github-copilot" && !parsed.data.apiKey) throw new AdminError(400, "API key is required");
       const a = repo.addAccount(params.id, parsed.data);
+      audit.record("created", "provider_account", a.id, { providerId: params.id, label: a.label });
       log.info("account added", { provider: params.id, label: a.label });
       return { ...a, api_key: mask(a.api_key) };
     })
@@ -370,21 +418,26 @@ export function providerRoutes(db: Database) {
       if (p.type === "github-copilot") throw new AdminError(400, "Add GitHub Copilot sidecars one account at a time");
       const parsed = accountBulkCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const existing = new Set(repo.listAccounts(p.id).map((a) => a.api_key));
+      const existingAccounts = repo.listAccounts(p.id);
+      const existing = new Set(existingAccounts.map((a) => a.api_key));
+      const existingIds = new Set(existingAccounts.map((a) => a.account_id).filter(Boolean));
       const seen = new Set<string>();
       const prefix = parsed.data.labelPrefix ?? p.name;
       let added = 0;
       let skipped = 0;
-      for (const raw of parsed.data.apiKeys) {
-        const apiKey = raw.trim();
-        if (!apiKey || seen.has(apiKey) || existing.has(apiKey)) { skipped += 1; continue; }
+      const duplicates: string[] = [];
+      const imported = parsed.data.accounts ?? (parsed.data.apiKeys ?? []).map((apiKey) => ({ apiKey, refreshToken: null, accountId: null, label: undefined }));
+      for (const item of imported) {
+        const apiKey = item.apiKey.trim();
+        if (!apiKey || seen.has(apiKey) || existing.has(apiKey) || (item.accountId && existingIds.has(item.accountId))) { skipped += 1; duplicates.push(item.accountId ?? apiKey.slice(0, 12)); continue; }
         seen.add(apiKey);
-        const label = `${prefix}-${repo.listAccounts(p.id).length + 1}`;
-        repo.addAccount(p.id, { label, apiKey });
+        if (item.accountId) existingIds.add(item.accountId);
+        const label = item.label?.trim() || `${prefix}-${existingAccounts.length + added + 1}`;
+        repo.addAccount(p.id, { label, apiKey, authKind: item.refreshToken ? "oauth" : "api_key", refreshToken: item.refreshToken ?? null, accountId: item.accountId ?? null });
         added += 1;
       }
       log.info("accounts bulk added", { provider: p.name, added, skipped });
-      return { added, skipped };
+      return { added, skipped, duplicates };
     })
     .delete("/:id/accounts", ({ params }) => {
       const p = repo.get(params.id);
@@ -412,11 +465,41 @@ export function providerRoutes(db: Database) {
       if (provider?.type === "github-copilot" && parsed.data.baseUrl === null) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
       const a = repo.updateAccount(params.accId, parsed.data);
       if (!a) throw new AdminError(404, "Account not found");
+      audit.record("updated", "provider_account", a.id, { fields: Object.keys(parsed.data) });
       return { ...a, api_key: mask(a.api_key) };
     })
     .delete("/accounts/:accId", ({ params }) => {
       repo.removeAccount(params.accId);
+      audit.record("deleted", "provider_account", params.accId);
       return { ok: true };
+    })
+    .post("/accounts/:accId/checkin", async ({ params }) => {
+      const account = repo.getAccount(params.accId);
+      if (!account) throw new AdminError(404, "Account not found");
+      const provider = repo.get(account.provider_id);
+      if (provider?.type !== "codebuddy-cn") throw new AdminError(400, "Daily check-in is only available for CodeBuddy China accounts");
+      const started = Date.now();
+      const result = await attemptCodeBuddyCheckin(account, baseUrlFor(provider));
+      logs.insert({
+        keyId: null,
+        endpoint: "/providers/accounts/checkin",
+        requestedModel: account.label,
+        provider: provider.name,
+        model: null,
+        accountLabel: account.label,
+        attempts: 1,
+        status: result.ok ? "success" : "error",
+        httpStatus: result.ok ? 200 : null,
+        error: result.ok ? null : result.message,
+        inputTokens: null,
+        outputTokens: null,
+        latencyMs: Date.now() - started,
+        tokensSaved: 0,
+        responseBody: result.message,
+        kind: "claim",
+      });
+      audit.record(result.ok ? "updated" : "failed", "provider_account", account.id, { action: "daily_checkin", message: result.message });
+      return result;
     })
     .post("/:id/warmup", async ({ params }) => {
       const p = repo.get(params.id);
@@ -438,10 +521,15 @@ export function providerRoutes(db: Database) {
         results,
       };
     })
-    .post("/:id/warmup/stream", ({ params, set }) => {
+    .post("/:id/warmup/stream", ({ params, query, set }) => {
       const p = repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id).filter((account) => account.enabled);
+      const status = z.enum(["all", "healthy", "rate_limited", "failing", "unknown"]).catch("all").parse(query.status);
+      const accounts = repo.listAccounts(p.id).filter((account) => {
+        if (!account.enabled) return false;
+        if (status === "all") return true;
+        return status === "unknown" ? !account.last_warmup_status : account.last_warmup_status === status;
+      });
       if (!accounts.length) throw new AdminError(400, "No enabled accounts to warm up");
 
       set.headers["content-type"] = "text/event-stream; charset=utf-8";
@@ -496,7 +584,7 @@ export function providerRoutes(db: Database) {
             const snap = await fetchCodeBuddyUsage(account, baseUrlFor(p));
             const credits = snap.quotas?.Credits;
             if (!credits || credits.total <= 0) continue;
-            totalCredits = (totalCredits ?? 0) + credits.remaining;
+            totalCredits = (totalCredits ?? 0) + Math.max(0, credits.remaining - (p.type === "codebuddy-cn" ? CODEBUDDY_CN_UNUSABLE_CREDITS : 0));
             accountsWithQuota += 1;
             continue;
           }
@@ -529,7 +617,7 @@ export function providerRoutes(db: Database) {
           }
 
           // ── Non-OAuth (API-key) providers: no quota endpoint ──
-          if (!isOAuthAccount(account)) continue;
+          if (!isCodexAccount(p.type, account)) continue;
 
           // ── OpenAI / Codex OAuth: WHAM usage API ──
           const { usage } = await checkCodexProviderQuota(repo, account);
@@ -579,13 +667,14 @@ export function providerRoutes(db: Database) {
         const accessToken = await ensureFreshXaiToken(repo, account);
         return fetchXaiUsage({ ...account, api_key: accessToken });
       }
-      if (!isOAuthAccount(account)) throw new AdminError(400, "Quota is only available for OAuth accounts");
+      if (!isCodexAccount(provider.type, account)) throw new AdminError(400, "Quota is only available for Codex OAuth accounts");
       return (await checkCodexProviderQuota(repo, account)).usage;
     })
     .post("/accounts/:accId/codex-quota/reset", async ({ params }) => {
       const account = repo.getAccount(params.accId);
       if (!account) throw new AdminError(404, "Account not found");
-      if (!isOAuthAccount(account)) throw new AdminError(400, "Quota reset is only available for OAuth accounts");
+      const provider = repo.get(account.provider_id);
+      if (!provider || !isCodexAccount(provider.type, account)) throw new AdminError(400, "Quota reset is only available for Codex OAuth accounts");
       const accessToken = await ensureFreshToken(repo, account);
       return resetCodexBankedUsage(account, accessToken);
     })
@@ -648,7 +737,7 @@ export function providerRoutes(db: Database) {
         }
         // OAuth accounts: the ChatGPT backend has no /models endpoint — a
         // successful token refresh proves the connection is alive.
-        if (isOAuthAccount(account)) {
+        if (isCodexAccount(p.type, account)) {
           await ensureFreshToken(repo, account);
           return {
             ok: true,
@@ -690,9 +779,9 @@ export function providerRoutes(db: Database) {
         return aScore - bScore;
       });
       const modelId = decodeURIComponent(params.modelId);
-      const paidCodexModel = p.type === "openai" && codexPlanRequirement(modelId) !== null;
+      const paidCodexModel = (p.type === "codex" || p.type === "openai") && codexPlanRequirement(modelId) !== null;
       const eligibleAccounts = paidCodexModel
-        ? accounts.filter((account) => !isOAuthAccount(account) || codexPlanAllowsModel(account.plan_type, modelId))
+        ? accounts.filter((account) => !isCodexAccount(p.type, account) || codexPlanAllowsModel(account.plan_type, modelId))
         : accounts;
       if (!eligibleAccounts.length) {
         const label = codexPlanRequirement(modelId) === "pro" ? "ChatGPT Pro" : "ChatGPT Plus or Pro";
@@ -730,7 +819,7 @@ export function providerRoutes(db: Database) {
           const xaiResult = await testXaiModel(repo, usedAccount, modelId, testPrompt);
           res = xaiResult.response;
           preview_text = xaiResult.previewText;
-        } else if (isOAuthAccount(eligibleAccounts[0]!)) {
+        } else if (isCodexAccount(p.type, eligibleAccounts[0]!)) {
           let lastRateLimited: { res: Response; account: typeof usedAccount } | null = null;
           for (const account of eligibleAccounts) {
             usedAccount = account;
@@ -835,7 +924,7 @@ export function providerRoutes(db: Database) {
               preview_text = res.body ? await readCodeBuddyPreviewFromSse(res.body) : undefined;
             } else if (p.type === "xai" && usedAccount.auth_kind === "oauth") {
               // The xAI helper already consumed the Grok Responses SSE stream.
-            } else if (isOAuthAccount(usedAccount)) {
+            } else if (isCodexAccount(p.type, usedAccount)) {
               preview_text = res.body ? await readCodexPreviewFromSse(res.body) : undefined;
             } else {
               const payload = await res.json();
@@ -923,7 +1012,7 @@ export function providerRoutes(db: Database) {
       // enabled accounts. Entitlements can differ between ChatGPT accounts, so
       // using only the first account can hide models such as gpt-5.6-sol that
       // another enabled account is allowed to use.
-      const oauthAccounts = accounts.filter(isOAuthAccount);
+      const oauthAccounts = accounts.filter((candidate) => isCodexAccount(p.type, candidate));
       if (oauthAccounts.length) {
         const byId = new Map<string, Awaited<ReturnType<typeof fetchCodexModels>>[number]>();
         const failures: string[] = [];
