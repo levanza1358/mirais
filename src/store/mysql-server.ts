@@ -9,6 +9,7 @@ import { log } from "../utils/logger";
 const MYSQL_VERSION = "8.4.11";
 const DATABASE_NAME = "mirais";
 const DATABASE_USER = "mirais";
+const MYSQL_ARCHIVE_MARKER = ".complete";
 
 const credentialsSchema = z.object({
   version: z.literal(1),
@@ -55,6 +56,13 @@ function mysqlExecutable(serverRoot: string): { basedir: string; executable: str
   return null;
 }
 
+function mysqlInstallComplete(serverRoot: string): boolean {
+  const installed = mysqlExecutable(serverRoot);
+  if (!installed) return false;
+  if (process.platform !== "win32") return true;
+  return fs.existsSync(path.join(installed.basedir, "lib", "plugin", "component_reference_cache.dll"));
+}
+
 function archiveForPlatform(): { filename: string; url: string } {
   if (process.platform === "win32" && process.arch === "x64") {
     const filename = `mysql-${MYSQL_VERSION}-winx64.zip`;
@@ -86,7 +94,9 @@ function run(command: string, args: string[], cwd: string): Promise<void> {
 
 async function installServer(paths: ServerPaths): Promise<{ basedir: string; executable: string }> {
   const installed = mysqlExecutable(paths.server);
-  if (installed) return installed;
+  const marker = path.join(paths.server, MYSQL_ARCHIVE_MARKER);
+  if (installed && fs.existsSync(marker) && mysqlInstallComplete(paths.server)) return installed;
+  if (installed && !mysqlInstallComplete(paths.server)) fs.rmSync(paths.server, { recursive: true, force: true });
 
   fs.mkdirSync(paths.server, { recursive: true });
   const archive = archiveForPlatform();
@@ -102,6 +112,8 @@ async function installServer(paths: ServerPaths): Promise<{ basedir: string; exe
 
   const result = mysqlExecutable(paths.server);
   if (!result) throw new Error("Downloaded MySQL archive did not contain mysqld");
+  if (!mysqlInstallComplete(paths.server)) throw new Error("Downloaded MySQL archive is incomplete");
+  fs.writeFileSync(marker, `${MYSQL_VERSION}\n`);
   return result;
 }
 
