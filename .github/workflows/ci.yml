@@ -71,14 +71,21 @@ jobs:
           PORT=1463 \
           bun run src/server.ts &
           SERVER_PID=$!
-          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; echo "--- server log ---"; cat data/mirais.log 2>/dev/null || true; echo "--- MySQL log ---"; cat .mysql/mysql.log 2>/dev/null || true' EXIT
+          for i in $(seq 1 180); do
             if curl -sf http://127.0.0.1:1463/health > /dev/null; then
               echo "server up after ${i}s"
-              break
+              curl -sS http://127.0.0.1:1463/health
+              echo ""
+              curl -sS http://127.0.0.1:1463/api/health
+              echo ""
+              exit 0
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "server exited before becoming healthy"
+              exit 1
             fi
             sleep 1
           done
-          curl -sS http://127.0.0.1:1463/health
-          echo ""
-          curl -sS http://127.0.0.1:1463/api/health
+          echo "server did not become healthy within 180s"
+          exit 1
