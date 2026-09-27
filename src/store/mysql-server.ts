@@ -101,14 +101,22 @@ async function installServer(paths: ServerPaths): Promise<{ basedir: string; exe
   fs.mkdirSync(paths.server, { recursive: true });
   const archive = archiveForPlatform();
   const archivePath = path.join(paths.root, archive.filename);
-  const response = await fetch(archive.url, { signal: AbortSignal.timeout(15 * 60_000), redirect: "follow" });
-  if (!response.ok) throw new Error(`MySQL download failed with HTTP ${response.status}`);
-  await Bun.write(archivePath, response);
-  try {
-    await run("tar", ["-xf", archivePath, "-C", paths.server], paths.root);
-  } finally {
-    fs.rmSync(archivePath, { force: true });
+  let extracted = false;
+  for (let attempt = 1; attempt <= 3 && !extracted; attempt++) {
+    const response = await fetch(archive.url, { signal: AbortSignal.timeout(15 * 60_000), redirect: "follow" });
+    if (!response.ok) throw new Error(`MySQL download failed with HTTP ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    fs.writeFileSync(archivePath, Buffer.from(bytes));
+    fs.rmSync(paths.server, { recursive: true, force: true });
+    fs.mkdirSync(paths.server, { recursive: true });
+    try {
+      await run("tar", ["-xf", archivePath, "-C", paths.server], paths.root);
+      extracted = true;
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
   }
+  fs.rmSync(archivePath, { force: true });
 
   const result = mysqlExecutable(paths.server);
   if (!result) throw new Error("Downloaded MySQL archive did not contain mysqld");
@@ -164,6 +172,7 @@ async function connect(credentials: MySqlCredentials): Promise<SQL> {
     database: credentials.database,
     username: credentials.username,
     password: credentials.password,
+    tls: true,
     max: 1,
     connectionTimeout: 3,
   });

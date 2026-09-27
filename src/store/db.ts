@@ -28,6 +28,7 @@ async function openDatabase(): Promise<Database> {
     database: credentials.database,
     username: credentials.username,
     password: credentials.password,
+    tls: true,
     max: 20,
     connectionTimeout: 30,
   });
