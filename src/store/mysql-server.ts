@@ -91,7 +91,7 @@ async function installServer(paths: ServerPaths): Promise<{ basedir: string; exe
   fs.mkdirSync(paths.server, { recursive: true });
   const archive = archiveForPlatform();
   const archivePath = path.join(paths.root, archive.filename);
-  const response = await fetch(archive.url, { signal: AbortSignal.timeout(15 * 60_000) });
+  const response = await fetch(archive.url, { signal: AbortSignal.timeout(15 * 60_000), redirect: "follow" });
   if (!response.ok) throw new Error(`MySQL download failed with HTTP ${response.status}`);
   await Bun.write(archivePath, response);
   try {
@@ -210,7 +210,7 @@ async function waitForServer(credentials: MySqlCredentials): Promise<void> {
 function startServer(paths: ServerPaths, executable: string): void {
   const logFd = fs.openSync(paths.log, "a");
   try {
-    const child = spawn(executable, [`--defaults-file=${paths.config}`, "--console"], {
+    const child = spawn(executable, [`--defaults-file=${paths.config}`], {
       cwd: path.dirname(path.dirname(executable)),
       detached: true,
       stdio: ["ignore", logFd, logFd],

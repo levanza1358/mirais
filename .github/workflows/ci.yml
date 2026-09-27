@@ -69,9 +69,9 @@ jobs:
           HOST=127.0.0.1 \
           DATA_DIR=./data \
           PORT=1463 \
-          bun run src/server.ts &
+          bun run src/server.ts > server-startup.log 2>&1 &
           SERVER_PID=$!
-          trap 'kill "$SERVER_PID" 2>/dev/null || true; echo "--- server log ---"; cat data/mirais.log 2>/dev/null || true; echo "--- MySQL log ---"; cat .mysql/mysql.log 2>/dev/null || true' EXIT
+          trap 'kill "$SERVER_PID" 2>/dev/null || true; echo "--- server log ---"; cat server-startup.log 2>/dev/null || true; echo "--- MySQL log ---"; cat .mysql/mysql.log 2>/dev/null || true' EXIT
           for i in $(seq 1 180); do
             if curl -sf http://127.0.0.1:1463/health > /dev/null; then
               echo "server up after ${i}s"
