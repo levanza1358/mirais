@@ -9,7 +9,7 @@ import { ensurePortableMySql } from "./mysql-server";
 let db: Database | null = null;
 let opening: Promise<Database> | null = null;
 
-export function getDb(): Promise<Database> {
+export function getDb(_legacyPath?: string): Promise<Database> {
   if (db) return Promise.resolve(db);
   if (opening) return opening;
   const attempt = openDatabase();

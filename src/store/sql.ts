@@ -1,7 +1,7 @@
 import type { SQL } from "bun";
 
 export type SqlValue = string | number | bigint | boolean | Date | Uint8Array | null;
-export type SqlDialect = "mysql";
+export type SqlDialect = "mysql" | "sqlite";
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 

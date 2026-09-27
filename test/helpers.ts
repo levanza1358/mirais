@@ -5,7 +5,7 @@ import { Database } from "../src/store/sql";
 
 /** Fresh in-memory DB with all migrations applied — one per test file. */
 export async function freshDb(): Promise<Database> {
-  const db = new Database(new SQL({ adapter: "mysql" }), "mysql");
+  const db = new Database(new SQL({ adapter: "sqlite", filename: ":memory:" }), "sqlite");
   await db.exec("PRAGMA foreign_keys = ON;");
   await db.exec(`CREATE TABLE IF NOT EXISTS _migrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -39,7 +39,7 @@ function classifyWarmupStatus(ok: boolean, status: number, detail?: string | nul
 
 setLogLevel(config.logLevel);
 
-const db: Database = await getDb();
+const db: Database = await getDb(config.dbPath);
 await startCopilotSidecars(db);
 let autoWarmupRunning = false;
 let lastAutoWarmupAt = 0;
