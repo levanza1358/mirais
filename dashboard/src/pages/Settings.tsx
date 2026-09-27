@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, Globe2, Lock, Power } from "lucide-react";
-import { settings, backups, healthInfo, providers, auth, autostart, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
-import { Button, Card, ConfirmModal, Input, Modal, Switch, toast, uploadProgress, dismissProgress } from "../components/ui";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, Globe2, Lock, Music, Power, Youtube } from "lucide-react";
+import { settings, backups, healthInfo, providers, auth, autostart, youtube, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
+import { REASONING_MATRIX } from "../reasoningMatrix";
+import { Button, Card, ConfirmModal, Input, Modal, Skeleton, Switch, toast, uploadProgress, dismissProgress } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 
 const ACCENT_OPTIONS: Array<{ id: string; label: string; value: string }> = [
@@ -47,13 +48,15 @@ function readStoredAccent(): string {
 /*  Tab definitions                                                    */
 /* ------------------------------------------------------------------ */
 
-type SettingsTab = "general" | "appearance" | "models" | "tokensaver" | "backup" | "imap" | "about";
+type SettingsTab = "general" | "appearance" | "models" | "tokensaver" | "reasoning" | "music" | "backup" | "imap" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: "general",    label: "General",     icon: <SettingsIcon className="w-4 h-4" /> },
   { id: "appearance", label: "Appearance",  icon: <Palette className="w-4 h-4" /> },
   { id: "models",     label: "Models",      icon: <Zap className="w-4 h-4" /> },
   { id: "tokensaver", label: "Token Saver", icon: <Save className="w-4 h-4" /> },
+  { id: "reasoning",  label: "Reasoning",   icon: <Brain className="w-4 h-4" /> },
+  { id: "music",      label: "Music",       icon: <Music className="w-4 h-4" /> },
   { id: "backup",     label: "Backup",      icon: <HardDrive className="w-4 h-4" /> },
   { id: "imap",       label: "IMAP",        icon: <Mail className="w-4 h-4" /> },
   { id: "about",      label: "About",       icon: <Info className="w-4 h-4" /> },
@@ -99,6 +102,8 @@ export default function Settings() {
         {tab === "appearance" && <AppearanceSection />}
         {tab === "models" && <ModelSyncSection />}
         {tab === "tokensaver" && <TokenSaverSection />}
+        {tab === "reasoning" && <ReasoningSection />}
+        {tab === "music" && <MusicSection />}
         {tab === "backup" && <BackupSection />}
         {tab === "imap" && <XaiImapSection />}
         {tab === "about" && <AboutSection />}
@@ -174,7 +179,7 @@ function AppearanceSection() {
   }, [custom]);
 
   const saveBackend = useMutation({
-    mutationFn: (value: string) => settings.update({ ui: { theme: "dark", accent: value } }),
+    mutationFn: (value: string) => settings.patch({ ui: { theme: "dark", accent: value } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
     onError: (e) => toast(e.message, "error"),
   });
@@ -243,7 +248,7 @@ function NetworkSection() {
   const exposed = s.data?.network_binding?.exposed ?? (s.data?.env.host === "0.0.0.0");
 
   const save = useMutation({
-    mutationFn: (next: boolean) => settings.update({ network_binding: { exposed: next, host: next ? "0.0.0.0" : "127.0.0.1" } }),
+    mutationFn: (next: boolean) => settings.patch({ network_binding: { exposed: next, host: next ? "0.0.0.0" : "127.0.0.1" } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Network binding saved — restart Mirais to apply"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -427,7 +432,7 @@ function GatewaySection() {
   }, [s.data]);
 
   const save = useMutation({
-    mutationFn: () => settings.update({ log_retention_days: Number(retention) }),
+    mutationFn: () => settings.patch({ log_retention_days: Number(retention) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Settings saved"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -465,13 +470,13 @@ function ModelSyncSection() {
   const s = useQuery({ queryKey: ["settings"], queryFn: settings.get });
 
   const save = useMutation({
-    mutationFn: (mode: "curated" | "all") => settings.update({ model_sync_mode: mode }),
+    mutationFn: (mode: "curated" | "all") => settings.patch({ model_sync_mode: mode }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Model sync mode saved"); },
     onError: (e) => toast(e.message, "error"),
   });
 
   const savePrune = useMutation({
-    mutationFn: (prune: boolean) => settings.update({ model_sync_prune: prune }),
+    mutationFn: (prune: boolean) => settings.patch({ model_sync_prune: prune }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Model sync prune saved"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -572,13 +577,13 @@ function RTKCard() {
   }, [s.data]);
 
   const save = useMutation({
-    mutationFn: (next: TokenSaverSettings) => settings.update({ token_saver: next }),
+    mutationFn: (next: TokenSaverSettings) => settings.patch({ token_saver: next }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("RTK saved"); },
     onError: (e) => toast(e.message, "error"),
   });
 
   const saveProviders = useMutation({
-    mutationFn: (next: string[] | null) => settings.update({ token_saver_providers: next }),
+    mutationFn: (next: string[] | null) => settings.patch({ token_saver_providers: next }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Provider scope saved"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -724,7 +729,7 @@ function HeadroomCard() {
   }, [s.data]);
 
   const save = useMutation({
-    mutationFn: (next: HeadroomSettings) => settings.update({ headroom: next }),
+    mutationFn: (next: HeadroomSettings) => settings.patch({ headroom: next }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Headroom saved"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -808,7 +813,7 @@ function CavemanCard() {
   }, [s.data]);
 
   const save = useMutation({
-    mutationFn: (next: CavemanSettings) => settings.update({ terse_mode: next }),
+    mutationFn: (next: CavemanSettings) => settings.patch({ terse_mode: next }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Caveman saved"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -904,7 +909,7 @@ function PonytailCard() {
   }, [s.data]);
 
   const save = useMutation({
-    mutationFn: (next: PonytailSettings) => settings.update({ ponytail: next }),
+    mutationFn: (next: PonytailSettings) => settings.patch({ ponytail: next }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Ponytail saved"); },
     onError: (e) => toast(e.message, "error"),
   });
@@ -963,6 +968,391 @@ function PonytailCard() {
           <Button type="submit" size="sm" loading={save.isPending}>Save</Button>
         </div>
       </form>
+    </Card>
+  );
+}
+
+// ── reasoning ──
+
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+
+function ReasoningSection() {
+  const qc = useQueryClient();
+  const current = useQuery({ queryKey: ["settings"], queryFn: settings.get });
+  const providerList = useQuery({ queryKey: ["providers"], queryFn: providers.list });
+  const [form, setForm] = useState<{
+    default_enabled: boolean;
+    default_effort: typeof REASONING_EFFORTS[number] | "";
+    max_budget_tokens: string;
+    provider_overrides: Record<string, { enabled: boolean | null; effort: typeof REASONING_EFFORTS[number] | ""; budget_tokens: string }>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!current.data) return;
+    if (form) return;
+    const r = current.data.reasoning ?? {};
+    setForm({
+      default_enabled: r.default_enabled ?? true,
+      default_effort: r.default_effort ?? "",
+      max_budget_tokens: r.max_budget_tokens != null ? String(r.max_budget_tokens) : "",
+      provider_overrides: Object.fromEntries(
+        (providerList.data ?? []).map((p) => {
+          const override = r.provider_overrides?.[p.name] ?? {};
+          return [p.name, {
+            enabled: override.enabled ?? null,
+            effort: override.effort ?? "",
+            budget_tokens: override.budget_tokens != null ? String(override.budget_tokens) : "",
+          }];
+        }),
+      ),
+    });
+  }, [current.data, providerList.data, form]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      if (!form) throw new Error("form not ready");
+      const provider_overrides: Record<string, { enabled?: boolean; effort?: typeof REASONING_EFFORTS[number]; budget_tokens?: number }> = {};
+      for (const [name, value] of Object.entries(form.provider_overrides)) {
+        const entry: { enabled?: boolean; effort?: typeof REASONING_EFFORTS[number]; budget_tokens?: number } = {};
+        if (value.enabled !== null) entry.enabled = value.enabled;
+        if (value.effort) entry.effort = value.effort as typeof REASONING_EFFORTS[number];
+        if (value.budget_tokens) entry.budget_tokens = Number(value.budget_tokens);
+        if (Object.keys(entry).length) provider_overrides[name] = entry;
+      }
+      return settings.patch({
+        reasoning: {
+          default_enabled: form.default_enabled,
+          ...(form.default_effort ? { default_effort: form.default_effort as typeof REASONING_EFFORTS[number] } : {}),
+          ...(form.max_budget_tokens ? { max_budget_tokens: Number(form.max_budget_tokens) } : {}),
+          ...(Object.keys(provider_overrides).length ? { provider_overrides } : {}),
+        },
+      });
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast("Reasoning settings saved"); },
+    onError: (err) => toast(err instanceof Error ? err.message : String(err), "error"),
+  });
+
+  if (current.isLoading || !form) {
+    return <Card><Skeleton className="h-48 w-full" /></Card>;
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card>
+        <div className="mb-4 flex items-center gap-2">
+          <Brain size={14} className="text-accent" />
+          <h3 className="text-sm font-medium">Defaults</h3>
+        </div>
+        <p className="mb-4 text-xs text-text-muted">
+          Applied to any request that does not send a <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">reasoning</code> block. An explicit
+          <code className="rounded bg-bg-raised px-1 font-mono text-[11px]"> enabled:false</code> on the client always wins.
+        </p>
+        <div className="space-y-4">
+          <label className="flex items-center justify-between gap-3">
+            <span className="text-xs text-text-muted">Enable reasoning by default</span>
+            <Switch
+              checked={form.default_enabled}
+              onChange={(value) => setForm({ ...form, default_enabled: value })}
+              aria-label="Enable reasoning by default"
+            />
+          </label>
+          <label className="block text-xs text-text-muted">
+            Default effort
+            <select
+              className="mt-1 w-full rounded-lg border border-border bg-bg-base px-3 py-2 text-sm"
+              value={form.default_effort}
+              onChange={(event) => setForm({ ...form, default_effort: event.target.value as typeof REASONING_EFFORTS[number] | "" })}
+            >
+              <option value="">Use upstream default</option>
+              {REASONING_EFFORTS.map((effort) => (
+                <option key={effort} value={effort}>{effort}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs text-text-muted">
+            Maximum thinking budget (tokens)
+            <Input
+              className="mt-1"
+              type="number"
+              min={0}
+              value={form.max_budget_tokens}
+              onChange={(event) => setForm({ ...form, max_budget_tokens: event.target.value })}
+              placeholder="Anthropic default 8192"
+            />
+          </label>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button onClick={() => save.mutate()} loading={save.isPending}>Save</Button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="mb-4 flex items-center gap-2">
+          <SettingsIcon size={14} className="text-accent" />
+          <h3 className="text-sm font-medium">Provider overrides</h3>
+        </div>
+        <p className="mb-4 text-xs text-text-muted">
+          Override defaults for a specific provider. Use this to pin Anthropic to a higher
+          budget or to disable reasoning for a provider that misbehaves.
+        </p>
+        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+          {(providerList.data ?? []).map((p) => {
+            const override = form.provider_overrides[p.name] ?? { enabled: null, effort: "", budget_tokens: "" };
+            return (
+              <div key={p.id} className="rounded-lg border border-border bg-bg-base p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">{p.display_name ?? p.name}</span>
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-text-muted">{p.type}</span>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <label className="text-[11px] text-text-muted">
+                    Enabled
+                    <select
+                      className="mt-1 w-full rounded-md border border-border bg-bg-base px-2 py-1 text-xs"
+                      value={override.enabled === null ? "" : override.enabled ? "true" : "false"}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setForm({
+                          ...form,
+                          provider_overrides: {
+                            ...form.provider_overrides,
+                            [p.name]: { ...override, enabled: value === "" ? null : value === "true" },
+                          },
+                        });
+                      }}
+                    >
+                      <option value="">Default</option>
+                      <option value="true">Force on</option>
+                      <option value="false">Force off</option>
+                    </select>
+                  </label>
+                  <label className="text-[11px] text-text-muted">
+                    Effort
+                    <select
+                      className="mt-1 w-full rounded-md border border-border bg-bg-base px-2 py-1 text-xs"
+                      value={override.effort}
+                      onChange={(event) => setForm({
+                        ...form,
+                        provider_overrides: { ...form.provider_overrides, [p.name]: { ...override, effort: event.target.value as typeof REASONING_EFFORTS[number] | "" } },
+                      })}
+                    >
+                      <option value="">—</option>
+                      {REASONING_EFFORTS.map((effort) => (
+                        <option key={effort} value={effort}>{effort}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-[11px] text-text-muted">
+                    Budget
+                    <Input
+                      className="mt-1"
+                      type="number"
+                      min={0}
+                      value={override.budget_tokens}
+                      onChange={(event) => setForm({
+                        ...form,
+                        provider_overrides: { ...form.provider_overrides, [p.name]: { ...override, budget_tokens: event.target.value } },
+                      })}
+                      placeholder="—"
+                    />
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+          {providerList.data?.length === 0 ? <p className="text-xs text-text-muted">No providers configured.</p> : null}
+        </div>
+      </Card>
+
+      <Card className="lg:col-span-2">
+        <div className="mb-4 flex items-center gap-2">
+          <Info size={14} className="text-accent" />
+          <h3 className="text-sm font-medium">Provider × reasoning capability</h3>
+        </div>
+        <p className="mb-4 text-xs text-text-muted">
+          How each upstream translates the universal <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">reasoning</code> block.
+          Mirais strips fields an upstream rejects (e.g. CodeBuddy) and clamps budgets to model limits.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-text-muted">
+                <th className="text-left py-2 pr-4">Provider</th>
+                <th className="text-left py-2 pr-4">Dialect</th>
+                <th className="py-2 px-2">Effort</th>
+                <th className="py-2 px-2">Budget</th>
+                <th className="py-2 px-2">Summary</th>
+                <th className="py-2 px-2">Include</th>
+                <th className="py-2 px-2">Stream</th>
+                <th className="py-2 px-2">Tokens</th>
+                <th className="text-left py-2 pl-4">Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {REASONING_MATRIX.map((cap) => (
+                <tr key={cap.id} className="border-t border-border/60">
+                  <td className="py-2 pr-4 font-medium">{cap.label}</td>
+                  <td className="py-2 pr-4 text-text-muted">{cap.dialect}</td>
+                  <td className="py-2 px-2 text-center">{cap.effort ? "✓" : "—"}</td>
+                  <td className="py-2 px-2 text-center">{cap.budget_tokens ? "✓" : "—"}</td>
+                  <td className="py-2 px-2 text-center">{cap.summary ? "✓" : "—"}</td>
+                  <td className="py-2 px-2 text-center">{cap.include ? "✓" : "—"}</td>
+                  <td className="py-2 px-2 text-center">{cap.stream_reasoning ? "✓" : "—"}</td>
+                  <td className="py-2 px-2 text-center">{cap.reports_tokens ? "✓" : "—"}</td>
+                  <td className="py-2 pl-4 text-text-muted">{cap.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-4 text-xs text-text-muted">
+          For the full walkthrough, see <a className="text-accent underline" href="/dashboard/reasoning">the reasoning guide</a>.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── music ──
+
+interface MusicPrefs {
+  default_volume: number;
+  autoplay_next: boolean;
+  default_repeat: "off" | "all" | "one";
+  default_shuffle: boolean;
+}
+
+const MUSIC_DEFAULTS: MusicPrefs = {
+  default_volume: 0.8,
+  autoplay_next: true,
+  default_repeat: "off",
+  default_shuffle: false,
+};
+
+function MusicSection() {
+  const [prefs, setPrefs] = useState<MusicPrefs>(MUSIC_DEFAULTS);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("mirais.music.prefs");
+      if (raw) setPrefs({ ...MUSIC_DEFAULTS, ...(JSON.parse(raw) as Partial<MusicPrefs>) });
+    } catch { /* ignore */ }
+  }, []);
+
+  const save = () => {
+    window.localStorage.setItem("mirais.music.prefs", JSON.stringify(prefs));
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card>
+        <div className="mb-4 flex items-center gap-2">
+          <Music size={14} className="text-accent" />
+          <h3 className="text-sm font-medium">Playback defaults</h3>
+        </div>
+        <p className="mb-4 text-xs text-text-muted">
+          Saved per browser. Player picks these up next time a track starts.
+        </p>
+        <div className="space-y-4">
+          <label className="block text-xs text-text-muted">
+            Default volume
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(prefs.default_volume * 100)}
+              onChange={(event) => setPrefs({ ...prefs, default_volume: Number(event.target.value) / 100 })}
+              className="mt-1 w-full accent-accent"
+            />
+            <span className="mt-1 block text-[10px] tabular-nums text-text-muted">{Math.round(prefs.default_volume * 100)}%</span>
+          </label>
+          <label className="flex items-center justify-between gap-3">
+            <span className="text-xs text-text-muted">Auto-play next track</span>
+            <Switch
+              checked={prefs.autoplay_next}
+              onChange={(value) => setPrefs({ ...prefs, autoplay_next: value })}
+              aria-label="Auto-play next track"
+            />
+          </label>
+          <label className="block text-xs text-text-muted">
+            Default repeat mode
+            <select
+              className="mt-1 w-full rounded-lg border border-border bg-bg-base px-3 py-2 text-sm"
+              value={prefs.default_repeat}
+              onChange={(event) => setPrefs({ ...prefs, default_repeat: event.target.value as MusicPrefs["default_repeat"] })}
+            >
+              <option value="off">Off</option>
+              <option value="all">All</option>
+              <option value="one">One</option>
+            </select>
+          </label>
+          <label className="flex items-center justify-between gap-3">
+            <span className="text-xs text-text-muted">Default shuffle</span>
+            <Switch
+              checked={prefs.default_shuffle}
+              onChange={(value) => setPrefs({ ...prefs, default_shuffle: value })}
+              aria-label="Default shuffle"
+            />
+          </label>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button onClick={save}>{saved ? "Saved" : "Save"}</Button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="mb-4 flex items-center gap-2">
+          <Info size={14} className="text-accent" />
+          <h3 className="text-sm font-medium">About the library</h3>
+        </div>
+        <p className="text-xs text-text-muted">
+          Files are stored locally at <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">DATA_DIR/music</code>{" "}
+          and served via the public <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">/api/music/tracks/:id/audio</code>{" "}
+          route. The browser handles decoding, so no audio libraries are needed on the server. Use a network
+          boundary (reverse proxy, VPN, or loopback bind) if you need to keep the library private.
+        </p>
+        <p className="mt-3 text-xs text-text-muted">
+          Open <a className="text-accent underline" href="/dashboard/music">the library</a> to upload tracks or
+          create playlists.
+        </p>
+      </Card>
+
+      <InvidiousSection />
+    </div>
+  );
+}
+
+function InvidiousSection() {
+  const config = useQuery({ queryKey: ["music-youtube-config"], queryFn: youtube.config, refetchInterval: 30_000 });
+  const instances = config.data?.instances ?? [];
+  return (
+    <Card className="lg:col-span-2">
+      <div className="mb-4 flex items-center gap-2">
+        <Youtube size={14} className="text-accent" />
+        <h3 className="text-sm font-medium">Invidious instances</h3>
+      </div>
+      <p className="mb-4 text-xs text-text-muted">
+        Mirais uses Invidious for YouTube search and audio streaming. The default instance is read from the
+        server's <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">INV_INSTANCES</code>{" "}
+        env var. Edit the env to add your own; Mirais round-robins and falls back when an instance fails.
+      </p>
+      <ul className="space-y-1.5">
+        {config.isLoading ? (
+          <Skeleton className="h-5 w-full" />
+        ) : instances.length === 0 ? (
+          <li className="text-xs text-text-muted">No instances configured. Set INV_INSTANCES on the server.</li>
+        ) : (
+          instances.map((instance) => (
+            <li key={instance} className="flex items-center justify-between rounded-md border border-border bg-bg-base px-3 py-1.5 text-xs">
+              <code className="font-mono">{instance}</code>
+              <span className="text-text-muted">audio + search</span>
+            </li>
+          ))
+        )}
+      </ul>
     </Card>
   );
 }
@@ -1087,7 +1477,7 @@ function XaiImapSection() {
   }, [s.data]);
 
   const save = useMutation({
-    mutationFn: () => settings.update({
+    mutationFn: () => settings.patch({
       xai_imap: {
         ...form,
         gmail_app_password: form.gmail_app_password.replace(/[\s-]/g, ""),

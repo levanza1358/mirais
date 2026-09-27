@@ -46,11 +46,11 @@ if (apiKeys.length === 0) {
   process.exit(1);
 }
 
-const db = getDb(config.dbPath);
+const db = await getDb();
 const repo = new ProvidersRepo(db);
 
 // Find xAI provider
-const providers = repo.list();
+const providers = await repo.list();
 const xaiProvider = providers.find((p) => p.type === "xai");
 
 if (!xaiProvider) {
@@ -66,7 +66,7 @@ let skipped = 0;
 
 for (const apiKey of apiKeys) {
   // Check if already exists
-  const existing = repo.listAccounts(xaiProvider.id).find((a) => a.api_key === apiKey);
+  const existing = (await repo.listAccounts(xaiProvider.id)).find((a) => a.api_key === apiKey);
   if (existing) {
     console.log(`⏭️  Skipped: ${apiKey.slice(0, 12)}... (already exists as "${existing.label}")`);
     skipped++;
@@ -74,7 +74,7 @@ for (const apiKey of apiKeys) {
   }
 
   const accountLabel = label ?? `apikey-${apiKey.slice(-6)}`;
-  const account = repo.addAccount(xaiProvider.id, {
+  const account = await repo.addAccount(xaiProvider.id, {
     label: accountLabel,
     apiKey,
     priority: 0,
@@ -89,4 +89,4 @@ console.log("\n⚠️  Note: These accounts use the API key endpoint (api.x.ai),
 console.log("   They are NOT affected by the Grok CLI 426 version enforcement.");
 console.log("   However, they consume API credits from your xAI account.");
 
-db.close();
+await db.close();

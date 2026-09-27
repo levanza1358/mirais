@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from "./store/sql";
 import type { GatewayKey } from "./shared/types";
 import { nowIso } from "./utils/id";
 
@@ -10,7 +10,7 @@ interface Bucket {
 const buckets = new Map<string, Bucket>();
 const inFlight = new Map<string, number>();
 
-export function checkRateLimit(db: Database, key: GatewayKey): { retryAfterSec?: number } {
+export async function checkRateLimit(db: Database, key: GatewayKey): Promise<{ retryAfterSec?: number }> {
   const nowMin = Math.floor(Date.now() / 60_000);
 
   if (key.rate_limit_rpm) {
@@ -30,22 +30,22 @@ export function checkRateLimit(db: Database, key: GatewayKey): { retryAfterSec?:
   }
 
   if (key.daily_token_budget) {
-    const row = db
+    const row = await db
       .query(
         `SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) as t
-         FROM request_logs WHERE key_id = ? AND ts >= datetime('now', 'start of day')`,
+         FROM request_logs WHERE key_id = ? AND ts >= ?`,
       )
-      .get(key.id) as { t: number };
-    if (row.t >= key.daily_token_budget) {
+      .get<{ t: number }>(key.id, `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+    if ((row?.t ?? 0) >= key.daily_token_budget) {
       return { retryAfterSec: secondsUntilMidnight() };
     }
   }
 
   if (key.token_budget) {
-    const row = db
+    const row = await db
       .query("SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) as t FROM request_logs WHERE key_id = ?")
-      .get(key.id) as { t: number };
-    if (row.t >= key.token_budget) {
+      .get<{ t: number }>(key.id);
+    if ((row?.t ?? 0) >= key.token_budget) {
       return { retryAfterSec: 0 };
     }
   }

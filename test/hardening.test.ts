@@ -19,49 +19,49 @@ function request(system = "x".repeat(2_100)): CanonicalRequest {
 }
 
 describe("per-model account cooldowns", () => {
-  test("cooling one model does not lock the account for another model", () => {
-    const db = freshDb();
+  test("cooling one model does not lock the account for another model", async () => {
+    const db = await freshDb();
     const providers = new ProvidersRepo(db);
-    const p = providers.create({ name: "openai", type: "openai" });
-    const a = providers.addAccount(p.id, { label: "main", apiKey: "key" });
-    providers.updateAccount(a.id, { lastWarmupStatus: "healthy" });
-    providers.upsertModel(p.id, "model-a");
-    providers.upsertModel(p.id, "model-b");
-    providers.setModelCooldown(a.id, "model-a", Date.now() + 60_000, "429");
+    const p = await providers.create({ name: "openai", type: "openai" });
+    const a = await providers.addAccount(p.id, { label: "main", apiKey: "key" });
+    await providers.updateAccount(a.id, { lastWarmupStatus: "healthy" });
+    await providers.upsertModel(p.id, "model-a");
+    await providers.upsertModel(p.id, "model-b");
+    await providers.setModelCooldown(a.id, "model-a", Date.now() + 60_000, "429");
     const router = new Router(providers, new AliasesRepo(db), new CombosRepo(db));
 
-    expect(buildAccountPlan(router.resolve("openai/model-a").candidates, providers)).toHaveLength(0);
-    expect(buildAccountPlan(router.resolve("openai/model-b").candidates, providers)).toHaveLength(1);
+    expect(await buildAccountPlan((await router.resolve("openai/model-a")).candidates, providers)).toHaveLength(0);
+    expect(await buildAccountPlan((await router.resolve("openai/model-b")).candidates, providers)).toHaveLength(1);
   });
 
-  test("expired cooldown is pruned lazily", () => {
-    const db = freshDb();
+  test("expired cooldown is pruned lazily", async () => {
+    const db = await freshDb();
     const providers = new ProvidersRepo(db);
-    const p = providers.create({ name: "openai", type: "openai" });
-    const a = providers.addAccount(p.id, { label: "main", apiKey: "key" });
-    providers.setModelCooldown(a.id, "model-a", Date.now() - 1, "old");
-    expect(providers.isModelCoolingDown(a.id, "model-a")).toBe(false);
-    expect(providers.listModelCooldowns(a.id)).toEqual([]);
+    const p = await providers.create({ name: "openai", type: "openai" });
+    const a = await providers.addAccount(p.id, { label: "main", apiKey: "key" });
+    await providers.setModelCooldown(a.id, "model-a", Date.now() - 1, "old");
+    expect(await providers.isModelCoolingDown(a.id, "model-a")).toBe(false);
+    expect(await providers.listModelCooldowns(a.id)).toEqual([]);
   });
 });
 
 describe("combo round robin", () => {
-  test("rotates the primary and preserves fallback order", () => {
-    const db = freshDb();
+  test("rotates the primary and preserves fallback order", async () => {
+    const db = await freshDb();
     const providers = new ProvidersRepo(db);
     for (const name of ["a", "b", "c"]) {
-      const p = providers.create({ name, type: "openai" });
-      const account = providers.addAccount(p.id, { label: "main", apiKey: "key" });
-      providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
-      providers.upsertModel(p.id, "model");
+      const p = await providers.create({ name, type: "openai" });
+      const account = await providers.addAccount(p.id, { label: "main", apiKey: "key" });
+      await providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+      await providers.upsertModel(p.id, "model");
     }
     const combos = new CombosRepo(db);
-    combos.create("pool", ["a/model", "b/model", "c/model"], "round_robin");
+    await combos.create("pool", ["a/model", "b/model", "c/model"], "round_robin");
     const router = new Router(providers, new AliasesRepo(db), combos);
 
-    expect(router.resolve("combo:pool").candidates.map((c) => c.provider.name)).toEqual(["a", "b", "c"]);
-    expect(router.resolve("combo:pool").candidates.map((c) => c.provider.name)).toEqual(["b", "c", "a"]);
-    expect(router.resolve("combo:pool").candidates.map((c) => c.provider.name)).toEqual(["c", "a", "b"]);
+    expect((await router.resolve("combo:pool")).candidates.map((c) => c.provider.name)).toEqual(["a", "b", "c"]);
+    expect((await router.resolve("combo:pool")).candidates.map((c) => c.provider.name)).toEqual(["b", "c", "a"]);
+    expect((await router.resolve("combo:pool")).candidates.map((c) => c.provider.name)).toEqual(["c", "a", "b"]);
   });
 });
 
@@ -132,12 +132,12 @@ describe("prompt caching", () => {
   });
 
   test("survives the OpenAI-format stream path end to end", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const providers = new ProvidersRepo(db);
-    const p = providers.create({ name: "openai", type: "openai" });
-    const account = providers.addAccount(p.id, { label: "main", apiKey: "key" });
-    providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
-    providers.upsertModel(p.id, "gpt-5");
+    const p = await providers.create({ name: "openai", type: "openai" });
+    const account = await providers.addAccount(p.id, { label: "main", apiKey: "key" });
+    await providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+    await providers.upsertModel(p.id, "gpt-5");
     const router = new Router(providers, new AliasesRepo(db), new CombosRepo(db));
 
     const originalFetch = globalThis.fetch;
@@ -150,7 +150,7 @@ describe("prompt caching", () => {
     try {
       const result = await executeRequest(
         { model: "openai/gpt-5", messages: [{ role: "user", content: "hi" }], stream: true },
-        router.resolve("openai/gpt-5").candidates,
+        (await router.resolve("openai/gpt-5")).candidates,
         {},
         providers,
       );

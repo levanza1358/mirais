@@ -4,18 +4,19 @@ import type { ProvidersRepo } from "../store/repos/providers";
 
 export type AccountBackup = z.infer<typeof accountBackupSchema>;
 
-export function exportAccountBackup(repo: ProvidersRepo): AccountBackup {
-  return {
-    version: 1,
-    exported_at: new Date().toISOString(),
-    providers: repo.list().map((provider) => ({
+export async function exportAccountBackup(repo: ProvidersRepo): Promise<AccountBackup> {
+  const providers = await repo.list();
+  const backupProviders: AccountBackup["providers"] = [];
+  for (const provider of providers) {
+    const accounts = await repo.listAccounts(provider.id);
+    backupProviders.push({
       name: provider.name,
       type: provider.type,
       base_url: provider.base_url,
       enabled: Boolean(provider.enabled),
       priority: provider.priority,
       account_strategy: provider.account_strategy,
-      accounts: repo.listAccounts(provider.id).map((account) => ({
+      accounts: accounts.map((account) => ({
         label: account.label,
         api_key: account.api_key,
         base_url: account.base_url ?? null,
@@ -31,19 +32,24 @@ export function exportAccountBackup(repo: ProvidersRepo): AccountBackup {
         tags: account.tags ?? null,
         session_cookie: account.session_cookie ?? null,
       })),
-    })),
+    });
+  }
+  return {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    providers: backupProviders,
   };
 }
 
-export function importAccountBackup(repo: ProvidersRepo, backup: AccountBackup): { imported: number; skipped: number } {
+export async function importAccountBackup(repo: ProvidersRepo, backup: AccountBackup): Promise<{ imported: number; skipped: number }> {
   let imported = 0;
   let skipped = 0;
 
   for (const source of backup.providers) {
-    let provider = repo.getByName(source.name);
+    let provider = await repo.getByName(source.name);
     if (provider && provider.type !== source.type) throw new Error(`Provider '${source.name}' has a different type`);
     if (!provider) {
-      provider = repo.create({
+      provider = await repo.create({
         name: source.name,
         type: source.type,
         baseUrl: source.base_url,
@@ -53,7 +59,7 @@ export function importAccountBackup(repo: ProvidersRepo, backup: AccountBackup):
       });
     }
 
-    const existing = repo.listAccounts(provider.id);
+    const existing = await repo.listAccounts(provider.id);
     for (const sourceAccount of source.accounts) {
       const duplicate = existing.some((account) => sourceAccount.api_key
         ? account.api_key === sourceAccount.api_key
@@ -63,27 +69,27 @@ export function importAccountBackup(repo: ProvidersRepo, backup: AccountBackup):
         continue;
       }
 
-      const account = repo.addAccount(provider.id, {
+      const account = await repo.addAccount(provider.id, {
         label: sourceAccount.label,
         apiKey: sourceAccount.api_key,
         baseUrl: sourceAccount.base_url,
         priority: sourceAccount.priority,
       });
-      repo.updateAccount(account.id, {
+      await repo.updateAccount(account.id, {
         enabled: sourceAccount.enabled,
         notes: sourceAccount.notes,
         tags: sourceAccount.tags,
         sessionCookie: sourceAccount.session_cookie,
         planType: sourceAccount.plan_type,
       });
-      repo.updateAccountOAuth(account.id, {
+      await repo.updateAccountOAuth(account.id, {
         authKind: sourceAccount.auth_kind,
         refreshToken: sourceAccount.refresh_token,
         idToken: sourceAccount.id_token,
         accountId: sourceAccount.account_id,
         expiresAt: sourceAccount.expires_at,
       });
-      const created = repo.getAccount(account.id);
+      const created = await repo.getAccount(account.id);
       if (created) existing.push(created);
       imported += 1;
     }

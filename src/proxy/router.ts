@@ -61,38 +61,38 @@ export class Router {
     private combos: CombosRepo,
   ) {}
 
-  resolve(model: string, forbidden: Set<string> = new Set()): ResolvedRoute {
+  resolve(model: string, forbidden: Set<string> = new Set()): Promise<ResolvedRoute> {
     return this.resolveWithPolicy(model, DEFAULT_ROUTING_POLICY, forbidden);
   }
 
-  resolveWithPolicy(model: string, policy: RoutingPolicy, forbidden: Set<string> = new Set()): ResolvedRoute {
+  async resolveWithPolicy(model: string, policy: RoutingPolicy, forbidden: Set<string> = new Set()): Promise<ResolvedRoute> {
     policy = normalizeRoutingPolicy(policy);
     // 1. qualified provider/model
     if (model.includes("/")) {
       const [providerName, ...rest] = model.split("/");
       const modelId = rest.join("/");
-      const provider = providerName ? this.providers.getByName(providerName) : undefined;
+      const provider = providerName ? await this.providers.getByName(providerName) : undefined;
       if (provider && provider.enabled) {
         if (policy.denyProviders.includes(provider.name) || policy.denyModels.includes(modelId)) {
           throw new GatewayError(403, "invalid_request_error", `Model '${model}' is blocked by routing policy`);
         }
-        if (!this.providers.findProviderModel(provider.id, modelId)) {
+        if (!await this.providers.findProviderModel(provider.id, modelId)) {
           throw new GatewayError(404, "not_found_error", `Model '${modelId}' not found or disabled for provider '${provider.name}'`);
         }
-        const accounts = this.pickAccounts(provider);
+        const accounts = await this.pickAccounts(provider);
         return { kind: "qualified", requested: model, candidates: [{ provider, modelId, accounts }] };
       }
       // Fallback: the first segment isn't a known provider — the whole string
       // may itself be a registered model id (e.g. BlackBoxAI ids look like
       // "blackboxai/meta/llama-3.1-70b"). Try direct model resolution below
       // before giving up with a provider-not-found error.
-      const direct = this.providers.findModel(model);
+      const direct = await this.providers.findModel(model);
       if (direct.length) {
-        const raw = direct.map((m) => ({
+        const raw = await Promise.all(direct.map(async (m) => ({
           provider: m.provider,
           modelId: m.model_id,
-          accounts: this.pickAccounts(m.provider),
-        }));
+          accounts: await this.pickAccounts(m.provider),
+        })));
         const candidates = this.sortCandidates(this.filterCandidates(raw, policy), policy);
         return { kind: "direct", requested: model, candidates };
       }
@@ -100,19 +100,19 @@ export class Router {
     }
 
     // 2. alias
-    const alias = this.aliases.getByAlias(model);
+    const alias = await this.aliases.getByAlias(model);
     if (alias) {
       if (forbidden.has(`alias:${alias.alias}`)) {
         throw new GatewayError(400, "invalid_request_error", `Alias '${model}' resolves into a cycle`);
       }
       forbidden.add(`alias:${alias.alias}`);
-      const inner = this.resolveWithPolicy(alias.target, policy, forbidden);
+      const inner = await this.resolveWithPolicy(alias.target, policy, forbidden);
       return { kind: "alias", requested: model, candidates: inner.candidates };
     }
 
     // 3. combo
     const comboName = model.startsWith("combo:") ? model.slice("combo:".length) : model;
-    const combo = this.combos.getByName(comboName);
+    const combo = await this.combos.getByName(comboName);
     if (combo) {
       const marker = `combo:${combo.name}`;
       if (forbidden.has(marker)) {
@@ -123,7 +123,7 @@ export class Router {
       seen.add(marker);
       for (const entry of combo.entries) {
         try {
-          const r = this.resolveWithPolicy(entry.target, policy, new Set(seen));
+          const r = await this.resolveWithPolicy(entry.target, policy, new Set(seen));
           candidates.push(...r.candidates);
         } catch (error) {
           if (!(error instanceof GatewayError) || error.status === 400 || error.status === 403) throw error;
@@ -150,7 +150,7 @@ export class Router {
     }
 
     // 4. direct model id across providers
-    const matches = this.providers.findModel(model);
+    const matches = await this.providers.findModel(model);
     if (!matches.length) {
       throw new GatewayError(
         404,
@@ -158,11 +158,11 @@ export class Router {
         `Model '${model}' not found. Add it under a provider, or create an alias.`,
       );
     }
-    const raw = matches.map((m) => ({
+    const raw = await Promise.all(matches.map(async (m) => ({
       provider: m.provider,
       modelId: m.model_id,
-      accounts: this.pickAccounts(m.provider),
-    }));
+      accounts: await this.pickAccounts(m.provider),
+    })));
     const candidates = this.sortCandidates(this.filterCandidates(raw, policy), policy);
     if (!candidates.length) {
       throw new GatewayError(404, "not_found_error", `Model '${model}' is unavailable under current routing policy.`);
@@ -186,11 +186,11 @@ export class Router {
     });
   }
 
-  private pickAccounts(provider: Provider): ProviderAccount[] {
+  private async pickAccounts(provider: Provider): Promise<ProviderAccount[]> {
     const healthy: ProviderAccount[] = [];
 
-    const accounts = this.providers
-      .listAccounts(provider.id)
+    const accounts = (await this.providers
+      .listAccounts(provider.id))
       .filter((a) => a.enabled)
       .sort((a, b) => a.priority - b.priority);
     if (!accounts.length) {
@@ -209,7 +209,7 @@ export class Router {
       }
       if (until != null && until <= Date.now()) {
         // Window passed — recover automatically without a warmup ping.
-        this.providers.updateAccount(account.id, {
+        await this.providers.updateAccount(account.id, {
           rateLimitedUntil: null,
           lastWarmupStatus: "healthy",
           lastWarmupDetail: null,

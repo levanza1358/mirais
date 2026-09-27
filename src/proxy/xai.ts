@@ -60,9 +60,12 @@ export function supportsReasoningEffort(model: string): boolean {
   return /^grok-4\.5(?:$|-)/.test(model);
 }
 
-function normalizeEffort(value: string | undefined): string {
+export function normalizeEffort(value: string | undefined): string {
   if (!value) return "high";
   const effort = value.trim().toLowerCase();
+  // Universal `minimal` is below xAI's lowest band; collapse it to `low` so the
+  // client sees a real effort level applied rather than silently dropping it.
+  if (effort === "minimal") return "low";
   if (effort === "max") return "xhigh";
   if (EFFORT_LEVELS.includes(effort)) return effort;
   return "high";
@@ -303,13 +306,19 @@ export function xaiRequestBody(req: CanonicalRequest, modelId: string): Record<s
 
   // Reasoning: only set effort for models that support it (grok-4.5).
   // grok-build rejects reasoningEffort but still accepts summary + encrypted_content.
-  if (req.reasoning?.enabled !== false) {
+  if (req.reasoning && req.reasoning.enabled !== false) {
     const reasoning: Record<string, unknown> = { summary: "concise" };
-    // Grok-4.5 supports low/medium/high. Always use its maximum effective
-    // effort so coding and tool requests receive enough planning budget.
-    if (supportsReasoningEffort(modelId)) reasoning.effort = "high";
+    if (supportsReasoningEffort(modelId)) {
+      // Honour the client's effort when they set one; otherwise fall back to
+      // Grok-4.5's maximum effective effort so tool requests have enough
+      // planning budget. Universal `minimal` collapses to `low`.
+      const requested = req.reasoning.effort;
+      reasoning.effort = requested ? normalizeEffort(requested) : "high";
+    }
+    if (req.reasoning.include?.length) {
+      reasoning.include = ["reasoning.encrypted_content", ...req.reasoning.include.filter((entry) => entry !== "reasoning.encrypted_content")];
+    }
     body.reasoning = reasoning;
-    // Encrypted reasoning for multi-turn continuity (official CLI always requests this).
     const include: string[] = ["reasoning.encrypted_content"];
     body.include = include;
   }
@@ -395,15 +404,15 @@ export async function fetchXaiChatCompletions(
 export async function ensureFreshXaiToken(repo: ProvidersRepo, account: ProviderAccount): Promise<string> {
   if (!account.expires_at || account.expires_at - Date.now() > REFRESH_THRESHOLD_MS) return account.api_key;
   if (!account.refresh_token) {
-    throw markReauthRequired(repo, account, "Grok login has expired and cannot be refreshed.");
+    throw await markReauthRequired(repo, account, "Grok login has expired and cannot be refreshed.");
   }
 
   return withRefreshLock(account.id, async () => {
     try {
       const tokens = await refreshAccessToken(account.refresh_token!);
       const expiresAt = tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null;
-      repo.updateAccountOAuth(account.id, { refreshToken: tokens.refresh_token ?? account.refresh_token, expiresAt });
-      repo.updateAccount(account.id, { apiKey: tokens.access_token });
+      await repo.updateAccountOAuth(account.id, { refreshToken: tokens.refresh_token ?? account.refresh_token, expiresAt });
+      await repo.updateAccount(account.id, { apiKey: tokens.access_token });
       account.api_key = tokens.access_token;
       account.refresh_token = tokens.refresh_token ?? account.refresh_token;
       account.expires_at = expiresAt;
@@ -412,7 +421,7 @@ export async function ensureFreshXaiToken(repo: ProvidersRepo, account: Provider
       const detail = err instanceof Error ? err.message : String(err);
       const status = err instanceof AdminError ? err.status : 0;
       if (isPermanentRefreshFailure(status, detail)) {
-        throw markReauthRequired(repo, account, `Grok token refresh failed: ${detail}.`);
+        throw await markReauthRequired(repo, account, `Grok token refresh failed: ${detail}.`);
       }
       throw new GatewayError(502, "server_error", `Grok token refresh failed: ${detail}`);
     }

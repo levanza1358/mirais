@@ -32,13 +32,14 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "ghost" | "danger" | "outline";
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "icon";
   loading?: boolean;
 }) {
   const shadcnVariant = variant === "primary" ? "default" : variant === "danger" ? "destructive" : variant;
   const shadcnSize = size === "sm" ? "sm" : size === "lg" ? "lg" : "default";
+  const iconClass = size === "icon" ? "h-9 w-9 p-0" : "";
   return (
-    <ShadcnButton variant={shadcnVariant} size={shadcnSize} className={className} disabled={loading || disabled} {...props}>
+    <ShadcnButton variant={shadcnVariant} size={shadcnSize} className={`${iconClass} ${className}`} disabled={loading || disabled} {...props}>
       {loading && <Loader2 className="animate-spin" />}
       {children}
     </ShadcnButton>
@@ -119,15 +120,15 @@ export function Switch({ checked, onChange, disabled, "aria-label": ariaLabel }:
 }
 
 // ── Badge ──
-export function Badge({ tone = "muted", children }: { tone?: "muted" | "success" | "warning" | "danger" | "accent"; children: ReactNode }) {
-  if (tone === "muted") return <ShadcnBadge variant="secondary">{children}</ShadcnBadge>;
-  if (tone === "danger") return <ShadcnBadge variant="destructive">{children}</ShadcnBadge>;
+export function Badge({ tone = "muted", title, children }: { tone?: "muted" | "success" | "warning" | "danger" | "accent"; title?: string; children: ReactNode }) {
+  if (tone === "muted") return <ShadcnBadge variant="secondary" title={title}>{children}</ShadcnBadge>;
+  if (tone === "danger") return <ShadcnBadge variant="destructive" title={title}>{children}</ShadcnBadge>;
   const tones = {
     success: "bg-success/15 text-success",
     warning: "bg-warning/15 text-warning",
     accent: "bg-accent/15 text-accent",
   } as const;
-  return <ShadcnBadge className={tones[tone]}>{children}</ShadcnBadge>;
+  return <ShadcnBadge className={tones[tone]} title={title}>{children}</ShadcnBadge>;
 }
 
 // ── Card ──

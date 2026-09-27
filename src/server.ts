@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
 import { getDb } from "./store/db";
+import type { Database } from "./store/sql";
 import { authRoutes, passwordEnabled, sessionGuard } from "./admin/auth";
 import { oauthRoutes } from "./admin/oauth";
 import { copilotRoutes, startCopilotSidecars, waitCopilotSidecar } from "./admin/copilot";
@@ -10,6 +11,7 @@ import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, providerHealthRoutes, auditRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
 import { backupRoutes } from "./admin/backups";
+import { musicRoutes, youtubeRoutes } from "./admin/music";
 import { xaiAdminRoutes } from "./admin/xai-routes";
 import { v1Routes } from "./proxy/routes";
 import { sweepCooldowns } from "./proxy/executor";
@@ -37,22 +39,26 @@ function classifyWarmupStatus(ok: boolean, status: number, detail?: string | nul
 
 setLogLevel(config.logLevel);
 
-const db = getDb(config.dbPath);
-startCopilotSidecars(db);
+const db: Database = await getDb();
+await startCopilotSidecars(db);
 let autoWarmupRunning = false;
 let lastAutoWarmupAt = 0;
 
 // ── retention purge (daily) ──
-function purgeOldLogs() {
-  const settings = new SettingsRepo(db);
-  const days = Number(settings.get("log_retention_days") ?? 30);
-  const removed = new LogsRepo(db).purgeOlderThan(days);
-  if (removed > 0) log.info("purged old request logs", { removed, retention_days: days });
+async function purgeOldLogs(): Promise<void> {
+  try {
+    const settings = new SettingsRepo(db);
+    const days = Number(await settings.get("log_retention_days") ?? 30);
+    const removed = await new LogsRepo(db).purgeOlderThan(days);
+    if (removed > 0) log.info("purged old request logs", { removed, retention_days: days });
+  } catch (err) {
+    log.warn("request log retention purge failed", { err: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 async function runAutoWarmups() {
   const settings = new SettingsRepo(db);
-  const cfg = settings.getJson<{ enabled: boolean; interval_minutes: number }>("warmup_config") ?? { enabled: false, interval_minutes: 30 };
+  const cfg = await settings.getJson<{ enabled: boolean; interval_minutes: number }>("warmup_config") ?? { enabled: false, interval_minutes: 30 };
   if (!cfg.enabled) return;
   const intervalMs = Math.max(1, cfg.interval_minutes) * 60_000;
   if (autoWarmupRunning || Date.now() - lastAutoWarmupAt < intervalMs) return;
@@ -61,9 +67,9 @@ async function runAutoWarmups() {
   try {
     const providersRepo = new ProvidersRepo(db);
     const logsRepo = new LogsRepo(db);
-    const list = providersRepo.list().filter((p) => p.enabled);
+    const list = (await providersRepo.list()).filter((p) => p.enabled);
     for (const p of list) {
-      const accounts = providersRepo.listAccounts(p.id).filter((a) => a.enabled);
+      const accounts = (await providersRepo.listAccounts(p.id)).filter((a) => a.enabled);
       for (const acc of accounts) {
         const started = Date.now();
         let ok = false;
@@ -180,7 +186,7 @@ async function runAutoWarmups() {
           detail = err instanceof Error ? err.message : String(err);
         }
 
-        providersRepo.updateAccount(acc.id, {
+        await providersRepo.updateAccount(acc.id, {
           ...(planType !== undefined ? { planType } : {}),
           lastWarmupAt: new Date().toISOString(),
           lastWarmupStatus: classifyWarmupStatus(ok, status, detail),
@@ -188,7 +194,7 @@ async function runAutoWarmups() {
           lastWarmupDetail: detail,
         });
 
-        logsRepo.insert({
+        await logsRepo.insert({
           keyId: null,
           endpoint: "/providers/warmup/auto",
           requestedModel: `${p.name}:${acc.label}`,
@@ -221,27 +227,28 @@ async function runAutoWarmups() {
 // `isCoolingDown` prunes lazily, so a key that is never routed to again keeps
 // its expired entry forever. Sweeping proactively also lets persisted
 // per-model cooldowns recover without waiting for a request to select them.
-function sweepExpiredCooldowns() {
+async function sweepExpiredCooldowns(): Promise<void> {
   const inMemory = sweepCooldowns();
   let persisted = 0;
   try {
-    persisted = new ProvidersRepo(db).purgeExpiredModelCooldowns();
+    persisted = await new ProvidersRepo(db).purgeExpiredModelCooldowns();
   } catch { /* best-effort — DB may be mid-restart */ }
   if (inMemory > 0 || persisted > 0) {
     log.debug("swept expired cooldowns", { in_memory: inMemory, persisted });
   }
 }
 
-purgeOldLogs();
-setInterval(purgeOldLogs, 24 * 3600 * 1000).unref();
-sweepExpiredCooldowns();
-setInterval(sweepExpiredCooldowns, 60 * 1000).unref();
-runAutoWarmups();
-setInterval(runAutoWarmups, 60 * 1000).unref();
+await purgeOldLogs();
+setInterval(() => { void purgeOldLogs(); }, 24 * 3600 * 1000).unref();
+await sweepExpiredCooldowns();
+setInterval(() => { void sweepExpiredCooldowns(); }, 60 * 1000).unref();
+void runAutoWarmups();
+setInterval(() => { void runAutoWarmups(); }, 60 * 1000).unref();
 
 // ── dashboard static files ──
 const dashboardDist = path.join(import.meta.dir, "..", "dashboard", "dist");
 const hasDashboard = fs.existsSync(path.join(dashboardDist, "index.html"));
+const docsDir = path.join(import.meta.dir, "..", "docs");
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -254,7 +261,30 @@ const MIME: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".map": "application/json",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".wav": "audio/wav",
+  ".flac": "audio/flac",
+  ".webm": "audio/webm",
 };
+
+// ── inline docs (Markdown) served read-only so the dashboard can render the
+//    reasoning guide and other future guides without a separate build step.
+const docsRoutes = new Elysia().get("/docs/*", async ({ params, set }) => {
+  const requested = (params as Record<string, string | undefined>)["*"] ?? "";
+  const safe = path.normalize(requested).replace(/^(\.\.[/\\])+/, "");
+  const file = path.join(docsDir, safe);
+  if (!file.startsWith(docsDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    set.status = 404;
+    set.headers["content-type"] = "application/json; charset=utf-8";
+    return JSON.stringify({ error: "Not found" });
+  }
+  set.headers["content-type"] = "text/markdown; charset=utf-8";
+  set.headers["cache-control"] = "public, max-age=300";
+  return new Response(Bun.file(file));
+});
 
 const app = new Elysia()
   // Bun's default request cap is 128MB — backup uploads exceed it and die
@@ -298,6 +328,9 @@ const app = new Elysia()
   .use(settingsRoutes(db))
   .use(autostartRoutes())
   .use(backupRoutes(db))
+  .use(musicRoutes(db))
+  .use(youtubeRoutes(db))
+  .use(docsRoutes)
   .use(xaiAdminRoutes(db))
   .use(statsRoutes(db))
   .use(providerHealthRoutes(db))
@@ -342,14 +375,15 @@ const app = new Elysia()
   })
   .listen({ port: config.port, hostname: config.host, maxRequestBodySize: config.maxUploadBytes });
 
+const dashboardPasswordEnabled = await passwordEnabled(db);
 log.info("mirais started", {
   url: `http://${config.host}:${config.port}`,
   dashboard: hasDashboard ? "serving built dashboard" : "not built",
   db: config.dbPath,
-  dashboard_auth: passwordEnabled(db) ? "password" : "disabled",
+  dashboard_auth: dashboardPasswordEnabled ? "password" : "disabled",
 });
 
-if (!passwordEnabled(db) && config.host !== "127.0.0.1" && config.host !== "localhost") {
+if (!dashboardPasswordEnabled && config.host !== "127.0.0.1" && config.host !== "localhost") {
   log.warn("dashboard has no password while bound to a non-loopback host", {
     host: config.host,
     fix: "set a dashboard password in Settings → General, or restrict access with a proxy/firewall/VPN",

@@ -24,7 +24,11 @@ function toOpenAiBody(req: CanonicalRequest, modelId: string, sessionId?: string
   const body: Record<string, unknown> = { ...req, model: modelId };
   // Don't leak our canonical name back upstream; the upstream already knows the model.
   delete (body as { reasoning?: unknown }).reasoning;
-  if (req.reasoning?.effort) {
+  // `enabled === false` is an explicit opt-out — honour it instead of forwarding
+  // `reasoning_effort` unconditionally. Without the block the upstream uses its
+  // own default (usually "no reasoning").
+  const reasoningEnabled = req.reasoning?.enabled !== false;
+  if (reasoningEnabled && req.reasoning?.effort) {
     body.reasoning_effort = req.reasoning.effort;
   }
   // A stable cache key keeps turns of one conversation on the same cache shard.
@@ -89,11 +93,11 @@ export function sweepCooldowns(): number {
 }
 
 /** Clear persisted cooldown windows after a successful call. */
-function clearAccountRateLimit(repo: ProvidersRepo | undefined, accountId: string, modelId?: string): void {
+async function clearAccountRateLimit(repo: ProvidersRepo | undefined, accountId: string, modelId?: string): Promise<void> {
   if (!repo) return;
   try {
-    if (modelId) repo.clearModelCooldown(accountId, modelId);
-    repo.updateAccount(accountId, {
+    if (modelId) await repo.clearModelCooldown(accountId, modelId);
+    await repo.updateAccount(accountId, {
       rateLimitedUntil: null,
       lastWarmupStatus: "healthy",
       lastWarmupDetail: null,
@@ -200,7 +204,7 @@ function codeBuddyHeaders(apiKey: string, accept: "text/event-stream" | "applica
   };
 }
 
-export function buildAccountPlan(candidates: RouteCandidate[], providersRepo?: ProvidersRepo): AccountPlanEntry[] {
+export async function buildAccountPlan(candidates: RouteCandidate[], providersRepo?: ProvidersRepo): Promise<AccountPlanEntry[]> {
   const plan: AccountPlanEntry[] = [];
   for (const candidate of candidates) {
     const rrKey = `${candidate.provider.id}:${candidate.modelId}`;
@@ -210,7 +214,7 @@ export function buildAccountPlan(candidates: RouteCandidate[], providersRepo?: P
     if (roundRobin) rrCursor.set(rrKey, start + 1);
     for (const account of ordered) {
       if (isCoolingDown(cooldownKey(candidate, account.id))) continue;
-      if (providersRepo?.isModelCoolingDown(account.id, candidate.modelId)) continue;
+      if (await providersRepo?.isModelCoolingDown(account.id, candidate.modelId)) continue;
       plan.push({ candidate, account });
     }
   }
@@ -233,6 +237,7 @@ export async function executeRequest(
   ctx: ExecutorContext = {},
   providersRepo?: ProvidersRepo,
   policy?: RoutingPolicy,
+  maxBudgetTokens?: number,
 ): Promise<ExecuteResult> {
   const attempts: AttemptRecord[] = [];
   let lastError: GatewayError | null = null;
@@ -240,7 +245,7 @@ export async function executeRequest(
 
   // Flatten candidates × accounts. Priority mode always starts at the lowest
   // account priority; round-robin rotates the first account per model pool.
-  const plan = buildAccountPlan(candidates, providersRepo);
+  const plan = await buildAccountPlan(candidates, providersRepo);
 
   if (!plan.length) {
     const next = nextCoolingCandidate(candidates);
@@ -283,7 +288,8 @@ export async function executeRequest(
   for (let attemptNo = 0; attemptNo < executionPlan.length; attemptNo++) {
     const { candidate, account } = executionPlan[attemptNo]!;
     if (payloadRejectedCandidates.has(candidate)) continue;
-    const effectiveReq = clampMaxTokens(req, candidate, providersRepo);
+    let effectiveReq = await clampMaxTokens(req, candidate, providersRepo);
+    effectiveReq = await clampReasoningTokens(effectiveReq, candidate, maxBudgetTokens ?? null, providersRepo);
     const started = Date.now();
     const format = upstreamFormat(candidate.provider);
     const base = baseUrlFor(candidate.provider, account);
@@ -316,7 +322,7 @@ export async function executeRequest(
             ? await openXaiStream(effectiveReq, candidate, accessToken, account, ctx)
             : await openCodexStream(effectiveReq, candidate, account, accessToken, ctx.signal);
           markSuccess(cdKey);
-          clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+          await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
           attempts.push({
             provider: candidate.provider.name,
             model: candidate.modelId,
@@ -333,7 +339,7 @@ export async function executeRequest(
           ? await callXai(effectiveReq, candidate, accessToken, account, ctx)
           : await callCodex(effectiveReq, candidate, account, accessToken, ctx.signal);
         markSuccess(cdKey);
-        clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+        await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -354,7 +360,7 @@ export async function executeRequest(
         if (quota.exhausted) {
           markCooldown(cdKey, 300_000);
           if (providersRepo) {
-            providersRepo.updateAccount(account.id, {
+            await providersRepo.updateAccount(account.id, {
               rateLimitedUntil: Date.now() + 300_000,
               lastWarmupStatus: "rate_limited",
               lastWarmupDetail: "quota exhausted (0%)",
@@ -376,7 +382,7 @@ export async function executeRequest(
         if (req.stream) {
           const result = await directChatCompletionsStream(sidecarUrl, effectiveReq, candidate.modelId);
           markSuccess(cdKey);
-          clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+          await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
           attempts.push({
             provider: candidate.provider.name,
             model: candidate.modelId,
@@ -390,7 +396,7 @@ export async function executeRequest(
         }
         const response = await directChatCompletions(sidecarUrl, effectiveReq, candidate.modelId);
         markSuccess(cdKey);
-        clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+        await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -413,7 +419,7 @@ export async function executeRequest(
           throw err;
         }
         markSuccess(cdKey);
-        clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+        await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
         attempts.push({
           provider: candidate.provider.name,
           model: candidate.modelId,
@@ -435,7 +441,7 @@ export async function executeRequest(
 
       const result = await callUpstream(effectiveReq, candidate, account.api_key, base, format, ctx.signal, ctx.xaiSessionId, upstreamUrlOptions);
       markSuccess(cdKey);
-      clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+      await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
       attempts.push({
         provider: candidate.provider.name,
         model: candidate.modelId,
@@ -501,14 +507,14 @@ export async function executeRequest(
           // called, so it must not remove the account from rotation for every
           // other model it serves. Quota exhaustion is account-wide.
           if (quotaExhausted) {
-            providersRepo.updateAccount(account.id, {
+            await providersRepo.updateAccount(account.id, {
               rateLimitedUntil: Date.now() + cooldownMs,
               lastWarmupStatus: "rate_limited",
               lastWarmupDetail: gErr.message.slice(0, 300),
               lastWarmupAt: new Date().toISOString(),
             });
           } else {
-            providersRepo.setModelCooldown(account.id, candidate.modelId, Date.now() + cooldownMs, gErr.message.slice(0, 300));
+            await providersRepo.setModelCooldown(account.id, candidate.modelId, Date.now() + cooldownMs, gErr.message.slice(0, 300));
           }
         }
         lastError = gErr;
@@ -601,13 +607,41 @@ async function callUpstream(
 /** Cap max_tokens at the model's documented output limit (never hardcoded per
  * account — it follows the model's own spec). Leaves the request untouched
  * when no limit is known or the client didn't set max_tokens. */
-export function clampMaxTokens(req: CanonicalRequest, candidate: RouteCandidate, providersRepo?: ProvidersRepo): CanonicalRequest {
+export async function clampMaxTokens(req: CanonicalRequest, candidate: RouteCandidate, providersRepo?: ProvidersRepo): Promise<CanonicalRequest> {
   if (req.max_tokens == null) return req;
-  const cap = providersRepo?.getProviderModel(candidate.provider.id, candidate.modelId)?.max_output_tokens
+  const storedModel = await providersRepo?.getProviderModel(candidate.provider.id, candidate.modelId);
+  const cap = storedModel?.max_output_tokens
     ?? metaForModel(candidate.modelId)?.maxOutputTokens;
   if (!cap || req.max_tokens <= cap) return req;
   log.debug("clamping max_tokens to model limit", { provider: candidate.provider.name, model: candidate.modelId, requested: req.max_tokens, cap });
   return { ...req, max_tokens: cap };
+}
+
+/**
+ * Cap `reasoning.budget_tokens` against the model's output limit and the global
+ * ceiling from settings. Only meaningful for Anthropic (extended thinking);
+ * Codex/xAI/OpenAI upstream cap themselves, but mirroring the limit here keeps
+ * the redactor and the executor in sync.
+ */
+export async function clampReasoningTokens(
+  req: CanonicalRequest,
+  candidate: RouteCandidate,
+  maxBudgetTokens: number | null,
+  providersRepo?: ProvidersRepo,
+): Promise<CanonicalRequest> {
+  if (!req.reasoning || req.reasoning.enabled === false) return req;
+  const budget = req.reasoning.budget_tokens;
+  if (budget == null) return req;
+  const storedModel = await providersRepo?.getProviderModel(candidate.provider.id, candidate.modelId);
+  const modelCap = storedModel?.max_output_tokens
+    ?? metaForModel(candidate.modelId)?.maxOutputTokens
+    ?? null;
+  // Anthropic 4.7 extended thinking: budget_tokens must be < max_tokens and ≤ 64000.
+  const globalCap = maxBudgetTokens ?? 64_000;
+  const cap = Math.min(globalCap, modelCap ?? globalCap);
+  if (budget <= cap) return req;
+  log.debug("clamping reasoning.budget_tokens", { provider: candidate.provider.name, model: candidate.modelId, requested: budget, cap });
+  return { ...req, reasoning: { ...req.reasoning, budget_tokens: cap } };
 }
 
 async function openUpstreamStream(

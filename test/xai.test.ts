@@ -155,10 +155,12 @@ describe("xAI Grok CLI adapter", () => {
     expect(output).not.toContain("【Reasoning】");
   });
 
-  test("uses maximum effective reasoning effort for Grok-4.5", () => {
-    const body = xaiRequestBody({ ...toolRequest, reasoning: { effort: "low" } }, "grok-4.5");
+  test("honours client effort for Grok-4.5, falls back to high otherwise", () => {
+    const withEffort = xaiRequestBody({ ...toolRequest, reasoning: { effort: "low" } }, "grok-4.5");
+    expect(withEffort.reasoning).toEqual({ summary: "concise", effort: "low" });
 
-    expect(body.reasoning).toEqual({ summary: "concise", effort: "high" });
+    const fallback = xaiRequestBody({ ...toolRequest, reasoning: {} }, "grok-4.5");
+    expect(fallback.reasoning).toEqual({ summary: "concise", effort: "high" });
   });
 
   test("converts Grok plain-text tool_calls marker into delta.tool_calls", () => {

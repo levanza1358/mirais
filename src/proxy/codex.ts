@@ -429,7 +429,7 @@ interface RefreshResponse {
  */
 export async function ensureFreshToken(repo: ProvidersRepo, account: ProviderAccount): Promise<string> {
   if (isCodeBuddyToken(account)) {
-    const provider = repo.get(account.provider_id);
+    const provider = await repo.get(account.provider_id);
     const refreshUrl = provider ? CODEBUDDY_REFRESH_URLS[provider.type] : undefined;
     const expiresAt = account.expires_at ?? null;
     if (!refreshUrl || (expiresAt && expiresAt - Date.now() > REFRESH_THRESHOLD_MS)) return account.api_key;
@@ -444,16 +444,16 @@ export async function ensureFreshToken(repo: ProvidersRepo, account: ProviderAcc
       if (!res.ok || data.code !== 0 || !data.data?.accessToken) {
         const detail = data.msg ?? `HTTP ${res.status}`;
         if (isPermanentRefreshFailure(res.status, detail)) {
-          throw markReauthRequired(repo, account, `CodeBuddy token refresh failed: ${detail}.`);
+          throw await markReauthRequired(repo, account, `CodeBuddy token refresh failed: ${detail}.`);
         }
         throw new GatewayError(502, "server_error", `CodeBuddy token refresh failed: ${detail}`);
       }
       const newExpiresAt = data.data.expiresIn ? Date.now() + data.data.expiresIn * 1000 : null;
-      repo.updateAccountOAuth(account.id, {
+      await repo.updateAccountOAuth(account.id, {
         refreshToken: data.data.refreshToken ?? account.refresh_token,
         expiresAt: newExpiresAt,
       });
-      repo.updateAccount(account.id, { apiKey: data.data.accessToken });
+      await repo.updateAccount(account.id, { apiKey: data.data.accessToken });
       account.api_key = data.data.accessToken;
       account.refresh_token = data.data.refreshToken ?? account.refresh_token;
       account.expires_at = newExpiresAt;
@@ -465,7 +465,7 @@ export async function ensureFreshToken(repo: ProvidersRepo, account: ProviderAcc
   if (expiresAt && expiresAt - Date.now() > REFRESH_THRESHOLD_MS) return account.api_key;
   if (!account.refresh_token) {
     if (expiresAt && expiresAt > Date.now()) return account.api_key;
-    throw markReauthRequired(repo, account, "ChatGPT login has expired and no refresh token is stored.");
+    throw await markReauthRequired(repo, account, "ChatGPT login has expired and no refresh token is stored.");
   }
 
   return withRefreshLock(account.id, async () => {
@@ -486,7 +486,7 @@ export async function ensureFreshToken(repo: ProvidersRepo, account: ProviderAcc
         const detail = data.error_description ?? data.error ?? `HTTP ${res.status}`;
         log.warn("oauth token refresh failed", { status: res.status, err: data.error });
         if (isPermanentRefreshFailure(res.status, `${data.error ?? ""} ${data.error_description ?? ""}`)) {
-          throw markReauthRequired(repo, account, `ChatGPT token refresh failed: ${detail}.`);
+          throw await markReauthRequired(repo, account, `ChatGPT token refresh failed: ${detail}.`);
         }
         throw new GatewayError(502, "server_error", `ChatGPT token refresh failed: ${detail}`);
       }
@@ -496,16 +496,16 @@ export async function ensureFreshToken(repo: ProvidersRepo, account: ProviderAcc
     }
 
     if (!data.access_token) {
-      throw markReauthRequired(repo, account, "Token refresh response did not include an access token.");
+      throw await markReauthRequired(repo, account, "Token refresh response did not include an access token.");
     }
 
     const newExpiresAt = data.expires_in ? Date.now() + data.expires_in * 1000 : null;
-    repo.updateAccountOAuth(account.id, {
+    await repo.updateAccountOAuth(account.id, {
       refreshToken: data.refresh_token ?? account.refresh_token,
       expiresAt: newExpiresAt,
     });
     // updateAccountOAuth does not touch api_key — store the new access token there.
-    repo.updateAccount(account.id, { apiKey: data.access_token });
+    await repo.updateAccount(account.id, { apiKey: data.access_token });
     account.api_key = data.access_token;
     account.refresh_token = data.refresh_token ?? account.refresh_token;
     account.expires_at = newExpiresAt;
@@ -597,9 +597,15 @@ export function codexRequestBody(req: CanonicalRequest, modelId: string, stream:
     }));
     if (req.tool_choice !== undefined) body.tool_choice = req.tool_choice;
   }
-  // Universal reasoning → Codex Responses API `reasoning.effort`.
-  if (req.reasoning?.enabled !== false && req.reasoning?.effort) {
-    body.reasoning = { effort: req.reasoning.effort };
+  // Universal reasoning → Codex Responses API `reasoning`.
+  // Codex backend doesn't accept `budget_tokens` (server-managed), but
+  // `summary` and `include` map cleanly to OpenAI Responses.
+  if (req.reasoning && req.reasoning.enabled !== false) {
+    const reasoning: Record<string, unknown> = {};
+    if (req.reasoning.effort) reasoning.effort = req.reasoning.effort;
+    if (req.reasoning.summary) reasoning.summary = req.reasoning.summary;
+    if (req.reasoning.include?.length) reasoning.include = req.reasoning.include;
+    if (Object.keys(reasoning).length) body.reasoning = reasoning;
   }
   return body;
 }

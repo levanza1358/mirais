@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import fs from "node:fs";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../store/sql";
 import { SettingsRepo } from "../store/repos/settings";
 import { LogsRepo } from "../store/repos/logs";
 import { ProvidersRepo } from "../store/repos/providers";
@@ -43,8 +43,8 @@ export function settingsRoutes(db: Database) {
   const settings = new SettingsRepo(db);
   const audit = new AuditRepo(db);
 
-  const currentNetworkBinding = () => {
-    const saved = settings.getJson<{ exposed?: boolean; host?: string }>("network_binding");
+  const currentNetworkBinding = async () => {
+    const saved = await settings.getJson<{ exposed?: boolean; host?: string }>("network_binding");
     if (saved?.host === "0.0.0.0" || saved?.host === "127.0.0.1") {
       return { exposed: saved.host === "0.0.0.0", host: saved.host as "0.0.0.0" | "127.0.0.1" };
     }
@@ -52,20 +52,25 @@ export function settingsRoutes(db: Database) {
   };
 
   return new Elysia({ prefix: "/api/settings" })
-    .get("/", () => ({
-      token_saver: settings.getJson("token_saver"),
-      token_saver_providers: settings.getJson("token_saver_providers") ?? null,
-      terse_mode: settings.getJson("terse_mode"),
-      headroom: settings.getJson("headroom"),
-      ponytail: settings.getJson("ponytail"),
-      log_retention_days: Number(settings.get("log_retention_days") ?? 30),
-      session_remember_default: settings.get("session_remember_default") === "1",
-      network_binding: currentNetworkBinding(),
-      model_sync_mode: settings.getJson("model_sync_mode") ?? "curated",
-      model_sync_prune: settings.getJson<boolean>("model_sync_prune") ?? false,
-      routing_policy: normalizeRoutingPolicy(settings.getJson("routing_policy")),
-      ui: settings.getJson("ui"),
-      xai_imap: settings.getJson("xai_imap"),
+    .get("/", async () => ({
+      token_saver: await settings.getJson("token_saver"),
+      token_saver_providers: await settings.getJson("token_saver_providers") ?? null,
+      terse_mode: await settings.getJson("terse_mode"),
+      headroom: await settings.getJson("headroom"),
+      ponytail: await settings.getJson("ponytail"),
+      reasoning: await settings.getJson("reasoning"),
+      log_retention_days: Number(await settings.get("log_retention_days") ?? 30),
+      session_remember_default: await settings.get("session_remember_default") === "1",
+      network_binding: await currentNetworkBinding(),
+      model_sync_mode: await settings.getJson("model_sync_mode") ?? "curated",
+      model_sync_prune: await settings.getJson<boolean>("model_sync_prune") ?? false,
+      routing_policy: normalizeRoutingPolicy(await settings.getJson("routing_policy")),
+      ui: await settings.getJson("ui"),
+      xai_imap: await settings.getJson("xai_imap"),
+      invidious: {
+        instances: config.invidiousInstances,
+        timeout_ms: config.invidiousTimeoutMs,
+      },
       env: {
         port: config.port,
         host: config.host,
@@ -73,37 +78,38 @@ export function settingsRoutes(db: Database) {
         upstream_timeout_ms: config.upstreamTimeoutMs,
       },
     }))
-    .patch("/", ({ body }) => {
+    .patch("/", async ({ body }) => {
       const parsed = settingsUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      if (parsed.data.token_saver) settings.setJson("token_saver", parsed.data.token_saver);
+      if (parsed.data.token_saver) await settings.setJson("token_saver", parsed.data.token_saver);
       if (parsed.data.token_saver_providers !== undefined) {
-        settings.setJson("token_saver_providers", parsed.data.token_saver_providers);
+        await settings.setJson("token_saver_providers", parsed.data.token_saver_providers);
       }
-      if (parsed.data.terse_mode) settings.setJson("terse_mode", parsed.data.terse_mode);
-      if (parsed.data.headroom) settings.setJson("headroom", parsed.data.headroom);
-      if (parsed.data.ponytail) settings.setJson("ponytail", parsed.data.ponytail);
+      if (parsed.data.terse_mode) await settings.setJson("terse_mode", parsed.data.terse_mode);
+      if (parsed.data.headroom) await settings.setJson("headroom", parsed.data.headroom);
+      if (parsed.data.ponytail) await settings.setJson("ponytail", parsed.data.ponytail);
+      if (parsed.data.reasoning) await settings.setJson("reasoning", parsed.data.reasoning);
       if (parsed.data.log_retention_days !== undefined) {
-        settings.set("log_retention_days", String(parsed.data.log_retention_days));
+        await settings.set("log_retention_days", String(parsed.data.log_retention_days));
       }
       if (parsed.data.session_remember_default !== undefined) {
-        settings.set("session_remember_default", parsed.data.session_remember_default ? "1" : "0");
+        await settings.set("session_remember_default", parsed.data.session_remember_default ? "1" : "0");
       }
-      if (parsed.data.network_binding) settings.setJson("network_binding", parsed.data.network_binding);
+      if (parsed.data.network_binding) await settings.setJson("network_binding", parsed.data.network_binding);
       if (parsed.data.model_sync_mode !== undefined) {
-        settings.setJson("model_sync_mode", parsed.data.model_sync_mode);
+        await settings.setJson("model_sync_mode", parsed.data.model_sync_mode);
       }
       if (parsed.data.model_sync_prune !== undefined) {
-        settings.setJson("model_sync_prune", parsed.data.model_sync_prune);
+        await settings.setJson("model_sync_prune", parsed.data.model_sync_prune);
       }
       if (parsed.data.routing_policy) {
-        const current = normalizeRoutingPolicy(settings.getJson("routing_policy"));
-        settings.setJson("routing_policy", normalizeRoutingPolicy({ ...current, ...parsed.data.routing_policy }));
+        const current = normalizeRoutingPolicy(await settings.getJson("routing_policy"));
+        await settings.setJson("routing_policy", normalizeRoutingPolicy({ ...current, ...parsed.data.routing_policy }));
       }
-      if (parsed.data.ui) settings.setJson("ui", parsed.data.ui);
-      if (parsed.data.xai_imap) settings.setJson("xai_imap", parsed.data.xai_imap);
+      if (parsed.data.ui) await settings.setJson("ui", parsed.data.ui);
+      if (parsed.data.xai_imap) await settings.setJson("xai_imap", parsed.data.xai_imap);
       log.info("settings updated", { keys: Object.keys(parsed.data) });
-      audit.record("updated", "settings", null, { fields: Object.keys(parsed.data) });
+      await audit.record("updated", "settings", null, { fields: Object.keys(parsed.data) });
       return { ok: true };
     });
 }
@@ -153,16 +159,16 @@ export function logRoutes(db: Database) {
       if (typeof query.key_id !== "string" || !query.key_id) throw new AdminError(400, "key_id is required");
       return logs.keyUsage(query.key_id);
     })
-    .delete("/usage", () => ({ ok: true, cleared: logs.clearAll() }))
-    .get("/:id/replay", ({ params }) => {
-      const replay = logs.getReplayBody(params.id);
+    .delete("/usage", async () => ({ ok: true, cleared: await logs.clearAll() }))
+    .get("/:id/replay", async ({ params }) => {
+      const replay = await logs.getReplayBody(params.id);
       if (!replay) throw new AdminError(409, "Replay is unavailable; enable TRACK_PAYLOADS=full and use a newly captured request");
       return replay;
     })
     .post("/:id/replay", async ({ params }) => {
-      const replay = logs.getReplayBody(params.id);
+      const replay = await logs.getReplayBody(params.id);
       if (!replay) throw new AdminError(409, "Replay is unavailable; enable TRACK_PAYLOADS=full and use a newly captured request");
-      const key = keys.list()[0];
+      const key = (await keys.list())[0];
       if (!key?.key_plain || !key.enabled) throw new AdminError(409, "Replay requires an enabled gateway key");
       const response = await fetch(`http://127.0.0.1:${config.port}${replay.endpoint}`, {
         method: "POST",
@@ -172,8 +178,8 @@ export function logRoutes(db: Database) {
       const body = await response.json().catch(() => ({ error: `Replay returned HTTP ${response.status}` }));
       return new Response(JSON.stringify(body), { status: response.status, headers: { "content-type": "application/json" } });
     })
-    .get("/:id", ({ params }) => {
-      const entry = logs.getById(params.id);
+    .get("/:id", async ({ params }) => {
+      const entry = await logs.getById(params.id);
       if (!entry) throw new AdminError(404, "Log not found");
       return entry;
     });
@@ -208,8 +214,11 @@ export function healthRoutes(db: Database) {
       version,
       uptime_sec: Math.floor((Date.now() - config.startedAt) / 1000),
     }))
-    .get("/api/health", () => {
-      const list = providers.list();
+    .get("/api/health", async () => {
+      const list = await providers.list();
+      const accountCounts = await Promise.all(list.map(async (provider) =>
+        (await providers.listAccounts(provider.id)).filter((account) => account.enabled).length,
+      ));
       return {
         status: "ok",
         version,
@@ -217,7 +226,7 @@ export function healthRoutes(db: Database) {
         providers: {
           total: list.length,
           enabled: list.filter((p) => p.enabled).length,
-          accounts: list.reduce((n, p) => n + providers.listAccounts(p.id).filter((a) => a.enabled).length, 0),
+          accounts: accountCounts.reduce((total, count) => total + count, 0),
         },
         // Surface where the on-disk DB actually lives so the dashboard can
         // tell the operator whether they're connected to the right Mirais

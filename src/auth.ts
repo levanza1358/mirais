@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from "./store/sql";
 import type { GatewayKey } from "./shared/types";
 import { GatewayError } from "./shared/errors";
 import { KeysRepo } from "./store/repos/keys";
@@ -29,11 +29,11 @@ const ANONYMOUS_KEY: GatewayKey = {
   last_used_at: null,
 };
 
-function loadKey(db: Database, plaintext: string): GatewayKey | null {
+function loadKey(db: Database, plaintext: string): Promise<GatewayKey | null> {
   return new KeysRepo(db).getByPlaintextKey(plaintext);
 }
 
-export function authenticateGatewayKey(db: Database, authHeader: string | null): GatewayKey {
+export async function authenticateGatewayKey(db: Database, authHeader: string | null): Promise<GatewayKey> {
   // No header is allowed only when auth is explicitly disabled. The absence
   // of a configured key must never silently make protected routes anonymous.
   if (!authHeader) {
@@ -54,7 +54,7 @@ export function authenticateGatewayKey(db: Database, authHeader: string | null):
   if (!config.authRequired && token === "anonymous") {
     return ANONYMOUS_KEY;
   }
-  const key = loadKey(db, token);
+  const key = await loadKey(db, token);
   if (!key) {
     log.warn("invalid gateway key used");
     throw new GatewayError(401, "authentication_error", "Invalid API key");
@@ -65,7 +65,7 @@ export function authenticateGatewayKey(db: Database, authHeader: string | null):
   if (isExpired(key)) {
     throw new GatewayError(401, "authentication_error", "API key has expired");
   }
-  new KeysRepo(db).touchLastUsed(key.id);
+  await new KeysRepo(db).touchLastUsed(key.id);
   return key;
 }
 

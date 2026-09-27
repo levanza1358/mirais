@@ -49,9 +49,13 @@ Clients can control reasoning/thinking without speaking provider-specific dialec
 { "reasoning": { "enabled": true, "effort": "medium", "budget_tokens": 2048 } }
 ```
 - `enabled` (default true) — turns thinking-style output on/off for this request.
-- `effort` — `minimal | low | medium | high | xhigh`. Mapped to OpenAI/Codex `reasoning.effort`.
-- `budget_tokens` — Anthropic extended-thinking budget (Anthropic providers only).
-When enabled, the executor strips `temperature`/`top_p` for Anthropic upstreams as required by their API.
+- `effort` — `minimal | low | medium | high | xhigh`. Mapped to OpenAI/Codex `reasoning.effort`, Anthropic's budget heuristic, xAI Grok's `low|medium|high|xhigh` enum (`minimal` collapses to `low`).
+- `budget_tokens` — Anthropic extended-thinking budget. Clamped against the model's output limit and the global `reasoning.max_budget_tokens` setting.
+- `summary` — `concise | detailed`. Forwarded to OpenAI Responses / Codex / xAI Responses.
+- `include` — array of additional reasoning outputs (e.g. `["reasoning.encrypted_content"]` for xAI multi-turn continuity).
+- `thinking` — Anthropic-native passthrough (`type: "enabled" | "adaptive"`); inbound Anthropic requests with a `thinking` block are mapped into canonical `reasoning` and re-emitted on the way out.
+
+Mirais translates the block per provider: `reasoning_effort` for OpenAI Chat, `reasoning.{effort,summary,include}` for OpenAI Responses / Codex / xAI Responses, `thinking.{type,budget_tokens}` for Anthropic. CodeBuddy strips every reasoning field; see `docs/08-codebuddy-compatibility.md`. When `enabled === false`, the block is removed entirely so upstreams don't receive a stale effort hint. Streaming `delta.reasoning_content` is preserved across Anthropic↔OpenAI translators; `Usage.reasoning_tokens` is exposed wherever the upstream reports `output_tokens_details.reasoning_tokens`. Reasoning content is never persisted to `request_logs.response_body` (R1.1 / R1.6); only the requested mode and the upstream-reported token count are stored.
 
 ### POST `/v1/responses`
 Stateless OpenAI Responses compatibility. Supports string/easy-message input, instructions, image URLs, client-executed function calls and outputs, strict function schemas, reasoning effort, structured JSON output, `max_output_tokens`, parallel function-call SSE, and usage events. `store` and `background` may be omitted or `false`; persistent response IDs, conversations, prompts, hosted web/file/code/computer/MCP tools, and retrieval/delete/cancel-by-ID resources are rejected rather than silently ignored. Disconnecting the HTTP request still cancels the active upstream operation.

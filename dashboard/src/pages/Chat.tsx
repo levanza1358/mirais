@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUp, Loader2, Plus, Square, Trash2 } from "lucide-react";
+import { ArrowUp, Brain, Loader2, Plus, Square, Trash2 } from "lucide-react";
 import { combos, keys, providers } from "../api";
 import { storedKeyFor } from "../keyStore";
 import { Select, EmptyState, toast } from "../components/ui";
@@ -48,6 +48,7 @@ export default function Chat() {
 
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<(typeof EFFORTS)[number]>("medium");
+  const [reasoningEnabled, setReasoningEnabled] = useState(true);
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [convs, setConvs] = useState<Conv[]>(loadConvs);
@@ -133,7 +134,12 @@ export default function Chat() {
         method: "POST",
         signal: ac.signal,
         headers: { "content-type": "application/json", authorization: `Bearer ${gatewayKey}` },
-        body: JSON.stringify({ model, messages: history, stream: true, reasoning: { effort } }),
+        body: JSON.stringify({
+          model,
+          messages: history,
+          stream: true,
+          reasoning: { enabled: reasoningEnabled, effort },
+        }),
       });
       if (!res.ok || !res.body) {
         const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
@@ -198,6 +204,17 @@ export default function Chat() {
         <Select value={model} onChange={(e) => setModel(e.target.value)} className="h-9 w-auto max-w-64 rounded-full">
           {models.length ? models.map((m) => <option key={m} value={m}>{m}</option>) : <option value="">No models</option>}
         </Select>
+        <button
+          type="button"
+          onClick={() => setReasoningEnabled((value) => !value)}
+          aria-pressed={reasoningEnabled}
+          aria-label={reasoningEnabled ? "Disable reasoning" : "Enable reasoning"}
+          title={reasoningEnabled ? "Reasoning on" : "Reasoning off"}
+          className={`flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${reasoningEnabled ? "border-accent/40 bg-accent/15 text-accent" : "border-border text-text-muted"}`}
+        >
+          <Brain size={14} />
+          {reasoningEnabled ? "Reasoning on" : "Reasoning off"}
+        </button>
         <Select value={effort} onChange={(e) => setEffort(e.target.value as (typeof EFFORTS)[number])} className="h-9 w-auto rounded-full">
           {EFFORTS.map((v) => <option key={v} value={v}>{v}</option>)}
         </Select>

@@ -45,7 +45,7 @@ flowchart LR
     end
 
     UI -->|admin REST API| GW
-    GW --- DB[(SQLite file<br/>mirais.db)]
+    GW --- DB[(Portable MySQL<br/>.mysql/)]
 ```
 
 **Single process, single port (`1463`).** The Elysia server hosts:
@@ -109,7 +109,7 @@ sequenceDiagram
 | `src/utils/upstreamUrl.ts` | Upstream URL safety checks and credential-safe redirect following |
 | `src/proxy/promptCache.ts` | Provider prompt-cache hints and cache-token usage normalization |
 | `src/tokensaver/` | tool_result compression rules (git diff/stat, grep, ls/tree, test output), optional terse-mode system prompt injection |
-| `src/store/` | SQLite access layer (repos): providers, accounts, keys, combos, usage, logs, settings |
+| `src/store/` | MySQL access layer and repositories; `.mysql/` contains the private portable server and `data/mirais.db` is retained as a legacy import source |
 | `src/usage/` | Token counting (tiktoken / heuristic), cost table, aggregation queries |
 | `src/shared/` | Types, errors, OpenAI/Anthropic schemas |
 
@@ -172,7 +172,8 @@ Runs **before** translation, on the canonical request:
 
 ## 6. Data & State
 
-- **SQLite** (WAL mode) at `DATA_DIR/mirais.db` — default `./data/mirais.db`.
+- **MySQL 8.4 LTS** runs privately under `.mysql/` on `127.0.0.1:${MYSQL_PORT}` (default `14631`). The server is bootstrapped on first start and uses InnoDB.
+- If `DATA_DIR/mirais.db` exists, first startup imports its supported tables into MySQL in resumable batches. The SQLite file is never modified.
 - Round-robin cursors and short-lived attempt cooldowns live in memory. Model-scoped account cooldown windows and terminal OAuth reauthentication state are persisted in SQLite.
 - Dashboard password is on by default (`12345678` until changed) and can be turned off: `Bun.password` hash in `settings`, plus a random `session_secret`. Session = HMAC-signed cookie keyed by `secret + password hash`, so changing the password revokes every session. Lifetime is configurable (`dashboard_session_hours`, default `SESSION_TTL_HOURS`), 30 days with "remember". It never applies to `/v1/*`.
 - Nothing else leaves the machine; no telemetry.
@@ -194,7 +195,7 @@ Admin API errors: `{ "error": "message" }` with proper HTTP status.
 - Constant-time key comparison.
 - Rate limiting per key (requests/min, concurrency, token budget/day).
 - Bind `127.0.0.1` by default; `HOST=0.0.0.0` only when explicitly exposing.
-- Upstream provider secrets (API keys / OAuth tokens) stored in SQLite — recommend filesystem permissions `600` on `DATA_DIR` and full-disk encryption on servers.
+- Upstream provider secrets (API keys / OAuth tokens) are stored in MySQL — protect `.mysql/` and `DATA_DIR` with filesystem permissions and full-disk encryption on servers.
 
 ## 9. Scalability & Limits (v1 scope)
 

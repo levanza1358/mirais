@@ -135,12 +135,12 @@ describe("OpenAI chat DSML tool-call compatibility", () => {
   });
 
   test("converts DSML through the chat completions route when tools are present", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const providers = new ProvidersRepo(db);
-    const provider = providers.create({ name: "deepseek", type: "openai", baseUrl: "https://deepseek.test/v1" });
-    const account = providers.addAccount(provider.id, { label: "main", apiKey: "upstream-key" });
-    providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
-    providers.upsertModel(provider.id, "deepseek-chat");
+    const provider = await providers.create({ name: "deepseek", type: "openai", baseUrl: "https://deepseek.test/v1" });
+    const account = await providers.addAccount(provider.id, { label: "main", apiKey: "upstream-key" });
+    await providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+    await providers.upsertModel(provider.id, "deepseek-chat");
     const app = new Elysia().onError(({ error, set }) => {
       if (error instanceof GatewayError) { set.status = error.status; return error.toJSON(); }
       throw error;
@@ -178,7 +178,7 @@ describe("OpenAI chat DSML tool-call compatibility", () => {
     } finally {
       globalThis.fetch = originalFetch;
       (config as { authRequired: boolean }).authRequired = originalAuthRequired;
-      db.close();
+      await db.close();
     }
   });
 });

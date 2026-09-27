@@ -1,32 +1,60 @@
-import { Database } from "bun:sqlite";
+import { SQL } from "bun";
 import fs from "node:fs";
 import path from "node:path";
+import { config } from "../config";
 import { log } from "../utils/logger";
+import { Database } from "./sql";
+import { ensurePortableMySql } from "./mysql-server";
 
 let db: Database | null = null;
+let opening: Promise<Database> | null = null;
 
-export function getDb(dbPath: string): Database {
-  if (db) return db;
-  db = new Database(dbPath, { create: true });
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA busy_timeout = 5000;");
-  migrate(db);
-  return db;
+export function getDb(): Promise<Database> {
+  if (db) return Promise.resolve(db);
+  if (opening) return opening;
+  const attempt = openDatabase();
+  opening = attempt;
+  return attempt.finally(() => {
+    if (opening === attempt) opening = null;
+  });
 }
 
-function migrate(d: Database) {
-  d.exec(`CREATE TABLE IF NOT EXISTS _migrations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );`);
+async function openDatabase(): Promise<Database> {
+  const credentials = await ensurePortableMySql(config.mysqlDir, config.mysqlPort);
+  const client = new SQL({
+    adapter: "mysql",
+    hostname: "127.0.0.1",
+    port: credentials.port,
+    database: credentials.database,
+    username: credentials.username,
+    password: credentials.password,
+    max: 20,
+    connectionTimeout: 30,
+  });
+  await client.connect();
+  const database = new Database(client, "mysql");
+  try {
+    await migrate(database);
+  } catch (error) {
+    await database.close();
+    throw error;
+  }
+  db = database;
+  return database;
+}
 
-  const applied = new Set(
-    (d.query("SELECT name FROM _migrations").all() as Array<{ name: string }>).map((r) => r.name),
-  );
+async function migrate(database: Database): Promise<void> {
+  await database.exec(`CREATE TABLE IF NOT EXISTS _migrations (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name VARCHAR(255) NOT NULL,
+    applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_migrations_name (name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;`);
 
-  const dir = path.join(import.meta.dir, "migrations");
+  const applied = new Set((await database.query("SELECT name FROM _migrations").all<{ name: string }>()).map((row) => row.name));
+
+  const dir = path.join(import.meta.dir, "mysql-migrations");
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith(".sql"))
@@ -34,21 +62,13 @@ function migrate(d: Database) {
 
   for (const file of files) {
     if (applied.has(file)) continue;
-    const rawSql = fs.readFileSync(path.join(dir, file), "utf8");
-    const sql = rawSql
-      .replace(/^(?:\s*--[^\r\n]*(?:\r?\n|$))*/, "")
-      .replace(/^\s*BEGIN(?:\s+TRANSACTION)?\s*;?/i, "")
-      .replace(/COMMIT\s*;?\s*$/i, "");
-    d.transaction(() => {
-      d.exec(sql);
-      d.query("INSERT INTO _migrations (name) VALUES (?)").run(file);
-    })();
+    await database.exec(fs.readFileSync(path.join(dir, file), "utf8"));
+    await database.query("INSERT INTO _migrations (name) VALUES (?)").run(file);
     log.info("migration applied", { name: file });
   }
-
 }
 
-export function closeDb() {
-  db?.close();
+export async function closeDb(): Promise<void> {
+  await db?.close();
   db = null;
 }

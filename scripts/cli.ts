@@ -10,14 +10,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { Database } from "bun:sqlite";
 import { config } from "../src/config";
 import { closeDb, getDb } from "../src/store/db";
 import { ensureEnvFile, readEnvFile, repoRoot, updateEnvFile } from "./env-file";
 import { autostartStatus, setAutostart } from "./autostart";
 import { readInstallRoot } from "./install-path";
 
-const installRoot = readInstallRoot(path.resolve(import.meta.dir, ".."));
+const localRoot = path.resolve(import.meta.dir, "..");
+const configuredRoot = readInstallRoot(localRoot);
+// When running the CLI from a source tree, use that tree. Stale global install
+// metadata must not redirect local commands elsewhere.
+const installRoot = fs.existsSync(path.join(localRoot, "src", "server.ts")) ? localRoot : configuredRoot;
 
 const pidFile = path.join(config.dataDir, "mirais.pid");
 const logFile = path.join(config.dataDir, "mirais.log");
@@ -305,22 +308,19 @@ async function doctor(json = false): Promise<void> {
 
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.mkdirSync(path.join(config.dataDir, "backups"), { recursive: true });
-  const dbExists = fs.existsSync(config.dbPath);
-  await check("database file", dbExists, () => {
-    const database = getDb(config.dbPath);
-    database.close();
-    closeDb();
-  });
-  if (dbExists) {
-    try {
-      const database = new Database(config.dbPath, { readonly: true });
-      const result = database.query("PRAGMA integrity_check").get() as { integrity_check?: string };
-      database.close();
-      await check("database integrity", result.integrity_check === "ok");
-    } catch (err) {
-      await check(`database integrity (${err instanceof Error ? err.message : String(err)})`, false);
-    }
+  let mysqlError: unknown;
+  try {
+    const database = await getDb();
+    await database.query("SELECT 1").get();
+  } catch (err) {
+    mysqlError = err;
+  } finally {
+    await closeDb();
   }
+  await check(
+    mysqlError ? `MySQL database (${mysqlError instanceof Error ? mysqlError.message : String(mysqlError)})` : "MySQL database",
+    !mysqlError,
+  );
 
   const pid = readPid();
   if (pid && !isRunning(pid)) {
@@ -338,6 +338,8 @@ async function doctor(json = false): Promise<void> {
       installRoot,
       dataDir: config.dataDir,
       dbPath: config.dbPath,
+      mysqlDir: config.mysqlDir,
+      mysqlPort: config.mysqlPort,
       url: displayUrl,
       checks,
     }, null, 2));

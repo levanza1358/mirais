@@ -174,6 +174,7 @@ export interface RequestLog {
   output_tokens: number | null;
   cached_tokens: number | null;
   cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
   credit_usage: number | null;
   credit_source: "upstream" | "estimated" | null;
   latency_ms: number | null;
@@ -192,6 +193,7 @@ export interface UsageRow {
   output_tokens: number;
   cached_tokens: number;
   cache_write_tokens: number;
+  reasoning_tokens: number;
   avg_latency_ms: number;
   errors: number;
   last_ts: string;
@@ -291,12 +293,20 @@ export interface HealthInfo {
   };
 }
 
+export interface ReasoningSettings {
+  default_enabled?: boolean;
+  default_effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  max_budget_tokens?: number;
+  provider_overrides?: Record<string, { enabled?: boolean; effort?: "minimal" | "low" | "medium" | "high" | "xhigh"; budget_tokens?: number }>;
+}
+
 export interface Settings {
   token_saver: TokenSaverSettings | null;
   token_saver_providers: string[] | null;
   terse_mode: CavemanSettings | null;
   headroom: HeadroomSettings | null;
   ponytail: PonytailSettings | null;
+  reasoning: ReasoningSettings | null;
   log_retention_days: number;
   session_remember_default: boolean;
   network_binding?: { exposed: boolean; host: "0.0.0.0" | "127.0.0.1" };
@@ -647,10 +657,191 @@ export const logs = {
 
 export const settings = {
   get: () => req<Settings>("/api/settings"),
-  update: (patch: unknown) => req<{ ok: boolean }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  patch: (patch: Partial<Settings> & Record<string, unknown>) => req<{ ok: boolean }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
 };
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");
+
+// ── music ──
+
+export interface MusicTrack {
+  id: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  duration_sec: number | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  source_type: "file" | "url";
+  storage_path: string | null;
+  source_url: string | null;
+  thumbnail_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MusicPlaylist {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MusicPlaylistWithTracks extends MusicPlaylist {
+  tracks: Array<MusicTrack & { position: number }>;
+}
+
+export interface MusicTrackList {
+  items: MusicTrack[];
+  total: number;
+}
+
+export interface PlayHistoryEntry {
+  id: string;
+  track_id: string;
+  played_at: string;
+  position_ms: number;
+  completed: boolean;
+}
+
+export interface MusicTrackInput {
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+  duration_sec?: number | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  source_type: "file" | "url";
+  storage_path?: string | null;
+  source_url?: string | null;
+  thumbnail_url?: string | null;
+}
+
+export interface MusicPlaylistInput {
+  name: string;
+  description?: string | null;
+  tracks?: Array<{ track_id: string }>;
+}
+
+export interface MusicTrackUpdate {
+  title?: string;
+  artist?: string | null;
+  album?: string | null;
+  duration_sec?: number | null;
+  thumbnail_url?: string | null;
+}
+
+export interface MusicPlaylistUpdate {
+  name?: string;
+  description?: string | null;
+  tracks?: Array<{ track_id: string }>;
+}
+
+/**
+ * Multipart upload helper for music files. Uses XMLHttpRequest so we can attach
+ * an `upload.onprogress` listener — `fetch` doesn't expose upload progress in
+ * the browser.
+ */
+export function uploadMusicFile(
+  trackId: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<{ ok: boolean; size_bytes: number }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/music/tracks/${trackId}/audio`);
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress || !event.lengthComputable) return;
+      onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as { ok: boolean; size_bytes: number });
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      } else {
+        let message = `HTTP ${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText) as { error?: string };
+          if (typeof body.error === "string") message = body.error;
+        } catch { /* keep default */ }
+        reject(new ApiError(xhr.status, message));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    const form = new FormData();
+    form.append("file", file);
+    xhr.send(form);
+  });
+}
+
+export const music = {
+  listTracks: (filters: { q?: string; artist?: string; album?: string; limit?: number; offset?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.artist) params.set("artist", filters.artist);
+    if (filters.album) params.set("album", filters.album);
+    if (filters.limit != null) params.set("limit", String(filters.limit));
+    if (filters.offset != null) params.set("offset", String(filters.offset));
+    const query = params.toString();
+    return req<MusicTrackList>(`/api/music/tracks${query ? `?${query}` : ""}`);
+  },
+  getTrack: (id: string) => req<MusicTrack>(`/api/music/tracks/${id}`),
+  createTrack: (input: MusicTrackInput) => req<MusicTrack>("/api/music/tracks", { method: "POST", body: JSON.stringify(input) }),
+  updateTrack: (id: string, patch: MusicTrackUpdate) => req<MusicTrack>(`/api/music/tracks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTrack: (id: string) => req<{ ok: boolean }>(`/api/music/tracks/${id}`, { method: "DELETE" }),
+  /** Returns the absolute audio URL — the browser plays this directly. */
+  audioUrl: (id: string) => `/api/music/tracks/${id}/audio`,
+  recordPlay: (id: string, position_ms: number, completed: boolean) =>
+    req<PlayHistoryEntry>(`/api/music/tracks/${id}/play?position_ms=${Math.max(0, Math.floor(position_ms))}&completed=${completed ? "1" : "0"}`),
+  listPlaylists: () => req<MusicPlaylist[]>("/api/music/playlists"),
+  getPlaylist: (id: string) => req<MusicPlaylistWithTracks>(`/api/music/playlists/${id}`),
+  createPlaylist: (input: MusicPlaylistInput) => req<MusicPlaylistWithTracks>("/api/music/playlists", { method: "POST", body: JSON.stringify(input) }),
+  updatePlaylist: (id: string, patch: MusicPlaylistUpdate) => req<MusicPlaylistWithTracks>(`/api/music/playlists/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deletePlaylist: (id: string) => req<{ ok: boolean }>(`/api/music/playlists/${id}`, { method: "DELETE" }),
+  addPlaylistTrack: (playlistId: string, trackId: string) =>
+    req<Array<MusicTrack & { position: number }>>(`/api/music/playlists/${playlistId}/tracks`, { method: "POST", body: JSON.stringify({ track_id: trackId }) }),
+  removePlaylistTrack: (playlistId: string, trackId: string) =>
+    req<Array<MusicTrack & { position: number }>>(`/api/music/playlists/${playlistId}/tracks/${trackId}`, { method: "DELETE" }),
+};
+
+export interface YouTubeSearchResult {
+  id: string;
+  title: string;
+  author: string;
+  duration_sec: number | null;
+  thumbnail_url: string | null;
+}
+
+export interface InvidiousConfig {
+  instances: string[];
+  timeout_ms: number;
+}
+
+export const youtube = {
+  search: (q: string, page?: number) => {
+    const params = new URLSearchParams({ q });
+    if (page) params.set("page", String(page));
+    return req<{ items: YouTubeSearchResult[] } | { error: string }>(
+      `/api/music/youtube/search?${params.toString()}`,
+    );
+  },
+  suggestions: (q: string) => {
+    const params = new URLSearchParams({ q });
+    return req<{ suggestions: string[] } | { error: string }>(
+      `/api/music/youtube/suggestions?${params.toString()}`,
+    );
+  },
+  import: (input: { video_id?: string; url?: string; playlist_id?: string }) =>
+    req<MusicTrack>("/api/music/youtube/import", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  config: () => req<InvidiousConfig>("/api/music/youtube/config"),
+};
 
 export interface AuthState {
   password_set: boolean;

@@ -1,7 +1,7 @@
 # 04 — Database Schema
 
-SQLite (`bun:sqlite`), WAL mode, foreign keys ON. File: `${DATA_DIR}/mirais.db`.
-Migrations live in `src/store/migrations/` and run at boot (`0001_init.sql`, `0002_…sql`, applied in order, tracked in `_migrations`).
+MySQL 8.4 LTS via Bun's native `Bun.SQL` client. The private portable server runs from `.mysql/`; tables use InnoDB, `utf8mb4_bin`, and foreign keys. `${DATA_DIR}/mirais.db` is a legacy SQLite source used only by the one-time importer.
+Migrations live in `src/store/mysql-migrations/` and run at boot (`0001_init.sql`, `0002_…sql`, applied in order, tracked in `_migrations`). The SQLite importer uses separate markers so interrupted imports can resume safely.
 
 ## Migration runner
 

@@ -3,12 +3,12 @@ import { exportAccountBackup, importAccountBackup } from "../src/admin/account-b
 import { ProvidersRepo } from "../src/store/repos/providers";
 import { freshDb } from "./helpers";
 
-test("account backup restores credentials without other data", () => {
-  const source = new ProvidersRepo(freshDb());
-  const provider = source.create({ name: "openai", type: "openai", accountStrategy: "round_robin" });
-  const account = source.addAccount(provider.id, { label: "main", apiKey: "secret", priority: 5 });
-  source.updateAccount(account.id, { enabled: false, sessionCookie: "cookie", notes: "note", tags: "tag", planType: "plus" });
-  source.updateAccountOAuth(account.id, {
+test("account backup restores credentials without other data", async () => {
+  const source = new ProvidersRepo(await freshDb());
+  const provider = await source.create({ name: "openai", type: "openai", accountStrategy: "round_robin" });
+  const account = await source.addAccount(provider.id, { label: "main", apiKey: "secret", priority: 5 });
+  await source.updateAccount(account.id, { enabled: false, sessionCookie: "cookie", notes: "note", tags: "tag", planType: "plus" });
+  await source.updateAccountOAuth(account.id, {
     authKind: "oauth",
     refreshToken: "refresh",
     idToken: "id-token",
@@ -16,14 +16,14 @@ test("account backup restores credentials without other data", () => {
     expiresAt: 123,
   });
 
-  const backup = exportAccountBackup(source);
-  const target = new ProvidersRepo(freshDb());
-  const result = importAccountBackup(target, backup);
-  const restoredProvider = target.getByName("openai");
+  const backup = await exportAccountBackup(source);
+  const target = new ProvidersRepo(await freshDb());
+  const result = await importAccountBackup(target, backup);
+  const restoredProvider = await target.getByName("openai");
 
   expect(result).toEqual({ imported: 1, skipped: 0 });
   expect(restoredProvider?.account_strategy).toBe("round_robin");
-  const restored = target.listAccounts(restoredProvider!.id)[0]!;
+  const restored = (await target.listAccounts(restoredProvider!.id))[0]!;
   expect(restored).toMatchObject({
     label: "main",
     api_key: "secret",
@@ -38,5 +38,5 @@ test("account backup restores credentials without other data", () => {
     tags: "tag",
     plan_type: "plus",
   });
-  expect(importAccountBackup(target, backup)).toEqual({ imported: 0, skipped: 1 });
+  expect(await importAccountBackup(target, backup)).toEqual({ imported: 0, skipped: 1 });
 });

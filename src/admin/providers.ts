@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
-import type { ProviderAccount } from "../shared/types";
+import type { Database } from "../store/sql";
+import type { Provider, ProviderAccount } from "../shared/types";
 import { ProvidersRepo } from "../store/repos/providers";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
@@ -151,9 +151,7 @@ export function providerRoutes(db: Database) {
   const logs = new LogsRepo(db);
   const settings = new SettingsRepo(db);
 
-  async function warmupAccount(p: ReturnType<ProvidersRepo["get"]>, account: ReturnType<ProvidersRepo["getAccount"]>) {
-    const provider = p!;
-    const acc = account!;
+  async function warmupAccount(provider: Provider, acc: ProviderAccount) {
     const started = Date.now();
     let result: { account_id: string; account: string; ok: boolean; status: number; latency_ms: number; detail?: string };
     let planType: string | null | undefined;
@@ -298,9 +296,9 @@ export function providerRoutes(db: Database) {
 
     const warmupStatus = result.ok ? "healthy" : (result.status === 429 || isRateLimitDetail(result.detail) ? "rate_limited" : "failing");
     const label = provider.type === "github-copilot" && result.ok
-      ? copilotResolvedLabel(acc.label, copilotLoginForAccount(acc.id), repo.listAccounts(provider.id).filter((other) => other.id !== acc.id).map((other) => other.label))
+      ? copilotResolvedLabel(acc.label, copilotLoginForAccount(acc.id), (await repo.listAccounts(provider.id)).filter((other) => other.id !== acc.id).map((other) => other.label))
       : acc.label;
-    repo.updateAccount(acc.id, {
+    await repo.updateAccount(acc.id, {
       ...(label !== acc.label ? { label } : {}),
       ...(planType !== undefined ? { planType } : {}),
       lastWarmupAt: new Date().toISOString(),
@@ -309,7 +307,7 @@ export function providerRoutes(db: Database) {
       lastWarmupDetail: result.detail ?? null,
     });
 
-    logs.insert({
+    await logs.insert({
       keyId: null,
       endpoint: "/providers/warmup",
       requestedModel: `${provider.name}:${acc.label}`,
@@ -332,93 +330,96 @@ export function providerRoutes(db: Database) {
   }
 
   return new Elysia({ prefix: "/api/providers" })
-    .get("/", () =>
-      repo.list().map((p) => ({
+    .get("/", async () =>
+      Promise.all((await repo.list()).map(async (p) => ({
         ...p,
         base_url_effective: baseUrlFor(p),
-        accounts: repo.listAccounts(p.id).map((a) => ({ ...a, api_key: mask(a.api_key) })),
-        models: repo.listModels(p.id),
-      })),
+        accounts: (await repo.listAccounts(p.id)).map((a) => ({ ...a, api_key: mask(a.api_key) })),
+        models: await repo.listModels(p.id),
+      }))),
     )
-    .post("/", ({ body }) => {
+    .post("/", async ({ body }) => {
       const parsed = providerCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      if (repo.getByName(parsed.data.name)) throw new AdminError(409, `Provider '${parsed.data.name}' already exists`);
-      const p = repo.create(parsed.data);
-      audit.record("created", "provider", p.id, { name: p.name, type: p.type });
+      if (await repo.getByName(parsed.data.name)) throw new AdminError(409, `Provider '${parsed.data.name}' already exists`);
+      const p = await repo.create(parsed.data);
+      await audit.record("created", "provider", p.id, { name: p.name, type: p.type });
       log.info("provider created", { name: p.name, type: p.type });
       return p;
     })
-    .patch("/:id", ({ params, body }) => {
+    .patch("/:id", async ({ params, body }) => {
       const parsed = providerUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const p = repo.update(params.id, parsed.data);
+      const p = await repo.update(params.id, parsed.data);
       if (!p) throw new AdminError(404, "Provider not found");
-      audit.record("updated", "provider", p.id, { fields: Object.keys(parsed.data) });
+      await audit.record("updated", "provider", p.id, { fields: Object.keys(parsed.data) });
       return p;
     })
-    .post("/:id/codex-import", ({ params, body }) => {
-      const provider = repo.get(params.id);
+    .post("/:id/codex-import", async ({ params, body }) => {
+      const provider = await repo.get(params.id);
       if (!provider) throw new AdminError(404, "Provider not found");
       if (provider.type !== "codex") throw new AdminError(400, "Codex import requires a codex provider");
       const parsed = codexImportBatchSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid Codex account payload");
       const single = !Array.isArray(parsed.data) && !("accounts" in parsed.data);
       const accounts = Array.isArray(parsed.data) ? parsed.data : "accounts" in parsed.data ? parsed.data.accounts : [parsed.data];
-      const existing = new Set(repo.listAccounts(provider.id).map((account) => account.refresh_token ?? account.api_key));
+      const existingAccounts = await repo.listAccounts(provider.id);
+      const existing = new Set(existingAccounts.map((account) => account.refresh_token ?? account.api_key));
       const imported: ProviderAccount[] = [];
       let skipped = 0;
       for (const data of accounts) {
         if (existing.has(data.refreshToken) || existing.has(data.accessToken)) { skipped += 1; continue; }
         const email = data.email ?? data.name;
-        const label = email ?? `codex-${repo.listAccounts(provider.id).length + imported.length + 1}`;
-        const account = repo.addAccount(provider.id, {
+        const label = email ?? `codex-${existingAccounts.length + imported.length + 1}`;
+        const account = await repo.addAccount(provider.id, {
           label,
           apiKey: data.accessToken,
           priority: data.priority ?? 100,
         });
-        repo.updateAccount(account.id, { enabled: data.isActive !== false });
-        repo.updateAccountOAuth(account.id, {
+        await repo.updateAccount(account.id, { enabled: data.isActive !== false });
+        await repo.updateAccountOAuth(account.id, {
           authKind: "oauth",
           refreshToken: data.refreshToken,
           expiresAt: data.expiresAt ? Date.parse(data.expiresAt) : null,
         });
         if (data.providerSpecificData?.chatgptPlanType) {
-          repo.updateAccount(account.id, { planType: data.providerSpecificData.chatgptPlanType });
+          await repo.updateAccount(account.id, { planType: data.providerSpecificData.chatgptPlanType });
         }
         existing.add(data.refreshToken);
         existing.add(data.accessToken);
-        imported.push(repo.getAccount(account.id)!);
+        const created = await repo.getAccount(account.id);
+        if (!created) throw new Error("Imported Codex account could not be loaded");
+        imported.push(created);
       }
       const masked = imported.map((account) => ({ ...account, api_key: mask(account.api_key), refresh_token: null }));
       return single ? masked[0] : { added: imported.length, skipped, accounts: masked };
     })
-    .delete("/:id", ({ params }) => {
-      repo.remove(params.id);
-      audit.record("deleted", "provider", params.id);
+    .delete("/:id", async ({ params }) => {
+      await repo.remove(params.id);
+      await audit.record("deleted", "provider", params.id);
       return { ok: true };
     })
     // ── accounts ──
-    .post("/:id/accounts", ({ params, body }) => {
-      if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
+    .post("/:id/accounts", async ({ params, body }) => {
+      const provider = await repo.get(params.id);
+      if (!provider) throw new AdminError(404, "Provider not found");
       const parsed = accountCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const provider = repo.get(params.id)!;
       if (provider.type === "github-copilot" && !parsed.data.baseUrl) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
       if (provider.type === "codex") throw new AdminError(400, "Codex accounts require Codex JSON import");
       if (provider.type !== "github-copilot" && !parsed.data.apiKey) throw new AdminError(400, "API key is required");
-      const a = repo.addAccount(params.id, parsed.data);
-      audit.record("created", "provider_account", a.id, { providerId: params.id, label: a.label });
+      const a = await repo.addAccount(params.id, parsed.data);
+      await audit.record("created", "provider_account", a.id, { providerId: params.id, label: a.label });
       log.info("account added", { provider: params.id, label: a.label });
       return { ...a, api_key: mask(a.api_key) };
     })
-    .post("/:id/accounts/bulk", ({ params, body }) => {
-      const p = repo.get(params.id);
+    .post("/:id/accounts/bulk", async ({ params, body }) => {
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
       if (p.type === "github-copilot") throw new AdminError(400, "Add GitHub Copilot sidecars one account at a time");
       const parsed = accountBulkCreateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const existingAccounts = repo.listAccounts(p.id);
+      const existingAccounts = await repo.listAccounts(p.id);
       const existing = new Set(existingAccounts.map((a) => a.api_key));
       const existingIds = new Set(existingAccounts.map((a) => a.account_id).filter(Boolean));
       const seen = new Set<string>();
@@ -433,54 +434,54 @@ export function providerRoutes(db: Database) {
         seen.add(apiKey);
         if (item.accountId) existingIds.add(item.accountId);
         const label = item.label?.trim() || `${prefix}-${existingAccounts.length + added + 1}`;
-        repo.addAccount(p.id, { label, apiKey, authKind: item.refreshToken ? "oauth" : "api_key", refreshToken: item.refreshToken ?? null, accountId: item.accountId ?? null });
+        await repo.addAccount(p.id, { label, apiKey, authKind: item.refreshToken ? "oauth" : "api_key", refreshToken: item.refreshToken ?? null, accountId: item.accountId ?? null });
         added += 1;
       }
       log.info("accounts bulk added", { provider: p.name, added, skipped });
       return { added, skipped, duplicates };
     })
-    .delete("/:id/accounts", ({ params }) => {
-      const p = repo.get(params.id);
+    .delete("/:id/accounts", async ({ params }) => {
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const removed = repo.removeAllAccounts(p.id);
+      const removed = await repo.removeAllAccounts(p.id);
       log.info("accounts bulk removed", { provider: p.name, removed });
       return { ok: true, removed };
     })
     // Full credential export for migration/backup. Returns UNMASKED keys and
     // refresh tokens — the dashboard is passwordless, so this endpoint must
     // stay behind the same trusted-network boundary as the rest of /api.
-    .get("/:id/accounts/export", ({ params }) => {
-      const p = repo.get(params.id);
+    .get("/:id/accounts/export", async ({ params }) => {
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id);
+      const accounts = await repo.listAccounts(p.id);
       log.info("accounts exported", { provider: p.name, count: accounts.length });
       return accounts;
     })
-    .patch("/accounts/:accId", ({ params, body }) => {
+    .patch("/accounts/:accId", async ({ params, body }) => {
       const parsed = accountUpdateSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid payload");
-      const current = repo.getAccount(params.accId);
+      const current = await repo.getAccount(params.accId);
       if (!current) throw new AdminError(404, "Account not found");
-      const provider = repo.get(current.provider_id);
+      const provider = await repo.get(current.provider_id);
       if (provider?.type === "github-copilot" && parsed.data.baseUrl === null) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
-      const a = repo.updateAccount(params.accId, parsed.data);
+      const a = await repo.updateAccount(params.accId, parsed.data);
       if (!a) throw new AdminError(404, "Account not found");
-      audit.record("updated", "provider_account", a.id, { fields: Object.keys(parsed.data) });
+      await audit.record("updated", "provider_account", a.id, { fields: Object.keys(parsed.data) });
       return { ...a, api_key: mask(a.api_key) };
     })
-    .delete("/accounts/:accId", ({ params }) => {
-      repo.removeAccount(params.accId);
-      audit.record("deleted", "provider_account", params.accId);
+    .delete("/accounts/:accId", async ({ params }) => {
+      await repo.removeAccount(params.accId);
+      await audit.record("deleted", "provider_account", params.accId);
       return { ok: true };
     })
     .post("/accounts/:accId/checkin", async ({ params }) => {
-      const account = repo.getAccount(params.accId);
+      const account = await repo.getAccount(params.accId);
       if (!account) throw new AdminError(404, "Account not found");
-      const provider = repo.get(account.provider_id);
+      const provider = await repo.get(account.provider_id);
       if (provider?.type !== "codebuddy-cn") throw new AdminError(400, "Daily check-in is only available for CodeBuddy China accounts");
       const started = Date.now();
       const result = await attemptCodeBuddyCheckin(account, baseUrlFor(provider));
-      logs.insert({
+      await logs.insert({
         keyId: null,
         endpoint: "/providers/accounts/checkin",
         requestedModel: account.label,
@@ -498,13 +499,13 @@ export function providerRoutes(db: Database) {
         responseBody: result.message,
         kind: "claim",
       });
-      audit.record(result.ok ? "updated" : "failed", "provider_account", account.id, { action: "daily_checkin", message: result.message });
+      await audit.record(result.ok ? "updated" : "failed", "provider_account", account.id, { action: "daily_checkin", message: result.message });
       return result;
     })
     .post("/:id/warmup", async ({ params }) => {
-      const p = repo.get(params.id);
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id).filter((a) => a.enabled);
+      const accounts = (await repo.listAccounts(p.id)).filter((a) => a.enabled);
       if (!accounts.length) throw new AdminError(400, "No enabled accounts to warm up");
 
       const results: Array<{ account: string; ok: boolean; status: number; latency_ms: number; detail?: string }> = [];
@@ -521,11 +522,11 @@ export function providerRoutes(db: Database) {
         results,
       };
     })
-    .post("/:id/warmup/stream", ({ params, query, set }) => {
-      const p = repo.get(params.id);
+    .post("/:id/warmup/stream", async ({ params, query, set }) => {
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
       const status = z.enum(["all", "healthy", "rate_limited", "failing", "unknown"]).catch("all").parse(query.status);
-      const accounts = repo.listAccounts(p.id).filter((account) => {
+      const accounts = (await repo.listAccounts(p.id)).filter((account) => {
         if (!account.enabled) return false;
         if (status === "all") return true;
         return status === "unknown" ? !account.last_warmup_status : account.last_warmup_status === status;
@@ -559,16 +560,16 @@ export function providerRoutes(db: Database) {
       });
     })
     // ── per-account usage (from request logs) ──
-    .get("/:id/accounts/usage", ({ params }) => {
-      const p = repo.get(params.id);
+    .get("/:id/accounts/usage", async ({ params }) => {
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
       return logs.usageByAccount(p.name);
     })
     // ── provider-level quota summary (aggregated across all accounts) ──
     .get("/:id/quota", async ({ params }) => {
-      const p = repo.get(params.id);
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id);
+      const accounts = await repo.listAccounts(p.id);
       if (!accounts.length) return { total_credits: null, unlimited: null, accounts_with_quota: 0, accounts_total: 0, accounts_free: 0, free_remaining_pct: null };
 
       let totalCredits: number | null = null;
@@ -655,9 +656,9 @@ export function providerRoutes(db: Database) {
     })
     // ── per-account ChatGPT/Codex quota (OAuth accounts only) ──
     .get("/accounts/:accId/codex-quota", async ({ params }) => {
-      const account = repo.getAccount(params.accId);
+      const account = await repo.getAccount(params.accId);
       if (!account) throw new AdminError(404, "Account not found");
-      const provider = repo.get(account.provider_id);
+      const provider = await repo.get(account.provider_id);
       if (!provider) throw new AdminError(404, "Provider not found");
       if (provider.type === "codebuddy-global" || provider.type === "codebuddy-cn") {
         return fetchCodeBuddyUsage(account, baseUrlFor(provider));
@@ -671,17 +672,17 @@ export function providerRoutes(db: Database) {
       return (await checkCodexProviderQuota(repo, account)).usage;
     })
     .post("/accounts/:accId/codex-quota/reset", async ({ params }) => {
-      const account = repo.getAccount(params.accId);
+      const account = await repo.getAccount(params.accId);
       if (!account) throw new AdminError(404, "Account not found");
-      const provider = repo.get(account.provider_id);
+      const provider = await repo.get(account.provider_id);
       if (!provider || !isCodexAccount(provider.type, account)) throw new AdminError(400, "Quota reset is only available for Codex OAuth accounts");
       const accessToken = await ensureFreshToken(repo, account);
       return resetCodexBankedUsage(account, accessToken);
     })
     .get("/accounts/:accId/copilot-quota", async ({ params }) => {
-      const account = repo.getAccount(params.accId);
+      const account = await repo.getAccount(params.accId);
       if (!account) throw new AdminError(404, "Account not found");
-      const provider = repo.get(account.provider_id);
+      const provider = await repo.get(account.provider_id);
       if (!provider || provider.type !== "github-copilot") throw new AdminError(400, "Quota is only available for GitHub Copilot accounts");
       await waitCopilotSidecar(account.id);
       const response = await fetch(`${baseUrlFor(provider, account)}/quota`, { signal: AbortSignal.timeout(15_000) });
@@ -691,28 +692,28 @@ export function providerRoutes(db: Database) {
       return parsed.data;
     })
     // ── models ──
-    .get("/:id/models", ({ params }) => {
-      if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
+    .get("/:id/models", async ({ params }) => {
+      if (!await repo.get(params.id)) throw new AdminError(404, "Provider not found");
       return repo.listModels(params.id);
     })
-    .put("/:id/models/:modelId", ({ params, body }) => {
-      if (!repo.get(params.id)) throw new AdminError(404, "Provider not found");
+    .put("/:id/models/:modelId", async ({ params, body }) => {
+      if (!await repo.get(params.id)) throw new AdminError(404, "Provider not found");
       const parsed = providerModelUpdateSchema.safeParse(body ?? {});
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid model payload");
       const modelId = decodeURIComponent(params.modelId).trim();
       if (!modelId || modelId.length > 1024) throw new AdminError(400, "Invalid model ID");
-      repo.upsertModel(params.id, modelId, parsed.data);
+      await repo.upsertModel(params.id, modelId, parsed.data);
       return { ok: true };
     })
-    .delete("/:id/models/:modelId", ({ params }) => {
-      repo.removeModel(params.id, decodeURIComponent(params.modelId));
+    .delete("/:id/models/:modelId", async ({ params }) => {
+      await repo.removeModel(params.id, decodeURIComponent(params.modelId));
       return { ok: true };
     })
     // ── connectivity test ──
     .post("/:id/test", async ({ params }) => {
-      const p = repo.get(params.id);
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id).filter((a) => a.enabled);
+      const accounts = (await repo.listAccounts(p.id)).filter((a) => a.enabled);
       if (!accounts.length) throw new AdminError(400, "No enabled account to test with");
       // Prefer healthy accounts, fall back to untested, skip known-failing
       const healthyFirst = [...accounts].sort((a, b) => {
@@ -768,9 +769,9 @@ export function providerRoutes(db: Database) {
     })
     // ── per-model test: tiny chat completion against the upstream ──
     .post("/:id/models/:modelId/test", async ({ params }) => {
-      const p = repo.get(params.id);
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const allAccounts = repo.listAccounts(p.id).filter((a) => a.enabled);
+      const allAccounts = (await repo.listAccounts(p.id)).filter((a) => a.enabled);
       if (!allAccounts.length) throw new AdminError(400, "No enabled account to test with");
       // Prefer healthy accounts, fall back to untested, skip known-failing
       const accounts = [...allAccounts].sort((a, b) => {
@@ -789,8 +790,8 @@ export function providerRoutes(db: Database) {
       }
       const started = Date.now();
       const testPrompt = "Reply in one short sentence: say hi, state your model name, and mention your knowledge cutoff date if known.";
-      const writeTestLog = (result: { ok: boolean; status: number; latency_ms: number; detail?: string; preview_text?: string }) => {
-        logs.insert({
+      const writeTestLog = async (result: { ok: boolean; status: number; latency_ms: number; detail?: string; preview_text?: string }): Promise<void> => {
+        await logs.insert({
           keyId: null,
           endpoint: `/providers/${params.id}/models/${encodeURIComponent(modelId)}/test`,
           requestedModel: modelId,
@@ -941,7 +942,7 @@ export function providerRoutes(db: Database) {
           }
         }
         const successResult = { ok: res.ok, status: res.status, latency_ms: latency, model: modelId, account: usedAccount.label, detail, preview_text, context_length, max_output_tokens, capabilities };
-        writeTestLog({ ok: successResult.ok, status: successResult.status, latency_ms: successResult.latency_ms, detail: successResult.detail, preview_text: successResult.preview_text });
+        await writeTestLog({ ok: successResult.ok, status: successResult.status, latency_ms: successResult.latency_ms, detail: successResult.detail, preview_text: successResult.preview_text });
         return successResult;
       } catch (err) {
         const errorResult = {
@@ -955,21 +956,21 @@ export function providerRoutes(db: Database) {
           max_output_tokens: null,
           capabilities: [],
         };
-        writeTestLog({ ok: false, status: 0, latency_ms: errorResult.latency_ms, detail: errorResult.detail });
+        await writeTestLog({ ok: false, status: 0, latency_ms: errorResult.latency_ms, detail: errorResult.detail });
         return errorResult;
       }
     })
     // ── model sync ──
     .post("/:id/sync", async ({ params }) => {
-      const p = repo.get(params.id);
+      const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      const accounts = repo.listAccounts(p.id).filter((a) => a.enabled && a.last_warmup_status === "healthy");
+      const accounts = (await repo.listAccounts(p.id)).filter((a) => a.enabled && a.last_warmup_status === "healthy");
       if (!accounts.length) throw new AdminError(400, "No healthy account to sync with. Run account warmup first.");
       const account = accounts[0]!;
-      const prune = settings.getJson<boolean>("model_sync_prune") ?? false;
+      const prune = await settings.getJson<boolean>("model_sync_prune") ?? false;
 
       if (isCodeBuddyProviderType(p.type)) {
-        const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
+        const mode = (await settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
         const syncedModels = (CODEBUDDY_MODELS[p.type] ?? [])
           .filter((id) => keepModel(id, mode))
           .map((id) => {
@@ -981,7 +982,7 @@ export function providerRoutes(db: Database) {
               capabilities: meta?.capabilities ?? null,
             };
           });
-        const pruned = repo.replaceSyncedModels(p.id, syncedModels, prune);
+        const pruned = await repo.replaceSyncedModels(p.id, syncedModels, prune);
         const kept = syncedModels.map((model) => model.id);
         log.info("codebuddy models synced", { provider: p.name, count: kept.length, mode });
         return { synced: kept.length, pruned, models: kept, mode };
@@ -1001,7 +1002,7 @@ export function providerRoutes(db: Database) {
         }
         if (!byId.size) throw new AdminError(502, failures[0] ?? "No Grok model catalog available");
         const models = [...byId.values()];
-        const pruned = repo.replaceSyncedModels(p.id, models, prune);
+        const pruned = await repo.replaceSyncedModels(p.id, models, prune);
         log.info("xai models synced", { provider: p.name, count: models.length, pruned, accounts: accounts.length, failures: failures.length });
         return { synced: models.length, pruned, models: models.map((model) => model.id) };
       }
@@ -1030,8 +1031,8 @@ export function providerRoutes(db: Database) {
           throw new AdminError(502, failures[0] ?? "No OAuth model catalog available");
         }
         const models = [...byId.values()];
-        const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
-        const pruned = repo.replaceSyncedModels(p.id, models, prune);
+        const mode = (await settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
+        const pruned = await repo.replaceSyncedModels(p.id, models, prune);
         log.info("codex models synced", { provider: p.name, count: models.length, pruned, mode, accounts: oauthAccounts.length, failures: failures.length });
         return { synced: models.length, pruned, mode, models: models.map((m) => m.id) };
       }
@@ -1089,7 +1090,7 @@ export function providerRoutes(db: Database) {
 
       // Filter which models to keep. Mode is a global setting
       // ("model_sync_mode": "curated" | "all"), defaulting to curated.
-      const mode = (settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
+      const mode = (await settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
 
       const kept: string[] = [];
       const syncedModels: Array<{ id: string; contextLength: number | null; maxOutputTokens: number | null; capabilities: string[] | null }> = [];
@@ -1121,7 +1122,7 @@ export function providerRoutes(db: Database) {
       // a non-empty upstream list).
       let pruned = 0;
       if (entries.length > 0) {
-        pruned = repo.replaceSyncedModels(p.id, syncedModels, prune);
+        pruned = await repo.replaceSyncedModels(p.id, syncedModels, prune);
       }
 
       log.info("models synced", { provider: p.name, kept: kept.length, dropped, pruned, mode });

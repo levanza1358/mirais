@@ -2,7 +2,7 @@
  * xAI (Grok) provider routes — OAuth Device Code Flow + Farm mode.
  */
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../store/sql";
 import { ProvidersRepo } from "../store/repos/providers";
 import { SettingsRepo } from "../store/repos/settings";
 import { AdminError } from "../shared/errors";
@@ -84,15 +84,15 @@ export function xaiAdminRoutes(db: Database) {
         const emailResult = await validateAccessToken(tokens.access_token);
 
         if (providerId && typeof providerId === "string") {
-          const provider = providers.get(providerId);
+          const provider = await providers.get(providerId);
           if (!provider) throw new AdminError(404, "Provider not found");
           if (provider.type !== "xai") throw new AdminError(400, "Provider is not xAI type");
 
-          const accounts = providers.listAccounts(providerId);
+          const accounts = await providers.listAccounts(providerId);
           const existing = accounts.find((a) => a.api_key === tokens.access_token);
           if (existing) {
-            providers.updateAccount(existing.id, { apiKey: tokens.access_token, label: emailResult.email ?? existing.label });
-            providers.updateAccountOAuth(existing.id, {
+            await providers.updateAccount(existing.id, { apiKey: tokens.access_token, label: emailResult.email ?? existing.label });
+            await providers.updateAccountOAuth(existing.id, {
               authKind: "oauth",
               refreshToken: tokens.refresh_token,
               expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
@@ -100,17 +100,17 @@ export function xaiAdminRoutes(db: Database) {
             return { status: "updated", accountId: existing.id, email: emailResult.email };
           }
 
-          const account = providers.addAccount(providerId, {
+          const account = await providers.addAccount(providerId, {
             label: emailResult.email ?? `xai-${Date.now()}`,
             apiKey: tokens.access_token,
           });
-          providers.updateAccountOAuth(account.id, {
+          await providers.updateAccountOAuth(account.id, {
             authKind: "oauth",
             refreshToken: tokens.refresh_token,
             expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null,
           });
-          if (providers.listModels(providerId).length === 0) {
-            for (const model of XAI_MODELS) providers.upsertModel(providerId, model, { displayName: model });
+          if ((await providers.listModels(providerId)).length === 0) {
+            for (const model of XAI_MODELS) await providers.upsertModel(providerId, model, { displayName: model });
           }
           return { status: "created", accountId: account.id, email: emailResult.email };
         }
@@ -124,7 +124,7 @@ export function xaiAdminRoutes(db: Database) {
     })
 
     .get("/farm/check", async () => {
-      const imapSettings = settings.getJson<XaiImapSettings>("xai_imap");
+      const imapSettings = await settings.getJson<XaiImapSettings>("xai_imap");
       const configured = Boolean(imapSettings?.enabled && imapSettings.gmail_username && imapSettings.gmail_app_password);
       return checkXaiFarmDependencies(configured);
     })
@@ -144,7 +144,7 @@ export function xaiAdminRoutes(db: Database) {
 
     .post("/farm/install-missing", async () => {
       if (farmInstallStatus.status === "running") throw new AdminError(409, "Dependency installation is already running");
-      const imapSettings = settings.getJson<XaiImapSettings>("xai_imap");
+      const imapSettings = await settings.getJson<XaiImapSettings>("xai_imap");
       const configured = Boolean(imapSettings?.enabled && imapSettings.gmail_username && imapSettings.gmail_app_password);
       farmInstallStatus = { status: "running", progress: 0, stage: "Starting installation" };
       void installXaiFarmMissingDependencies(configured, (progress, stage) => {
@@ -173,11 +173,11 @@ export function xaiAdminRoutes(db: Database) {
       const concurrency = Math.max(1, Math.floor(Number(input.concurrency ?? 1)));
       if (!providerId || typeof providerId !== "string") throw new AdminError(400, "providerId is required");
 
-      const provider = providers.get(providerId);
+      const provider = await providers.get(providerId);
       if (!provider) throw new AdminError(404, "Provider not found");
       if (provider.type !== "xai") throw new AdminError(400, "Provider is not xAI type");
 
-      const imapSettings = settings.getJson<XaiImapSettings>("xai_imap");
+      const imapSettings = await settings.getJson<XaiImapSettings>("xai_imap");
       if (!imapSettings?.enabled) throw new AdminError(400, "xAI farming is not enabled. Enable it in Settings → XAI IMAP Settings.");
       if (!imapSettings.gmail_username || !imapSettings.gmail_app_password) {
         throw new AdminError(400, "Gmail credentials not configured. Set Gmail username and App Password in Settings → XAI IMAP Settings.");
@@ -213,11 +213,11 @@ export function xaiAdminRoutes(db: Database) {
           farmFailed += 1;
           throw new Error("Farm completed but no access token returned");
         }
-        const account = providers.addAccount(providerId, {
+        const account = await providers.addAccount(providerId, {
           label: result.email ?? `xai-farm-${Date.now()}`,
           apiKey: result.accessToken,
         });
-        providers.updateAccountOAuth(account.id, {
+        await providers.updateAccountOAuth(account.id, {
           authKind: "oauth",
           refreshToken: result.refreshToken,
           expiresAt: result.expiresIn ? Date.now() + result.expiresIn * 1000 : null,
@@ -259,8 +259,8 @@ export function xaiAdminRoutes(db: Database) {
       farmStopRequested = false;
       farmStartedAt = null;
 
-      if (providers.listModels(providerId).length === 0) {
-        for (const model of XAI_MODELS) providers.upsertModel(providerId, model, { displayName: model });
+      if ((await providers.listModels(providerId)).length === 0) {
+        for (const model of XAI_MODELS) await providers.upsertModel(providerId, model, { displayName: model });
       }
 
       return { ok: errors.length === 0, requested: count, concurrency, succeeded: accounts.length, failed: errors.length, accounts, errors };
@@ -290,19 +290,19 @@ export function xaiAdminRoutes(db: Database) {
       if (!apiKey || typeof apiKey !== "string") throw new AdminError(400, "apiKey is required");
       if (!apiKey.startsWith("xai-")) throw new AdminError(400, "Invalid API key format. xAI API keys start with 'xai-'");
 
-      const provider = providers.get(providerId);
+      const provider = await providers.get(providerId);
       if (!provider) throw new AdminError(404, "Provider not found");
       if (provider.type !== "xai") throw new AdminError(400, "Provider is not xAI type");
 
       // Check if already exists
-      const accounts = providers.listAccounts(providerId);
+      const accounts = await providers.listAccounts(providerId);
       const existing = accounts.find((a) => a.api_key === apiKey);
       if (existing) {
         return { status: "exists", accountId: existing.id, label: existing.label };
       }
 
       // Add account with API key (NOT OAuth)
-      const account = providers.addAccount(providerId, {
+      const account = await providers.addAccount(providerId, {
         label: label ?? `apikey-${apiKey.slice(-6)}`,
         apiKey,
       });
@@ -327,9 +327,9 @@ export function xaiAdminRoutes(db: Database) {
       if (!accountId) throw new AdminError(400, "accountId query parameter is required");
 
       let account = null;
-      for (const p of providers.list()) {
+      for (const p of await providers.list()) {
         if (p.type !== "xai") continue;
-        account = providers.listAccounts(p.id).find((a) => a.id === accountId);
+        account = (await providers.listAccounts(p.id)).find((a) => a.id === accountId) ?? null;
         if (account) break;
       }
       if (!account) throw new AdminError(404, "Account not found");

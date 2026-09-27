@@ -7,7 +7,7 @@
 - **API base:** `http://localhost:1463/v1`
 - **Dashboard:** `http://localhost:1463/`
 - **Platforms:** Windows 10/11, Ubuntu 22.04+
-- **Stack:** Bun + Elysia · React + Vite + Tailwind · SQLite
+- **Stack:** Bun + Elysia · React + Vite + Tailwind · MySQL 8.4 portable
 
 ## What it does
 

@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../store/sql";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config";
@@ -62,9 +62,10 @@ export function backupRoutes(db: Database) {
   const repo = new ProvidersRepo(db);
   return new Elysia({ prefix: "/api/backups" })
     .get("/", () => ({ backups: listBackups() }))
-    .post("/", () => {
+    .post("/", async () => {
       const filename = `${BACKUP_PREFIX}${new Date().toISOString().replace(/[:.]/g, "-")}${BACKUP_SUFFIX}`;
-      fs.writeFileSync(path.join(backupsDir(), filename), `${JSON.stringify(exportAccountBackup(repo), null, 2)}\n`, { mode: 0o600 });
+      const backup = await exportAccountBackup(repo);
+      fs.writeFileSync(path.join(backupsDir(), filename), `${JSON.stringify(backup, null, 2)}\n`, { mode: 0o600 });
       const entry = toEntry(filename);
       log.info("account backup created", { id: entry.id, size_bytes: entry.size_bytes });
       return entry;
@@ -99,7 +100,7 @@ export function backupRoutes(db: Database) {
       log.info("account backup uploaded", { id: entry.id, size_bytes: entry.size_bytes });
       return entry;
     })
-    .post("/:id/restore", ({ params }) => {
+    .post("/:id/restore", async ({ params }) => {
       let backup;
       try {
         backup = parseBackup(fs.readFileSync(resolveBackup(params.id), "utf8"));
@@ -107,7 +108,7 @@ export function backupRoutes(db: Database) {
         if (err instanceof AdminError) throw err;
         throw new AdminError(404, err instanceof Error ? err.message : "Backup not found");
       }
-      const result = importAccountBackup(repo, backup);
+      const result = await importAccountBackup(repo, backup);
       log.info("account backup restored", { id: params.id, ...result });
       return { ok: true, ...result };
     });

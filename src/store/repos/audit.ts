@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from "../sql";
 import { ulid, nowIso } from "../../utils/id";
 
 export interface AuditEntry {
@@ -13,17 +13,18 @@ export interface AuditEntry {
 export class AuditRepo {
   constructor(private db: Database) {}
 
-  record(action: string, resource: string, resourceId?: string | null, detail?: Record<string, unknown> | null): void {
-    this.db.query("INSERT INTO admin_audit_log (id, ts, action, resource, resource_id, detail) VALUES (?, ?, ?, ?, ?, ?)")
+  async record(action: string, resource: string, resourceId?: string | null, detail?: Record<string, unknown> | null): Promise<void> {
+    await this.db.query("INSERT INTO admin_audit_log (id, ts, action, resource, resource_id, detail) VALUES (?, ?, ?, ?, ?, ?)")
       .run(ulid(), nowIso(), action, resource, resourceId ?? null, detail ? JSON.stringify(detail) : null);
   }
 
-  list(page = 1, limit = 50): { items: AuditEntry[]; total: number } {
+  async list(page = 1, limit = 50): Promise<{ items: AuditEntry[]; total: number }> {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(200, Math.max(1, limit));
-    const total = (this.db.query("SELECT COUNT(*) AS c FROM admin_audit_log").get() as { c: number }).c;
-    const items = this.db.query("SELECT * FROM admin_audit_log ORDER BY ts DESC LIMIT ? OFFSET ?")
-      .all(safeLimit, (safePage - 1) * safeLimit) as AuditEntry[];
+    const count = await this.db.query("SELECT COUNT(*) AS c FROM admin_audit_log").get<{ c: number }>();
+    const total = count?.c ?? 0;
+    const items = await this.db.query("SELECT * FROM admin_audit_log ORDER BY ts DESC LIMIT ? OFFSET ?")
+      .all<AuditEntry>(safeLimit, (safePage - 1) * safeLimit);
     return { items, total };
   }
 }

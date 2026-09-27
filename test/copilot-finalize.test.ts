@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import childProcess from "node:child_process";
 import { config } from "../src/config";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../src/store/sql";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -67,8 +67,8 @@ async function waitForJob(a: ReturnType<typeof app>, jobId: string) {
   throw new Error("job did not finish in time");
 }
 
-beforeEach(() => {
-  db = freshDb();
+beforeEach(async () => {
+  db = await freshDb();
   repo = new ProvidersRepo(db);
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "mirais-copilot-test-"));
   originalFetch = globalThis.fetch;
@@ -79,14 +79,14 @@ beforeEach(() => {
   globalThis.fetch = (async () => { throw new Error("Unexpected network request"); }) as unknown as typeof fetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const proc of allProcs) { proc.emit("close", 0, null); proc.emit("exit", 0); }
   _resetCopilotStateForTests();
   globalThis.fetch = originalFetch;
   _setSpawnForTests(spawn);
   credentialMock.mockRestore();
   Object.defineProperty(config, "dataDir", { value: originalDataDir, configurable: true });
-  db.close();
+  await db.close();
   fs.rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -95,9 +95,9 @@ describe("C2 — GET status is read-only", () => {
     const procs: FakeProc[] = [];
     _setSpawnForTests(makeSpawn(procs));
 
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
-    const account = repo.addAccount(p.id, { label: "my-account" });
-    repo.updateAccount(account.id, { enabled: true });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
+    const account = await repo.addAccount(p.id, { label: "my-account" });
+    await repo.updateAccount(account.id, { enabled: true });
 
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = String(input);
@@ -112,14 +112,14 @@ describe("C2 — GET status is read-only", () => {
     expect(body.done).toBe(true);
     expect(body.ok).toBe(true);
     expect(procs.length).toBe(0);
-    expect(repo.listModels(p.id).length).toBe(0);
+    expect((await repo.listModels(p.id)).length).toBe(0);
   });
 
   test("reports waiting state for a running login flow without mutation", async () => {
     const procs: FakeProc[] = [];
     _setSpawnForTests(makeSpawn(procs));
 
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
     const a = app(db);
 
     const startRes = await post(a, "/api/copilot/start", { providerId: p.id, label: "" });
@@ -137,14 +137,14 @@ describe("C2 — GET status is read-only", () => {
     const body = await statusRes.json() as { done: boolean; ok: boolean; message?: string };
     expect(body.done).toBe(false);
     expect(body.message).toContain("Waiting");
-    expect(repo.getAccount(accountId)?.enabled).toBe(0);
+    expect((await repo.getAccount(accountId))?.enabled).toBe(0);
   });
 });
 
 describe("C2 — POST finalize performs mutations", () => {
   test("returns 409 when no login flow exists", async () => {
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
-    const account = repo.addAccount(p.id, { label: "some-account" });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
+    const account = await repo.addAccount(p.id, { label: "some-account" });
     const a = app(db);
     const res = await post(a, `/api/copilot/${account.id}/finalize`);
     expect(res.status).toBe(409);
@@ -154,7 +154,7 @@ describe("C2 — POST finalize performs mutations", () => {
     const procs: FakeProc[] = [];
     _setSpawnForTests(makeSpawn(procs));
 
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
     const a = app(db);
 
     const startRes = await post(a, "/api/copilot/start", { providerId: p.id, label: "" });
@@ -177,10 +177,10 @@ describe("C2 — POST finalize performs mutations", () => {
     expect(body.done).toBe(true);
     expect(body.ok).toBe(true);
 
-    const updated = repo.getAccount(accountId);
+    const updated = await repo.getAccount(accountId);
     expect(updated?.enabled).toBe(1);
     expect(updated?.label).toBe("octocat");
-    const models = repo.listModels(p.id);
+    const models = await repo.listModels(p.id);
     expect(models.map((m) => m.model_id).sort()).toEqual(["claude-3-5", "gpt-4o"]);
   });
 
@@ -188,9 +188,9 @@ describe("C2 — POST finalize performs mutations", () => {
     const procs: FakeProc[] = [];
     _setSpawnForTests(makeSpawn(procs));
 
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
-    const existing = repo.addAccount(p.id, { label: "octocat" });
-    repo.updateAccount(existing.id, { enabled: false });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
+    const existing = await repo.addAccount(p.id, { label: "octocat" });
+    await repo.updateAccount(existing.id, { enabled: false });
 
     const a = app(db);
     const startRes = await post(a, "/api/copilot/start", { providerId: p.id, label: "" });
@@ -219,8 +219,8 @@ describe("C2 — POST finalize performs mutations", () => {
     const body = await finalizeRes.json() as { done: boolean; ok: boolean; duplicate?: boolean; login?: string };
     expect(body.duplicate).toBe(true);
     expect(body.login).toBe("octocat");
-    expect(repo.getAccount(accountId)?.enabled).toBe(0);
-    expect(repo.getAccount(existing.id)).not.toBeNull();
+    expect((await repo.getAccount(accountId))?.enabled).toBe(0);
+    expect(await repo.getAccount(existing.id)).not.toBeNull();
   });
 });
 
@@ -229,9 +229,9 @@ describe("C3 — bulk login safety", () => {
     const procs: FakeProc[] = [];
     _setSpawnForTests(makeSpawn(procs));
 
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
-    const oldAccount = repo.addAccount(p.id, { label: "user@example.com" });
-    repo.updateAccount(oldAccount.id, { enabled: true });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
+    const oldAccount = await repo.addAccount(p.id, { label: "user@example.com" });
+    await repo.updateAccount(oldAccount.id, { enabled: true });
 
     const a = app(db);
     const res = await post(a, "/api/copilot/bulk", {
@@ -247,16 +247,16 @@ describe("C3 — bulk login safety", () => {
     const job = await waitForJob(a, jobId);
 
     expect(job.results[0]?.success).toBe(false);
-    expect(repo.getAccount(oldAccount.id)).not.toBeNull();
+    expect(await repo.getAccount(oldAccount.id)).not.toBeNull();
   });
 
   test("successful forced bulk login replaces old account only after new one is enabled", async () => {
     const procs: FakeProc[] = [];
     _setSpawnForTests(makeSpawn(procs));
 
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
-    const oldAccount = repo.addAccount(p.id, { label: "user@example.com" });
-    repo.updateAccount(oldAccount.id, { enabled: true });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
+    const oldAccount = await repo.addAccount(p.id, { label: "user@example.com" });
+    await repo.updateAccount(oldAccount.id, { enabled: true });
 
     const a = app(db);
     const res = await post(a, "/api/copilot/bulk", {
@@ -268,7 +268,7 @@ describe("C3 — bulk login safety", () => {
     const { jobId } = await res.json() as { jobId: string };
 
     while (!procs.length) await new Promise((resolve) => setImmediate(resolve));
-    const newAccount = repo.listAccounts(p.id).find((x) => x.id !== oldAccount.id);
+    const newAccount = (await repo.listAccounts(p.id)).find((x) => x.id !== oldAccount.id);
     expect(newAccount).toBeDefined();
     const outputFile = path.join(tempHome, "copilot", newAccount!.id, "bulk_result.json");
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
@@ -278,15 +278,15 @@ describe("C3 — bulk login safety", () => {
     const job = await waitForJob(a, jobId);
 
     expect(job.results[0]?.success).toBe(true);
-    const remaining = repo.listAccounts(p.id).filter((x) => x.label.toLowerCase() === "user@example.com");
+    const remaining = (await repo.listAccounts(p.id)).filter((x) => x.label.toLowerCase() === "user@example.com");
     expect(remaining.length).toBe(1);
     expect(remaining[0]?.id).not.toBe(oldAccount.id);
     expect(remaining[0]?.enabled).toBe(1);
   });
 
   test("non-force bulk login skips an existing account without touching it", async () => {
-    const p = repo.create({ name: "copilot", type: "github-copilot" });
-    const oldAccount = repo.addAccount(p.id, { label: "user@example.com" });
+    const p = await repo.create({ name: "copilot", type: "github-copilot" });
+    const oldAccount = await repo.addAccount(p.id, { label: "user@example.com" });
 
     const a = app(db);
     const res = await post(a, "/api/copilot/bulk", {
@@ -299,6 +299,6 @@ describe("C3 — bulk login safety", () => {
     const job = await waitForJob(a, jobId);
     expect(job.results[0]?.success).toBe(false);
     expect(job.results[0]?.error).toBe("Account already exists");
-    expect(repo.getAccount(oldAccount.id)).not.toBeNull();
+    expect(await repo.getAccount(oldAccount.id)).not.toBeNull();
   });
 });

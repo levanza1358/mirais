@@ -3,6 +3,7 @@ dashboard/node_modules/
 scripts/copilot-sidecar/node_modules/
 dashboard/dist/
 data/
+.mysql/
 *.log
 .env
 .env.local

@@ -42,6 +42,8 @@ export interface ToolDef {
   };
 }
 
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
 /**
  * Universal reasoning/thinking control.
  *
@@ -57,12 +59,31 @@ export interface ReasoningSpec {
    * Lightweight effort hint — mapped to OpenAI/Codex `reasoning.effort`,
    * ignored on providers that don't accept an effort enum.
    */
-  effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  effort?: ReasoningEffort;
   /**
    * Token budget for thinking — Anthropic `thinking.budget_tokens` and a
    * server-side cap on Codex reasoning tokens.
    */
   budget_tokens?: number;
+  /**
+   * Reasoning summary mode for OpenAI Responses and xAI Responses dialects.
+   * `concise` returns a short textual summary; `detailed` returns the full
+   * reasoning trace. Providers that ignore this field behave unchanged.
+   */
+  summary?: "concise" | "detailed";
+  /**
+   * Allowlist of additional reasoning outputs to request (e.g.
+   * `["reasoning.encrypted_content"]` for xAI multi-turn continuity).
+   * Providers that don't recognize the tokens simply ignore them.
+   */
+  include?: string[];
+  /**
+   * Anthropic-native passthrough. Used when a client speaks the Anthropic
+   * dialect directly and forwards a `thinking` block; the executor maps it
+   * back into a canonical `reasoning` so the upstream translation layer can
+   * apply `clampReasoningTokens` and the universal redactor.
+   */
+  thinking?: { type: "enabled" | "adaptive"; budget_tokens?: number };
 }
 
 export interface CanonicalRequest {
@@ -100,6 +121,12 @@ export interface Usage {
   cached_tokens?: number;
   /** Prompt tokens written into a provider-side prompt cache. */
   cache_write_tokens?: number;
+  /**
+   * Tokens consumed by the model's internal reasoning/thinking phase. Reported
+   * by OpenAI Responses, Codex, xAI Grok, and Anthropic extended thinking;
+   * `null` when the provider doesn't expose a separate counter.
+   */
+  reasoning_tokens?: number | null;
 }
 
 export interface ChatChoice {
@@ -261,6 +288,10 @@ export interface RequestLog {
   error: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  /** Prompt tokens served from the provider's cache. */
+  cached_tokens: number | null;
+  /** Prompt tokens written into the provider's cache. */
+  cache_write_tokens: number | null;
   credit_usage: number | null;
   /** 'upstream' = reported by the provider; 'estimated' = derived from the model's credit_rate. */
   credit_source: "upstream" | "estimated" | null;
@@ -268,6 +299,8 @@ export interface RequestLog {
   tokens_saved: number;
   /** Requested thinking mode; internal reasoning content is never stored. */
   reasoning_effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  /** Tokens burned inside the model's reasoning phase, when the provider reports them. */
+  reasoning_tokens: number | null;
   request_body: string | null;
   response_body: string | null;
   /** 'request' (real traffic) or 'warmup' (test/ping). */

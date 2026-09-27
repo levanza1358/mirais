@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../store/sql";
 import { ProvidersRepo } from "../store/repos/providers";
 import { AdminError } from "../shared/errors";
 import { oauthCallbackUrlSchema } from "../shared/schemas";
@@ -170,7 +170,7 @@ export function oauthRoutes(db: Database) {
   const repo = new ProvidersRepo(db);
 
   async function pollCodeBuddyToken(state: string, providerId: string): Promise<void> {
-    const p = repo.get(providerId);
+    const p = await repo.get(providerId);
     if (!p) return;
     const cfg = CODEBUDDY_OAUTH[p.type];
     if (!cfg) return;
@@ -201,12 +201,12 @@ export function oauthRoutes(db: Database) {
           return;
         }
 
-        const label = `${p.type === "codebuddy-cn" ? "CodeBuddy CN" : "CodeBuddy"}-${repo.listAccounts(p.id).length + 1}`;
-        repo.addAccount(p.id, { label, apiKey: data.data.accessToken });
-        const accounts = repo.listAccounts(p.id);
+        const label = `${p.type === "codebuddy-cn" ? "CodeBuddy CN" : "CodeBuddy"}-${(await repo.listAccounts(p.id)).length + 1}`;
+        await repo.addAccount(p.id, { label, apiKey: data.data.accessToken });
+        const accounts = await repo.listAccounts(p.id);
         const created = accounts[accounts.length - 1];
         if (created) {
-          repo.updateAccountOAuth(created.id, {
+          await repo.updateAccountOAuth(created.id, {
             authKind: "oauth",
             refreshToken: data.data.refreshToken ?? null,
             expiresAt: data.data.expiresIn ? Date.now() + data.data.expiresIn * 1000 : null,
@@ -241,7 +241,7 @@ export function oauthRoutes(db: Database) {
       return;
     }
 
-    const p = repo.get(entry.providerId);
+    const p = await repo.get(entry.providerId);
     if (!p) {
       entry.resolve({ ok: false, message: "Provider no longer exists." });
       return;
@@ -281,14 +281,14 @@ export function oauthRoutes(db: Database) {
     }
 
     const { accountId, email } = accountInfo(tokens.id_token);
-    const label = email ? `ChatGPT (${email})` : `ChatGPT-${repo.listAccounts(p.id).length + 1}`;
+    const label = email ? `ChatGPT (${email})` : `ChatGPT-${(await repo.listAccounts(p.id)).length + 1}`;
     const expiresAt = tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null;
 
-    repo.addAccount(p.id, { label, apiKey: tokens.access_token });
-    const accounts = repo.listAccounts(p.id);
+    await repo.addAccount(p.id, { label, apiKey: tokens.access_token });
+    const accounts = await repo.listAccounts(p.id);
     const created = accounts[accounts.length - 1];
     if (created) {
-      repo.updateAccountOAuth(created.id, {
+      await repo.updateAccountOAuth(created.id, {
         authKind: "oauth",
         refreshToken: tokens.refresh_token ?? null,
         idToken: tokens.id_token ?? null,
@@ -304,10 +304,10 @@ export function oauthRoutes(db: Database) {
   const results = new Map<string, { ok: boolean; message: string; at: number }>();
 
   return new Elysia()
-    .post("/api/oauth/openai/start", ({ body }) => {
+    .post("/api/oauth/openai/start", async ({ body }) => {
       const { providerId } = (body ?? {}) as { providerId?: string };
       if (!providerId) throw new AdminError(400, "providerId is required");
-      const p = repo.get(providerId);
+      const p = await repo.get(providerId);
       if (!p) throw new AdminError(404, "Provider not found");
       if (p.type === "codebuddy-global" || p.type === "codebuddy-cn") {
         const cfg = CODEBUDDY_OAUTH[p.type];

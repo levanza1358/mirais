@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../src/store/sql";
 import { freshDb } from "./helpers";
 import { authRoutes, hasValidSession, passwordEnabled, sessionGuard } from "../src/admin/auth";
 import { AdminError } from "../src/shared/errors";
@@ -46,22 +46,22 @@ function maxAgeOf(cookie: string): number {
 
 describe("dashboard password", () => {
   test("defaults to 12345678 and locks the admin API", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
-    expect(passwordEnabled(db)).toBe(true);
+    expect(await passwordEnabled(db)).toBe(true);
     expect((await a.handle(new Request("http://test/api/providers"))).status).toBe(401);
     expect((await login(a, "12345678")).status).toBe(200);
   });
 
   test("never blocks the gateway proxy path", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const res = await a.handle(new Request("http://test/v1/chat/completions", { method: "POST" }));
     expect(res.status).toBe(200);
   });
 
   test("login issues a session cookie that survives page refreshes", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     expect((await login(a, "wrong-password")).status).toBe(401);
     const cookie = cookieOf(await login(a, "12345678"));
@@ -74,7 +74,7 @@ describe("dashboard password", () => {
   });
 
   test("session lifetime is configurable and remember-me lasts 30 days", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const cookie = cookieOf(await login(a, "12345678"));
     const saved = await a.handle(new Request("http://test/api/auth/session-hours", {
@@ -92,7 +92,7 @@ describe("dashboard password", () => {
   });
 
   test("rejects an out-of-range session lifetime", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const cookie = cookieOf(await login(a, "12345678"));
     const res = await a.handle(new Request("http://test/api/auth/session-hours", {
@@ -104,7 +104,7 @@ describe("dashboard password", () => {
   });
 
   test("health probe and auth endpoints stay public", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     expect((await a.handle(new Request("http://test/api/health"))).status).toBe(200);
     const check = await a.handle(new Request("http://test/api/auth/check"));
@@ -112,16 +112,16 @@ describe("dashboard password", () => {
   });
 
   test("changing the password revokes existing sessions", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const cookie = cookieOf(await login(a, "12345678"));
 
     await setPassword(a, "another-secret", "12345678", cookie);
-    expect(hasValidSession(db, new Request("http://test/api/providers", { headers: { cookie } }))).toBe(false);
+    expect(await hasValidSession(db, new Request("http://test/api/providers", { headers: { cookie } }))).toBe(false);
   });
 
   test("turning the password off reopens the admin API and stays off", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const cookie = cookieOf(await login(a, "12345678"));
     const removed = await a.handle(new Request("http://test/api/auth/password", {
@@ -130,12 +130,12 @@ describe("dashboard password", () => {
       body: JSON.stringify({ current_password: "12345678", new_password: "" }),
     }));
     expect(await removed.json()).toMatchObject({ password_set: false });
-    expect(passwordEnabled(db)).toBe(false);
+    expect(await passwordEnabled(db)).toBe(false);
     expect((await a.handle(new Request("http://test/api/providers"))).status).toBe(200);
   });
 
   test("wrong current password cannot change the password", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const cookie = cookieOf(await login(a, "12345678"));
     const res = await a.handle(new Request("http://test/api/auth/password", {
@@ -147,7 +147,7 @@ describe("dashboard password", () => {
   });
 
   test("rejects passwords shorter than 8 characters", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     const cookie = cookieOf(await login(a, "12345678"));
     const res = await a.handle(new Request("http://test/api/auth/password", {
@@ -159,7 +159,7 @@ describe("dashboard password", () => {
   });
 
   test("throttles repeated failed logins", async () => {
-    const db = freshDb();
+    const db = await freshDb();
     const a = app(db);
     for (let i = 0; i < 5; i += 1) expect((await login(a, "wrong")).status).toBe(401);
     expect((await login(a, "12345678")).status).toBe(429);

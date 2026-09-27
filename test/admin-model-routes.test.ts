@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../src/store/sql";
 import { freshDb } from "./helpers";
 import { providerRoutes } from "../src/admin/providers";
 import { comboRoutes } from "../src/admin/routes";
@@ -19,13 +19,13 @@ function adminApp(plugin: ReturnType<typeof providerRoutes> | ReturnType<typeof 
   }).use(plugin);
 }
 
-beforeEach(() => { db = freshDb(); });
+beforeEach(async () => { db = await freshDb(); });
 
 describe("model admin routes", () => {
   test("rejects Copilot quota requests for non-Copilot accounts", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "p", type: "openai" });
-    const account = repo.addAccount(provider.id, { label: "account", apiKey: "test" });
+    const provider = await repo.create({ name: "p", type: "openai" });
+    const account = await repo.addAccount(provider.id, { label: "account", apiKey: "test" });
     const app = adminApp(providerRoutes(db));
     const response = await app.handle(new Request(`http://test/api/providers/accounts/${account.id}/copilot-quota`));
     expect(response.status).toBe(400);
@@ -34,7 +34,7 @@ describe("model admin routes", () => {
 
   test("imports Codex OAuth JSON into a codex provider", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "codex", type: "codex" });
+    const provider = await repo.create({ name: "codex", type: "codex" });
     const app = adminApp(providerRoutes(db));
     const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
       method: "POST",
@@ -53,7 +53,7 @@ describe("model admin routes", () => {
     expect(body.label).toBe("codex@example.com");
     expect(body.api_key).not.toBe("access-token");
     expect(body.refresh_token).toBeNull();
-    const account = repo.listAccounts(provider.id)[0]!;
+    const account = (await repo.listAccounts(provider.id))[0]!;
     expect(account.auth_kind).toBe("oauth");
     expect(account.api_key).toBe("access-token");
     expect(account.refresh_token).toBe("refresh-token");
@@ -63,7 +63,7 @@ describe("model admin routes", () => {
 
   test("imports Codex OAuth JSON arrays and skips duplicate tokens", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "codex", type: "codex" });
+    const provider = await repo.create({ name: "codex", type: "codex" });
     const app = adminApp(providerRoutes(db));
     const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
       method: "POST",
@@ -76,12 +76,12 @@ describe("model admin routes", () => {
     }));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ added: 2, skipped: 1 });
-    expect(repo.listAccounts(provider.id)).toHaveLength(2);
+    expect(await repo.listAccounts(provider.id)).toHaveLength(2);
   });
 
   test("rejects Codex import on non-Codex providers", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "openai", type: "openai" });
+    const provider = await repo.create({ name: "openai", type: "openai" });
     const app = adminApp(providerRoutes(db));
     const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
       method: "POST",
@@ -94,8 +94,8 @@ describe("model admin routes", () => {
 
   test("lists provider models and validates updates", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "p", type: "openai" });
-    repo.upsertModel(provider.id, "vendor/model");
+    const provider = await repo.create({ name: "p", type: "openai" });
+    await repo.upsertModel(provider.id, "vendor/model");
     const app = adminApp(providerRoutes(db));
     const list = await app.handle(new Request(`http://test/api/providers/${provider.id}/models`));
     expect(list.status).toBe(200);
@@ -108,7 +108,7 @@ describe("model admin routes", () => {
 
   test("updates provider account strategy", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "strategy", type: "openai" });
+    const provider = await repo.create({ name: "strategy", type: "openai" });
     const app = adminApp(providerRoutes(db));
     const response = await app.handle(new Request(`http://test/api/providers/${provider.id}`, {
       method: "PATCH",
@@ -121,10 +121,10 @@ describe("model admin routes", () => {
 
   test("sync retries a healthy account with an invalid model catalog", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = repo.create({ name: "catalog", type: "custom", baseUrl: "https://catalog.test/v1" });
+    const provider = await repo.create({ name: "catalog", type: "custom", baseUrl: "https://catalog.test/v1" });
     for (const label of ["first", "second"]) {
-      const account = repo.addAccount(provider.id, { label, apiKey: label });
-      repo.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+      const account = await repo.addAccount(provider.id, { label, apiKey: label });
+      await repo.updateAccount(account.id, { lastWarmupStatus: "healthy" });
     }
     const app = adminApp(providerRoutes(db));
     const originalFetch = globalThis.fetch;
@@ -149,15 +149,15 @@ describe("model admin routes", () => {
 describe("combo diagnostic route", () => {
   test("probes every resolved candidate and continues after failure", async () => {
     const providers = new ProvidersRepo(db);
-    const first = providers.create({ name: "first", type: "openai", baseUrl: "https://first.test/v1" });
-    const second = providers.create({ name: "second", type: "openai", baseUrl: "https://second.test/v1" });
+    const first = await providers.create({ name: "first", type: "openai", baseUrl: "https://first.test/v1" });
+    const second = await providers.create({ name: "second", type: "openai", baseUrl: "https://second.test/v1" });
     for (const provider of [first, second]) {
-      const account = providers.addAccount(provider.id, { label: `${provider.name}-account`, apiKey: "test" });
-      providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
-      providers.upsertModel(provider.id, "m");
+      const account = await providers.addAccount(provider.id, { label: `${provider.name}-account`, apiKey: "test" });
+      await providers.updateAccount(account.id, { lastWarmupStatus: "healthy" });
+      await providers.upsertModel(provider.id, "m");
     }
     const combos = new CombosRepo(db);
-    const combo = combos.create("fallback", ["first/m", "second/m"]);
+    const combo = await combos.create("fallback", ["first/m", "second/m"]);
     const app = adminApp(comboRoutes(db));
     const originalFetch = globalThis.fetch;
     const calls: Array<{ url: string; body: { model: string; max_tokens: number; messages: Array<{ content: string }> } }> = [];

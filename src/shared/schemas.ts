@@ -94,6 +94,8 @@ export const chatCompletionsSchema = z.object({
     enabled: z.boolean().optional(),
     effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
     budget_tokens: z.number().int().min(0).max(2_000_000).optional(),
+    summary: z.enum(["concise", "detailed"]).optional(),
+    include: z.array(z.string().min(1).max(64)).max(16).optional(),
   }).optional(),
 }).passthrough();
 
@@ -128,7 +130,12 @@ export const responsesCreateSchema = z.object({
     strict: z.boolean().optional(),
   })).optional(),
   tool_choice: z.unknown().optional(),
-  reasoning: z.object({ effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional() }).optional(),
+  reasoning: z.object({
+    enabled: z.boolean().optional(),
+    effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
+    summary: z.enum(["concise", "detailed"]).optional(),
+    include: z.array(z.string().min(1).max(64)).max(16).optional(),
+  }).optional(),
   store: z.literal(false).nullable().optional(),
   background: z.literal(false).nullable().optional(),
   previous_response_id: z.null().optional(),
@@ -143,7 +150,7 @@ export const responsesCreateSchema = z.object({
   safety_identifier: z.string().optional(),
   service_tier: z.string().optional(),
   truncation: z.literal("disabled").optional(),
-}).strict().superRefine((value, ctx) => {
+}).passthrough().superRefine((value, ctx) => {
   void value;
 });
 
@@ -167,6 +174,10 @@ export const anthropicMessagesSchema = z.object({
     input_schema: z.record(z.unknown()).optional(),
   }).passthrough()).optional(),
   tool_choice: z.unknown().optional(),
+  thinking: z.object({
+    type: z.enum(["enabled", "adaptive"]),
+    budget_tokens: z.number().int().min(0).max(2_000_000).optional(),
+  }).optional(),
 }).passthrough();
 
 // ── Admin payloads ──
@@ -346,6 +357,16 @@ export const settingsUpdateSchema = z.object({
     enabled: z.boolean(),
     strength: z.enum(["light", "moderate", "extreme"]),
   }).optional(),
+  reasoning: z.object({
+    default_enabled: z.boolean().optional(),
+    default_effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
+    max_budget_tokens: z.number().int().min(0).max(2_000_000).optional(),
+    provider_overrides: z.record(z.string().min(1).max(64), z.object({
+      enabled: z.boolean().optional(),
+      effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
+      budget_tokens: z.number().int().min(0).max(2_000_000).optional(),
+    }).strict()).optional(),
+  }).optional(),
   log_retention_days: z.number().int().min(1).max(365).optional(),
   session_remember_default: z.boolean().optional(),
   network_binding: z.object({
@@ -380,6 +401,75 @@ export const settingsUpdateSchema = z.object({
     otp_max_retries: z.number().int().min(1).max(60),
   }).optional(),
 });
+
+// ── Music library ──
+
+export const musicSourceTypeSchema = z.enum(["file", "url"]);
+
+const musicTrackBase = {
+  title: z.string().trim().min(1).max(256),
+  artist: z.string().trim().max(256).nullable().optional(),
+  album: z.string().trim().max(256).nullable().optional(),
+  duration_sec: z.number().int().min(0).max(86_400).nullable().optional(),
+  mime_type: z.string().trim().max(128).nullable().optional(),
+  size_bytes: z.number().int().min(0).max(8_589_934_592).nullable().optional(),
+  thumbnail_url: z.string().url().max(2048).nullable().optional(),
+};
+
+export const musicTrackCreateSchema = z
+  .object({
+    ...musicTrackBase,
+    source_type: musicSourceTypeSchema,
+    storage_path: z.string().max(1024).nullable().optional(),
+    source_url: z.string().url().max(2048).nullable().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.source_type === "url" && !value.source_url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["source_url"], message: "source_url is required when source_type is 'url'" });
+    }
+    if (value.source_type === "file" && !value.storage_path) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["storage_path"], message: "storage_path is required when source_type is 'file'" });
+    }
+  });
+
+export const musicTrackUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(256).optional(),
+  artist: z.string().trim().max(256).nullable().optional(),
+  album: z.string().trim().max(256).nullable().optional(),
+  duration_sec: z.number().int().min(0).max(86_400).nullable().optional(),
+  thumbnail_url: z.string().url().max(2048).nullable().optional(),
+});
+
+export const musicPlaylistCreateSchema = z.object({
+  name: z.string().trim().min(1).max(128),
+  description: z.string().trim().max(2048).nullable().optional(),
+  tracks: z.array(z.object({ track_id: z.string().min(1).max(64) })).max(2000).optional(),
+});
+
+export const musicPlaylistUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(128).optional(),
+  description: z.string().trim().max(2048).nullable().optional(),
+  tracks: z.array(z.object({ track_id: z.string().min(1).max(64) })).max(2000).optional(),
+});
+
+// ── YouTube / Invidious ──
+
+export const youtubeSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(120),
+  page: z.coerce.number().int().min(1).max(10).optional(),
+});
+
+export const youtubeImportSchema = z
+  .object({
+    video_id: z.string().trim().min(11).max(2048).optional(),
+    url: z.string().url().max(2048).optional(),
+    playlist_id: z.string().min(1).max(64).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.video_id && !value.url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "video_id or url is required" });
+    }
+  });
 
 export const passwordChangeSchema = z.object({
   current: z.string(),

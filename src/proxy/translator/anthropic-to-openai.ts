@@ -19,7 +19,7 @@ export interface AnthropicRequest {
   tools?: Array<Record<string, unknown>>;
   tool_choice?: unknown;
   /** Anthropic extended-thinking configuration (only present when reasoning is enabled). */
-  thinking?: { type: "enabled"; budget_tokens: number };
+  thinking?: { type: "enabled"; budget_tokens: number } | { type: "adaptive"; budget_tokens?: number };
 }
 
 function contentToAnthropic(content: MessageContent): string | Array<Record<string, unknown>> {
@@ -116,14 +116,20 @@ export function openaiToAnthropicRequest(req: CanonicalRequest, modelId: string)
     }
   }
 
-  // Anthropic extended thinking: budget defaults to a third of max_tokens (or
-  // 4 096 tokens), and we leave temperature unset since Anthropic requires
-  // temperature to be omitted when thinking is on.
-  if (req.reasoning?.enabled !== false && req.reasoning) {
-    const budget = req.reasoning.budget_tokens
-      ?? Math.min(8192, Math.max(1024, Math.floor((req.max_tokens ?? 4096) / 3)));
-    if (budget > 0) {
+// Anthropic extended thinking: budget defaults to a third of max_tokens (or
+// 4 096 tokens), and we leave temperature unset since Anthropic requires
+// temperature to be omitted when thinking is on. `adaptive` lets Claude 4.7
+// decide the budget itself; we only forward the type and drop budget_tokens.
+if (req.reasoning && req.reasoning.enabled !== false) {
+    const thinkingType = req.reasoning.thinking?.type ?? "enabled";
+    const explicitBudget = req.reasoning.thinking?.budget_tokens ?? req.reasoning.budget_tokens;
+    const budget = explicitBudget ?? Math.min(8192, Math.max(1024, Math.floor((req.max_tokens ?? 4096) / 3)));
+    if (thinkingType === "adaptive") {
+      out.thinking = { type: "adaptive" };
+    } else if (budget > 0) {
       out.thinking = { type: "enabled", budget_tokens: budget };
+    }
+    if (out.thinking) {
       delete out.temperature;
       delete out.top_p;
     }
@@ -225,6 +231,18 @@ export function anthropicToOpenaiRequest(body: Record<string, unknown>): Canonic
     else if (tc.type === "auto") out.tool_choice = "auto";
     else if (tc.type === "tool") out.tool_choice = { type: "function", function: { name: tc.name } };
     else out.tool_choice = tc.type as string;
+  }
+  // Anthropic `thinking` block → canonical `reasoning`. The executor (clamp +
+  // translation layer) handles Anthropic-specific concerns; keeping this in
+  // canonical form means streaming, response translation, and the redactor all
+  // see the same value as a client that sent `reasoning` directly.
+  const thinking = body.thinking as { type?: string; budget_tokens?: number } | undefined;
+  if (thinking && (thinking.type === "enabled" || thinking.type === "adaptive")) {
+    out.reasoning = {
+      enabled: true,
+      ...(typeof thinking.budget_tokens === "number" ? { budget_tokens: thinking.budget_tokens } : {}),
+      thinking: { type: thinking.type as "enabled" | "adaptive", ...(typeof thinking.budget_tokens === "number" ? { budget_tokens: thinking.budget_tokens } : {}) },
+    };
   }
   return out;
 }

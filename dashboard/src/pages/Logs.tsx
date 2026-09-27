@@ -398,6 +398,9 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             <p className="mt-2 font-mono text-sm text-text-primary" title={l.requested_model}>{l.requested_model}</p>
             <p className="mt-1 text-xs text-text-muted">{l.provider ?? "—"} · upstream {l.model ?? "—"}{l.account_label ? ` · account ${l.account_label}` : ""}</p>
             {l.reasoning_effort && <Badge tone={l.reasoning_effort === "off" ? "muted" : "accent"}>Thinking requested: {l.reasoning_effort}</Badge>}
+            {l.reasoning_tokens != null && l.reasoning_tokens > 0 && (
+              <Badge tone="muted" title="Reasoning tokens reported by the upstream.">Reasoning tokens: {fmtNum(l.reasoning_tokens)}</Badge>
+            )}
           </div>
           <div className="grid gap-1 text-xs text-text-muted">
             <span>Tokens: <span className="text-text-primary">{fmtNum(l.input_tokens)} → {fmtNum(l.output_tokens)}</span></span>
@@ -426,6 +429,7 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             {l.credit_usage != null && <Detail k={l.credit_source === "estimated" ? "Credit used (estimated)" : "Credit used (reported by provider)"} v={fmtNum(l.credit_usage)} />}
             <Detail k="Tokens saved" v={fmtNum(l.tokens_saved)} />
             <Detail k="Thinking requested" v={l.reasoning_effort ?? "Not requested"} />
+            <Detail k="Reasoning tokens" v={l.reasoning_tokens != null ? fmtNum(l.reasoning_tokens) : "Provider does not report"} />
             <Detail k="Latency" v={fmtMs(l.latency_ms)} />
             {l.error && <Detail k="Error" v={l.error} />}
           </div>

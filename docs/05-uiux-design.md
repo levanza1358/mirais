@@ -139,8 +139,9 @@ Tabbed page (`General · Token Saver · Security · Data · About`):
 3. **Model sync** (General tab) — choose which models a provider sync keeps (*Curated* flagship families or *All chat models*) and the **Prune removed models** switch. Prune is off by default: syncing only adds or updates models, so a partial upstream catalog can never wipe the local list. When enabled, synced models that disappear from the upstream catalog (or no longer pass the filter) are removed on the next sync; manually added models are never pruned.
 3. **Dashboard password** (General tab) — change the password (min 8 characters), set how many hours a login lasts before the password is asked again, turn the password off entirely, or sign out. Enabled by default with `12345678`; changing or turning it off signs out every other session. Login offers "remember this browser for 30 days". It guards the dashboard only — `/v1/*` gateway traffic is unaffected.
 4. **Start on boot** (General tab) — a switch that enables or disables automatic startup: the Windows Startup folder (starts after login) or a systemd unit (starts at boot without a login). The switch is disabled with an explanatory note when the server cannot write the unit (no root / no passwordless sudo).
-4. **Data** — DB size, retention days slider, "backup now", export/import config JSON, danger zone: wipe logs / factory reset (type-to-confirm).
-5. **About** — version, uptime, links to docs, license.
+4. **Reasoning** — global defaults (`default_enabled`, `default_effort`, `max_budget_tokens`), per-provider overrides (force on/off, override effort, override budget), and a read-only matrix of which fields each upstream accepts. The Reasoning page (`/dashboard/reasoning`) hosts the long-form guide served from `docs/09-reasoning.md`.
+5. **Data** — DB size, retention days slider, "backup now", export/import config JSON, danger zone: wipe logs / factory reset (type-to-confirm).
+6. **About** — version, uptime, links to docs, license.
 
 ## 4. UX Principles & States
 

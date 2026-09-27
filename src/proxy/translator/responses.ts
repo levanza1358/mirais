@@ -47,13 +47,14 @@ export function responsesRequestToCanonical(input: ResponsesCreateRequest): Cano
 }
 
 function usageToResponses(usage?: Usage | null) {
-  return usage ? {
+  if (!usage) return undefined;
+  return {
     input_tokens: usage.prompt_tokens,
-    input_tokens_details: { cached_tokens: 0 },
+    input_tokens_details: { cached_tokens: usage.cached_tokens ?? 0 },
     output_tokens: usage.completion_tokens,
-    output_tokens_details: { reasoning_tokens: 0 },
+    output_tokens_details: { reasoning_tokens: usage.reasoning_tokens ?? 0 },
     total_tokens: usage.total_tokens,
-  } : undefined;
+  };
 }
 
 export function canonicalResponseToResponses(response: CanonicalResponse, requestedModel: string) {
@@ -90,6 +91,7 @@ export function chatSseToResponses(source: ReadableStream<Uint8Array>, requested
   let reader: ReturnType<typeof source.getReader> | null = null;
   let sequence = 0;
   let message: { id: string; outputIndex: number } | null = null;
+  let reasoning: { id: string; outputIndex: number; text: string } | null = null;
   const tools = new Map<number, { id: string; callId: string; name: string; arguments: string; outputIndex: number }>();
   const output: Array<Record<string, unknown>> = [];
   const encoder = new TextEncoder();
@@ -111,14 +113,26 @@ export function chatSseToResponses(source: ReadableStream<Uint8Array>, requested
         controller.enqueue(encodeEvent("response.content_part.added", { item_id: message.id, output_index: message.outputIndex, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }));
         return message;
       };
+      const ensureReasoning = () => {
+        if (reasoning) return reasoning;
+        reasoning = { id: `rs_${ulid()}`, outputIndex: output.length, text: "" };
+        controller.enqueue(encodeEvent("response.output_item.added", { output_index: reasoning.outputIndex, item: { id: reasoning.id, type: "reasoning", summary: [] } }));
+        return reasoning;
+      };
       const consume = (parsed: { data: string }) => {
         if (parsed.data === "[DONE]") return;
         let chunk: Record<string, unknown>;
         try { chunk = JSON.parse(parsed.data) as Record<string, unknown>; } catch { return; }
         const u = normalizeUsage(chunk.usage);
         if (u) usage = u;
-        const choices = chunk.choices as Array<{ delta?: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> | undefined;
+        const choices = chunk.choices as Array<{ delta?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> } }> | undefined;
         const delta = choices?.[0]?.delta;
+        const reasoningDelta = (delta as { reasoning_content?: string } | undefined)?.reasoning_content;
+        if (reasoningDelta) {
+          const item = ensureReasoning();
+          item.text += reasoningDelta;
+          controller.enqueue(encodeEvent("response.reasoning_text.delta", { item_id: item.id, output_index: item.outputIndex, delta: reasoningDelta }));
+        }
         if (delta?.content) {
           const item = ensureMessage();
           text += delta.content;
@@ -147,6 +161,12 @@ export function chatSseToResponses(source: ReadableStream<Uint8Array>, requested
         }
         for (const parsed of parser.feed(decoder.decode())) consume(parsed);
         for (const parsed of parser.finish()) consume(parsed);
+        if (reasoning) {
+          const item = { id: reasoning.id, type: "reasoning", summary: [{ type: "summary_text", text: reasoning.text }] };
+          output[reasoning.outputIndex] = item;
+          controller.enqueue(encodeEvent("response.reasoning_text.done", { item_id: reasoning.id, output_index: reasoning.outputIndex, text: reasoning.text }));
+          controller.enqueue(encodeEvent("response.output_item.done", { output_index: reasoning.outputIndex, item }));
+        }
         if (message) {
           const part = { type: "output_text", text, annotations: [] };
           const item = { id: message.id, type: "message", status: "completed", role: "assistant", content: [part] };

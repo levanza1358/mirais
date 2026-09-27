@@ -68,13 +68,13 @@ export function isPermanentRefreshFailure(status: number, body?: string | null):
  * skipped by `Router.pickAccounts` until `reauth_required` is cleared, which
  * `ProvidersRepo.updateAccountOAuth` does whenever fresh tokens are stored.
  */
-export function markReauthRequired(
+export async function markReauthRequired(
   repo: ProvidersRepo,
   account: ProviderAccount,
   reason: string,
-): GatewayError {
+): Promise<GatewayError> {
   try {
-    repo.updateAccount(account.id, {
+    await repo.updateAccount(account.id, {
       reauthRequired: true,
       reauthReason: reason.slice(0, 300),
       lastWarmupStatus: "failing",

@@ -20,6 +20,7 @@ export class AnthropicToOpenAIStreamTranslator {
   private toolBlocks: Array<{ id: string; name: string }> = [];
   private usage: Usage | null = null;
   private finishReason: string | null = null;
+  private reasoningOpen = false;
 
   constructor(requestedModel: string) {
     this.model = requestedModel;
@@ -67,6 +68,10 @@ export class AnthropicToOpenAIStreamTranslator {
               }],
             }, null),
           );
+        } else if (block.type === "thinking") {
+          // Open up a reasoning channel; clients that ignore `reasoning_content`
+          // will simply skip these deltas while still receiving the visible text.
+          this.reasoningOpen = true;
         }
         break;
       }
@@ -80,6 +85,17 @@ export class AnthropicToOpenAIStreamTranslator {
               tool_calls: [{ index: Math.max(this.toolIndex, 0), function: { arguments: delta.partial_json as string } }],
             }, null),
           );
+        } else if (delta.type === "thinking_delta" && this.reasoningOpen) {
+          out.push(this.chunk({ reasoning_content: delta.thinking as string }, null));
+        }
+        // signature_delta: kept client-side if it ever matters; we drop it for
+        // now since OpenAI's Chat Completions dialect doesn't expose a slot.
+        break;
+      }
+      case "content_block_stop": {
+        if (this.reasoningOpen && parsed.index !== undefined) {
+          // End of the reasoning block; further deltas go back to content/tool_use.
+          this.reasoningOpen = false;
         }
         break;
       }
@@ -107,7 +123,7 @@ export class AnthropicToOpenAIStreamTranslator {
         break;
       }
       default:
-        // content_block_stop, ping → ignore
+        // ping → ignore
         break;
     }
     return out;
@@ -140,6 +156,8 @@ export class OpenAIToAnthropicStreamTranslator {
   private textBlockOpen = false;
   private toolBlockIndex = 0;
   private openToolBlocks = new Map<number, { id: string; started: boolean }>();
+  private reasoningBlockIndex = 1;
+  private reasoningBlockOpen = false;
   private usage: Usage | null = null;
   private stopReason = "end_turn";
 
@@ -196,8 +214,33 @@ export class OpenAIToAnthropicStreamTranslator {
       this.stopReason = finish === "length" ? "max_tokens" : finish === "tool_calls" ? "tool_use" : "end_turn";
     }
 
+    const reasoningContent = delta.reasoning_content as string | undefined;
+    if (reasoningContent) {
+      if (!this.reasoningBlockOpen) {
+        if (this.textBlockOpen) {
+          out.push(this.sse("content_block_stop", { type: "content_block_stop", index: this.textBlockIndex }));
+          this.textBlockOpen = false;
+        }
+        out.push(this.sse("content_block_start", {
+          type: "content_block_start",
+          index: this.reasoningBlockIndex,
+          content_block: { type: "thinking", thinking: "" },
+        }));
+        this.reasoningBlockOpen = true;
+      }
+      out.push(this.sse("content_block_delta", {
+        type: "content_block_delta",
+        index: this.reasoningBlockIndex,
+        delta: { type: "thinking_delta", thinking: reasoningContent },
+      }));
+    }
+
     const content = delta.content as string | undefined;
     if (content) {
+      if (this.reasoningBlockOpen) {
+        out.push(this.sse("content_block_stop", { type: "content_block_stop", index: this.reasoningBlockIndex }));
+        this.reasoningBlockOpen = false;
+      }
       if (!this.textBlockOpen) {
         out.push(this.sse("content_block_start", {
           type: "content_block_start",
@@ -264,6 +307,10 @@ export class OpenAIToAnthropicStreamTranslator {
         },
       }));
       this.sentStart = true;
+    }
+    if (this.reasoningBlockOpen) {
+      out.push(this.sse("content_block_stop", { type: "content_block_stop", index: this.reasoningBlockIndex }));
+      this.reasoningBlockOpen = false;
     }
     if (this.textBlockOpen) {
       out.push(this.sse("content_block_stop", { type: "content_block_stop", index: this.textBlockIndex }));

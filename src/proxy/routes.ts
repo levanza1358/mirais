@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../store/sql";
 import { config } from "../config";
 import { authenticateGatewayKey, authorizeModel } from "../auth";
 import { checkRateLimit, acquireSlot, releaseSlot } from "../ratelimit";
@@ -19,7 +19,7 @@ import { ProvidersRepo } from "../store/repos/providers";
 import { AliasesRepo, CombosRepo } from "../store/repos/routing";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
-import type { CanonicalRequest, CanonicalResponse, RoutingPolicy, Usage } from "../shared/types";
+import type { CanonicalRequest, CanonicalResponse, RoutingPolicy, Usage, ReasoningEffort } from "../shared/types";
 import { log } from "../utils/logger";
 import { canonicalResponseToResponses, chatSseToResponses, responsesRequestToCanonical } from "./translator/responses";
 import { ulid } from "../utils/id";
@@ -32,12 +32,12 @@ export function v1Routes(db: Database) {
   const settings = new SettingsRepo(db);
   const app = new Elysia({ prefix: "/v1" });
 
-  const tokenSaverConfig = (request: Request, providerName?: string): TokenSaverConfig => {
-    const configured = settings.getJson<TokenSaverConfig>("token_saver") ?? {
+  const tokenSaverConfig = async (request: Request, providerName?: string): Promise<TokenSaverConfig> => {
+    const configured = await settings.getJson<TokenSaverConfig>("token_saver") ?? {
       enabled: config.tokenSaverDefault,
       rules: { gitDiff: true, grep: true, ls: true, longOutputMaxLines: 200 },
     };
-    const allowlist = settings.getJson<string[] | null>("token_saver_providers") ?? null;
+    const allowlist = await settings.getJson<string[] | null>("token_saver_providers") ?? null;
     // Per-provider opt-out: when an allowlist is set, only providers in the list
     // get token saver; everything else runs raw. `null` = apply to all providers.
     const providerEnabled = allowlist === null || (providerName != null && allowlist.includes(providerName));
@@ -48,12 +48,12 @@ export function v1Routes(db: Database) {
     return final;
   };
 
-  const headroomConfig = (): HeadroomConfig => {
-    return settings.getJson<HeadroomConfig>("headroom") ?? { enabled: false, keepRecent: 10, summarize: true, maxChars: 100_000 };
+  const headroomConfig = async (): Promise<HeadroomConfig> => {
+    return await settings.getJson<HeadroomConfig>("headroom") ?? { enabled: false, keepRecent: 10, summarize: true, maxChars: 100_000 };
   };
 
-  const ponytailConfig = (): PonytailConfig => {
-    return settings.getJson<PonytailConfig>("ponytail") ?? { enabled: false, strength: "moderate" };
+  const ponytailConfig = async (): Promise<PonytailConfig> => {
+    return await settings.getJson<PonytailConfig>("ponytail") ?? { enabled: false, strength: "moderate" };
   };
 
   /**
@@ -84,51 +84,46 @@ export function v1Routes(db: Database) {
     }
   };
 
-  app.get("/models", ({ request }) => {
-    const key = authenticateGatewayKey(db, request.headers.get("authorization"));
+  app.get("/models", async ({ request }) => {
+    const key = await authenticateGatewayKey(db, request.headers.get("authorization"));
     const providers = new ProvidersRepo(db);
-    const policy = normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
-    const models = providers.listAllModels().filter((m) => {
-      const provider = providers.get(m.provider_id);
+    const policy = normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const providersById = new Map((await providers.list()).map((provider) => [provider.id, provider]));
+    const models: Array<{ id: string; object: string; created: number; owned_by: string }> = [];
+    for (const m of await providers.listAllModels()) {
+      const provider = providersById.get(m.provider_id);
       const exposedId = provider ? `${provider.name}/${m.model_id}` : m.model_id;
-      try { authorizeModel(key, exposedId); } catch { return false; }
-      return Boolean(m.enabled && provider?.enabled && !policy.denyProviders.includes(provider.name) && !policy.denyModels.includes(m.model_id));
-    });
-    const aliases = new AliasesRepo(db).list();
-    const combos = new CombosRepo(db).list();
-    const visibleVirtualModel = (id: string): boolean => {
+      try { authorizeModel(key, exposedId); } catch { continue; }
+      if (m.enabled && provider?.enabled && !policy.denyProviders.includes(provider.name) && !policy.denyModels.includes(m.model_id)) {
+        models.push({ id: exposedId, object: "model", created: 0, owned_by: provider.name });
+      }
+    }
+    const aliases = await new AliasesRepo(db).list();
+    const combos = await new CombosRepo(db).list();
+    const visibleVirtualModel = async (id: string): Promise<boolean> => {
       try {
         authorizeModel(key, id);
-        return router.resolveWithPolicy(id, policy).candidates.length > 0;
+        return (await router.resolveWithPolicy(id, policy)).candidates.length > 0;
       } catch {
         return false;
       }
     };
+    const aliasModels = (await Promise.all(aliases.map(async (alias) =>
+      await visibleVirtualModel(alias.alias) ? { id: alias.alias, object: "model", created: 0, owned_by: "mirais-alias" } : null,
+    ))).filter((model) => model !== null);
+    const comboModels = (await Promise.all(combos.map(async (combo) =>
+      await visibleVirtualModel(`combo:${combo.name}`) ? { id: `combo:${combo.name}`, object: "model", created: 0, owned_by: "mirais-combo" } : null,
+    ))).filter((model) => model !== null);
     return {
       object: "list",
-      data: [
-        ...models.map((m) => {
-          const pname = providers.get(m.provider_id)?.name ?? "unknown";
-          // Surface the full provider/model id so OpenAI-compatible clients
-          // can pass it straight back to /v1/chat/completions without
-          // knowing about any internal aliasing.
-          return {
-            id: `${pname}/${m.model_id}`,
-            object: "model",
-            created: 0,
-            owned_by: pname,
-          };
-        }),
-        ...aliases.filter((a) => visibleVirtualModel(a.alias)).map((a) => ({ id: a.alias, object: "model", created: 0, owned_by: "mirais-alias" })),
-        ...combos.filter((c) => visibleVirtualModel(`combo:${c.name}`)).map((c) => ({ id: `combo:${c.name}`, object: "model", created: 0, owned_by: "mirais-combo" })),
-      ],
+      data: [...models, ...aliasModels, ...comboModels],
     };
   });
 
   app.post("/chat/completions", async ({ request, set }) => {
     set.headers["x-request-id"] = `req_${ulid()}`;
     const started = Date.now();
-    const key = authenticateGatewayKey(db, request.headers.get("authorization"));
+    const key = await authenticateGatewayKey(db, request.headers.get("authorization"));
     const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
 
     const rawBody = await readJsonBody(request);
@@ -140,10 +135,10 @@ export function v1Routes(db: Database) {
     if (req.max_completion_tokens && !req.max_tokens) req.max_tokens = req.max_completion_tokens;
 
     authorizeModel(key, req.model);
-    const rl = checkRateLimit(db, key);
+    const rl = await checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
       if (key.token_budget) {
-        const used = new LogsRepo(db).keyUsage(key.id).tokens_total;
+        const used = (await new LogsRepo(db).keyUsage(key.id)).tokens_total;
         const message = used >= key.token_budget ? "Your token limit has been reached for this API key" : "Rate limit exceeded";
         if (used >= key.token_budget) throw new GatewayError(429, "rate_limit_error", message, "token_limit_reached");
       }
@@ -154,19 +149,20 @@ export function v1Routes(db: Database) {
     }
 
     const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
-      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
-      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
-    const route = router.resolveWithPolicy(req.model, routingPolicy);
+      ? { ...normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = await router.resolveWithPolicy(req.model, routingPolicy);
+    req = await applyReasoningDefaults(req, route.candidates[0]?.provider.name);
 
     // token saver (RTK + Headroom + Ponytail) — scoped to the resolved provider
-    const saverCfg = tokenSaverConfig(request, route.candidates[0]?.provider.name);
-    const hCfg = headroomConfig();
-    const pCfg = ponytailConfig();
+    const saverCfg = await tokenSaverConfig(request, route.candidates[0]?.provider.name);
+    const hCfg = await headroomConfig();
+    const pCfg = await ponytailConfig();
     const saver = applyTokenSaver(req, saverCfg, hCfg, pCfg);
     req = saver.request;
 
     // terse mode (Caveman)
-    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    const terse = await settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
     if (terse?.enabled) {
       req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     }
@@ -179,7 +175,7 @@ export function v1Routes(db: Database) {
         xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
         xaiRequestId: set.headers["x-request-id"],
         allowPayloadTooLargeFallback: route.kind === "combo",
-      }, providersRepo, routingPolicy);
+      }, providersRepo, routingPolicy, (await maxBudgetTokens()) ?? undefined);
 
       if (result.kind === "stream") {
         set.headers["content-type"] = "text/event-stream; charset=utf-8";
@@ -188,14 +184,14 @@ export function v1Routes(db: Database) {
         set.headers["x-accel-buffering"] = "no";
         const tap = tapOpenAiStream(req.tools?.length ? dsmlToOpenAiStream(result.stream) : result.stream);
         Promise.all([result.usagePromise, tap.textPromise])
-          .then(([usage, text]) => {
-            logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+          .then(async ([usage, text]) => {
+            await logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, usage, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind, reasoningEffort(req));
           })
-          .catch((error: unknown) => {
+          .catch(async (error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
-            logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+            await logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "error", 502, message, started, undefined, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: summarizeResponse(null, message) }, kind, reasoningEffort(req));
           })
@@ -203,14 +199,14 @@ export function v1Routes(db: Database) {
         return tap.stream;
       }
 
-      logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
+      await logRequest(logKeyId, "/v1/chat/completions", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind, reasoningEffort(req));
       return result.response;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
       const msg = err instanceof Error ? err.message : String(err);
-      logRequest(logKeyId, "/v1/chat/completions", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+      await logRequest(logKeyId, "/v1/chat/completions", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
         undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind, reasoningEffort(req));
       throw err;
     } finally {
@@ -221,27 +217,28 @@ export function v1Routes(db: Database) {
   app.post("/responses", async ({ request, set }) => {
     set.headers["x-request-id"] = `req_${ulid()}`;
     const started = Date.now();
-    const key = authenticateGatewayKey(db, request.headers.get("authorization"));
+    const key = await authenticateGatewayKey(db, request.headers.get("authorization"));
     const rawBody = await readJsonBody(request);
     const parsed = responsesCreateSchema.safeParse(rawBody);
     if (!parsed.success) throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
     let req = responsesRequestToCanonical(parsed.data);
     authorizeModel(key, req.model);
-    const rl = checkRateLimit(db, key);
+    const rl = await checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
-      if (key.token_budget && new LogsRepo(db).keyUsage(key.id).tokens_total >= key.token_budget) throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
+      if (key.token_budget && (await new LogsRepo(db).keyUsage(key.id)).tokens_total >= key.token_budget) throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
       throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
     }
     const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
-      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
-      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
-    const route = router.resolveWithPolicy(req.model, routingPolicy);
-    const saverCfg = tokenSaverConfig(request, route.candidates[0]?.provider.name);
-    const hCfg = headroomConfig();
-    const pCfg = ponytailConfig();
+      ? { ...normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = await router.resolveWithPolicy(req.model, routingPolicy);
+    req = await applyReasoningDefaults(req, route.candidates[0]?.provider.name);
+    const saverCfg = await tokenSaverConfig(request, route.candidates[0]?.provider.name);
+    const hCfg = await headroomConfig();
+    const pCfg = await ponytailConfig();
     const saver = applyTokenSaver(req, saverCfg, hCfg, pCfg);
     req = saver.request;
-    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    const terse = await settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
     if (terse?.enabled) req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     const logKeyId = key.id === "anonymous" ? null : key.id;
     if (logKeyId) acquireSlot(logKeyId);
@@ -251,7 +248,7 @@ export function v1Routes(db: Database) {
         xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
         xaiRequestId: set.headers["x-request-id"],
         allowPayloadTooLargeFallback: route.kind === "combo",
-      }, providersRepo, routingPolicy);
+      }, providersRepo, routingPolicy, (await maxBudgetTokens()) ?? undefined);
       if (result.kind === "stream") {
         const tap = tapOpenAiStream(result.stream);
         const translated = chatSseToResponses(tap.stream, req.model);
@@ -259,28 +256,28 @@ export function v1Routes(db: Database) {
         set.headers["cache-control"] = "no-cache";
         set.headers["x-accel-buffering"] = "no";
         Promise.all([result.usagePromise, translated.usagePromise, tap.textPromise])
-          .then(([upstreamUsage, translatedUsage, text]) => {
-            logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
+          .then(async ([upstreamUsage, translatedUsage, text]) => {
+            await logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, translatedUsage ?? upstreamUsage, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, "request", reasoningEffort(req));
           })
-          .catch((error: unknown) => {
+          .catch(async (error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
-            logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
+            await logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "error", 502, message, started, undefined, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: summarizeResponse(null, message) }, "request", reasoningEffort(req));
           })
           .finally(() => { if (logKeyId) releaseSlot(logKeyId); });
         return translated.stream;
       }
-      logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
+      await logRequest(logKeyId, "/v1/responses", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, "request", reasoningEffort(req));
       return canonicalResponseToResponses(result.response, req.model);
     } catch (error) {
       const status = error instanceof GatewayError ? error.status : 500;
       const message = error instanceof Error ? error.message : String(error);
-      logRequest(logKeyId, "/v1/responses", req.model, null, null, 1, status < 500 ? "client_error" : "error", status,
+      await logRequest(logKeyId, "/v1/responses", req.model, null, null, 1, status < 500 ? "client_error" : "error", status,
         message, started, undefined, 0, undefined,
         { request: summarizeRequest(req), response: summarizeResponse(null, message) }, "request", reasoningEffort(req));
       throw error;
@@ -295,7 +292,7 @@ export function v1Routes(db: Database) {
     set.headers["x-request-id"] = requestId;
     const started = Date.now();
     const anthropicKey = request.headers.get("x-api-key");
-    const key = authenticateGatewayKey(db, request.headers.get("authorization") ?? (anthropicKey ? `Bearer ${anthropicKey}` : null));
+    const key = await authenticateGatewayKey(db, request.headers.get("authorization") ?? (anthropicKey ? `Bearer ${anthropicKey}` : null));
     const kind: "request" | "warmup" = request.headers.get("x-mirais-warmup") === "1" ? "warmup" : "request";
 
     const rawBody = await readJsonBody(request);
@@ -307,23 +304,24 @@ export function v1Routes(db: Database) {
     let req = anthropicToOpenaiRequest(anthropicBody);
 
     authorizeModel(key, req.model);
-    const rl = checkRateLimit(db, key);
+    const rl = await checkRateLimit(db, key);
     if (rl.retryAfterSec !== undefined) {
-      if (key.token_budget && new LogsRepo(db).keyUsage(key.id).tokens_total >= key.token_budget) throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
+      if (key.token_budget && (await new LogsRepo(db).keyUsage(key.id)).tokens_total >= key.token_budget) throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
       set.status = 429;
       set.headers["retry-after"] = String(rl.retryAfterSec);
       return { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } };
     }
 
     const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
-      ? { ...normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
-      : normalizeRoutingPolicy(settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
-    const route = router.resolveWithPolicy(req.model, routingPolicy);
-    const saverCfg = tokenSaverConfig(request, route.candidates[0]?.provider.name);
+      ? { ...normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = await router.resolveWithPolicy(req.model, routingPolicy);
+    req = await applyReasoningDefaults(req, route.candidates[0]?.provider.name);
+    const saverCfg = await tokenSaverConfig(request, route.candidates[0]?.provider.name);
     const saver = applyTokenSaver(req, saverCfg);
     req = saver.request;
 
-    const terse = settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
+    const terse = await settings.getJson<{ enabled: boolean; prompt: string }>("terse_mode");
     if (terse?.enabled) {
       req = { ...req, messages: [{ role: "system", content: terse.prompt }, ...req.messages] };
     }
@@ -336,7 +334,7 @@ export function v1Routes(db: Database) {
         xaiSessionId: request.headers.get("x-mirais-session-id") ?? request.headers.get("x-grok-session-id") ?? undefined,
         xaiRequestId: requestId,
         allowPayloadTooLargeFallback: route.kind === "combo",
-      }, providersRepo, routingPolicy);
+      }, providersRepo, routingPolicy, (await maxBudgetTokens()) ?? undefined);
 
       if (result.kind === "stream") {
         // need Anthropic-shaped SSE back to client
@@ -347,9 +345,9 @@ export function v1Routes(db: Database) {
         set.headers["cache-control"] = "no-cache";
         set.headers["x-accel-buffering"] = "no";
         Promise.all([result.usagePromise, tap.textPromise])
-          .then(([, text]) => {
+          .then(async ([, text]) => {
             const u = translator.result().usage;
-            logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
+            await logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
               result.attempts.length, "success", 200, null, started, u, saver.tokensSaved, result.attempts,
               { request: summarizeRequest(req), response: text || "[stream ended without SSE events]" }, kind, reasoningEffort(req));
           })
@@ -359,14 +357,14 @@ export function v1Routes(db: Database) {
       }
 
       const anthropicResp = openaiToAnthropicResponse(result.response);
-      logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
+      await logRequest(logKeyId, "/v1/messages", req.model, result.candidate.provider.name, result.candidate.modelId,
         result.attempts.length, "success", 200, null, started, result.response.usage ?? null, saver.tokensSaved, result.attempts,
         { request: summarizeRequest(req), response: summarizeResponse(result.response, null) }, kind, reasoningEffort(req));
       return anthropicResp;
     } catch (err) {
       const status = err instanceof GatewayError ? err.status : 500;
       const msg = err instanceof Error ? err.message : String(err);
-      logRequest(logKeyId, "/v1/messages", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+      await logRequest(logKeyId, "/v1/messages", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
         undefined, 0, undefined, { request: summarizeRequest(req), response: summarizeResponse(null, msg) }, kind, reasoningEffort(req));
       if (err instanceof GatewayError) {
         set.status = err.status;
@@ -380,7 +378,7 @@ export function v1Routes(db: Database) {
 
   app.get("/health", () => ({ status: "ok", cooldowns: cooldownSnapshot() }));
 
-  function logRequest(
+  async function logRequest(
     keyId: string | null,
     endpoint: string,
     requestedModel: string,
@@ -397,7 +395,8 @@ export function v1Routes(db: Database) {
     payload?: { request?: string | null; response?: string | null },
     kind: "request" | "warmup" = "request",
     reasoningEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null = null,
-  ) {
+    reasoningTokens: number | null = null,
+  ): Promise<void> {
     try {
       const trackPayloads = config.trackPayloads;
       const storePayload = trackPayloads === "full";
@@ -412,8 +411,8 @@ export function v1Routes(db: Database) {
       // Providers that report real credit consumption win. For everything else
       // fall back to the model's configured credit_rate — clearly marked as an
       // estimate so the dashboard never presents it as an actual bill.
-      const estimated = creditUsage === null ? estimateCredits(provider, model, usage) : null;
-      logs.insert({
+      const estimated = creditUsage === null ? await estimateCredits(provider, model, usage) : null;
+      await logs.insert({
         keyId,
         endpoint,
         requestedModel,
@@ -427,6 +426,7 @@ export function v1Routes(db: Database) {
         outputTokens: usage?.completion_tokens ?? null,
         cachedTokens: usage?.cached_tokens ?? null,
         cacheWriteTokens: usage?.cache_write_tokens ?? null,
+        reasoningTokens: reasoningTokens ?? usage?.reasoning_tokens ?? null,
         creditUsage: creditUsage ?? estimated,
         creditSource: creditUsage !== null ? "upstream" : estimated !== null ? "estimated" : null,
         latencyMs: Date.now() - started,
@@ -449,19 +449,54 @@ export function v1Routes(db: Database) {
   }
 
   /**
+   * Merge the global default `reasoning` settings into the request. Per-provider
+   * overrides win over globals; an explicit `enabled === false` on the request
+   * always wins (R1.4 — never re-enable reasoning the client disabled).
+   */
+  async function applyReasoningDefaults(req: CanonicalRequest, providerName?: string): Promise<CanonicalRequest> {
+    const cfg = await settings.getJson<{
+      default_enabled?: boolean;
+      default_effort?: ReasoningEffort;
+      max_budget_tokens?: number;
+      provider_overrides?: Record<string, { enabled?: boolean; effort?: ReasoningEffort; budget_tokens?: number }>;
+    }>("reasoning");
+    if (!cfg) return req;
+    const override = providerName ? cfg.provider_overrides?.[providerName] : undefined;
+    const explicitlyDisabled = req.reasoning?.enabled === false;
+    if (explicitlyDisabled) return req;
+    const block = req.reasoning ?? {};
+    const enabled = block.enabled ?? override?.enabled ?? cfg.default_enabled ?? true;
+    const effort = block.effort ?? override?.effort ?? cfg.default_effort;
+    const overrideBudget = override?.budget_tokens;
+    const budget = block.budget_tokens ?? (overrideBudget ?? cfg.max_budget_tokens ?? undefined);
+    const next: CanonicalRequest["reasoning"] = { enabled };
+    if (effort) next.effort = effort;
+    if (budget) next.budget_tokens = budget;
+    if (block.summary) next.summary = block.summary;
+    if (block.include?.length) next.include = block.include;
+    if (block.thinking) next.thinking = block.thinking;
+    return { ...req, reasoning: next };
+  }
+
+  async function maxBudgetTokens(): Promise<number | null> {
+    const cfg = await settings.getJson<{ max_budget_tokens?: number }>("reasoning");
+    return cfg?.max_budget_tokens ?? null;
+  }
+
+  /**
    * Estimate credit consumption from the model's configured `credit_rate`
    * (credits per 1,000 tokens). Returns null when no rate is configured — we
    * never invent a number.
    */
-  function estimateCredits(
+  async function estimateCredits(
     provider: string | null,
     model: string | null,
     usage?: { prompt_tokens: number; completion_tokens: number } | null,
-  ): number | null {
+  ): Promise<number | null> {
     if (!provider || !model || !usage) return null;
-    const providerRow = providersRepo.getByName(provider);
+    const providerRow = await providersRepo.getByName(provider);
     if (!providerRow) return null;
-    const rate = providersRepo.getProviderModel(providerRow.id, model)?.credit_rate;
+    const rate = (await providersRepo.getProviderModel(providerRow.id, model))?.credit_rate;
     if (rate == null || rate <= 0) return null;
     return ((usage.prompt_tokens + usage.completion_tokens) / 1000) * rate;
   }
@@ -496,9 +531,11 @@ export function v1Routes(db: Database) {
 
   function summarizeRequest(r: CanonicalRequest): string {
     // Persist a machine-readable canonical request when TRACK_PAYLOADS=full so
-    // the admin UI can offer an explicit, non-streaming replay. The stored
-    // payload remains governed by the existing seven-day body retention.
-    return JSON.stringify(r);
+    // the admin UI can offer an explicit, non-streaming replay. Reasoning is
+    // redacted: the `reasoning_effort` column captures the requested mode, and
+    // we don't want the per-request budget/effort block to leak across logs.
+    const redacted: CanonicalRequest = { ...r, reasoning: undefined };
+    return JSON.stringify(redacted);
     /*
     const parts: string[] = [];
 
@@ -554,6 +591,11 @@ export function v1Routes(db: Database) {
       parts.push(`choice[${index}] finish_reason=${choice.finish_reason ?? "null"}`);
       const text = summarizeMessageContent(choice.message.content);
       if (text) parts.push(text);
+      // `reasoning_content` is sensitive model output. The `reasoning_effort`
+      // column already tells operators whether thinking was requested; we never
+      // persist the raw trace.
+      const reasoning = (choice.message as { reasoning_content?: unknown }).reasoning_content;
+      if (reasoning) parts.push("[reasoning content omitted for privacy]");
       if (choice.message.tool_calls?.length) {
         parts.push("tool_calls:");
         for (const tc of choice.message.tool_calls) {

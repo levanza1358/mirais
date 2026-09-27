@@ -4,10 +4,10 @@
 
 | Layer | Choice | Why |
 |-------|--------|-----|
-| Runtime | **Bun ≥ 1.1** | Fast startup, native TypeScript, built-in SQLite (`bun:sqlite`), test runner, bundler. Single toolchain. Runs on Windows & Linux. |
+| Runtime | **Bun ≥ 1.1** | Fast startup, native TypeScript, built-in SQL client, test runner, bundler. Single toolchain. Runs on Windows & Linux. |
 | HTTP framework | **Elysia** | Bun-native, tiny, type-safe, plugin model, first-class SSE/stream support. |
 | Validation | **zod** | Env + request body validation with TS inference. |
-| DB | **SQLite** via `bun:sqlite` | Zero-dependency embedded DB, WAL mode, perfect for single-instance gateway. Works identically on Windows/Ubuntu. |
+| DB | **MySQL 8.4 LTS** via Bun's native `Bun.SQL` client | Portable server under `.mysql/`, InnoDB tables, connection pooling, and better performance for large request-log datasets. A legacy SQLite file can be imported automatically at startup. |
 | Dashboard | **React 18 + Vite + Tailwind CSS v4** | Fast SPA, huge ecosystem, utility-first styling, dark mode out of the box. |
 | Dashboard components | Custom + **lucide-react** icons + **recharts** (analytics charts) | No heavy UI kit; clean bespoke design, small bundle. |
 | State/data (dashboard) | **TanStack Query** | Server-state caching for admin REST API. |
@@ -140,7 +140,8 @@ mirais/
 # ── Server ──
 PORT=1463
 HOST=127.0.0.1                 # use 0.0.0.0 to expose on LAN/Tailscale
-DATA_DIR=./data                # SQLite + logs live here
+DATA_DIR=./data                # legacy import source, backups, music, and logs
+MYSQL_PORT=14631               # portable MySQL listens on loopback
 
 # ── Dashboard auth ──
 DASHBOARD_PASSWORD=change-me    # presets the initial password (default 12345678); dashboard only, never /v1/*

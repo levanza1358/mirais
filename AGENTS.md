@@ -24,7 +24,7 @@ The single source of truth is the documentation set:
 
 ## Stack (fixed — do not substitute)
 
-- **Backend:** Bun ≥ 1.1 + Elysia + zod, SQLite via `bun:sqlite` (WAL)
+- **Backend:** Bun ≥ 1.1 + Elysia + zod, MySQL 8.4 via Bun SQL
 - **Dashboard:** React 18 + Vite + Tailwind CSS v4 + TanStack Query + lucide-react + recharts
 - **No** Next.js, **no** ORMs, **no** native npm modules, **no** Redis
 

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { Database } from "bun:sqlite";
+import type { Database } from "../store/sql";
 import { Elysia } from "elysia";
 import { config } from "../config";
 import { AdminError } from "../shared/errors";
@@ -310,15 +310,15 @@ async function health(accountId: string, ensureStarted = true): Promise<{ ok: bo
   }
 }
 
-export function startCopilotSidecars(db: Database): void {
+export async function startCopilotSidecars(db: Database): Promise<void> {
   const repo = new ProvidersRepo(db);
   const tasks: Array<() => void> = [];
-  for (const provider of repo.list()) {
+  for (const provider of await repo.list()) {
     if (provider.type !== "github-copilot") continue;
-    const accounts = repo.listAccounts(provider.id);
+    const accounts = await repo.listAccounts(provider.id);
     for (const account of accounts) {
       const label = copilotResolvedLabel(account.label, copilotLoginForAccount(account.id), accounts.filter((other) => other.id !== account.id).map((other) => other.label));
-      if (label !== account.label) repo.updateAccount(account.id, { label });
+      if (label !== account.label) await repo.updateAccount(account.id, { label });
       if (account.enabled) tasks.push(() => start(account.id));
     }
   }
@@ -334,29 +334,29 @@ export async function waitCopilotSidecar(accountId: string): Promise<void> {
 export function copilotRoutes(db: Database) {
   const repo = new ProvidersRepo(db);
   return new Elysia({ prefix: "/api/copilot" })
-    .post("/start", ({ body }) => {
+    .post("/start", async ({ body }) => {
       const parsed = copilotLoginSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, "A valid provider and account label are required");
       const { providerId, label } = parsed.data;
       const trimmedLabel = label.trim();
-      const provider = repo.get(providerId);
+      const provider = await repo.get(providerId);
       if (!provider || provider.type !== "github-copilot") throw new AdminError(404, "GitHub Copilot provider not found");
       if ([...loginFlows.values()].some((flow) => !flow.done)) {
         throw new AdminError(409, "Another GitHub Copilot login is still in progress");
       }
       // The label may be empty → it is filled in automatically from the GitHub username after a successful login.
       const finalLabel = trimmedLabel || `pending-${crypto.randomUUID().slice(0, 8)}`;
-      if (repo.listAccounts(provider.id).some((a) => a.label.toLowerCase() === finalLabel.toLowerCase()))
+      if ((await repo.listAccounts(provider.id)).some((a) => a.label.toLowerCase() === finalLabel.toLowerCase()))
         throw new AdminError(409, `Account "${finalLabel}" already exists`);
-      const account = repo.addAccount(provider.id, { label: finalLabel, baseUrl: null });
-      repo.updateAccount(account.id, { baseUrl: urlFor(account.id), enabled: false });
+      const account = await repo.addAccount(provider.id, { label: finalLabel, baseUrl: null });
+      await repo.updateAccount(account.id, { baseUrl: urlFor(account.id), enabled: false });
       beginLogin(account.id);
       return { accountId: account.id, url: urlFor(account.id) };
     })
-    .post("/:accountId/reconnect", ({ params }) => {
-      const account = repo.getAccount(params.accountId);
+    .post("/:accountId/reconnect", async ({ params }) => {
+      const account = await repo.getAccount(params.accountId);
       if (!account) throw new AdminError(404, "Account not found");
-      const provider = repo.get(account.provider_id);
+      const provider = await repo.get(account.provider_id);
       if (!provider || provider.type !== "github-copilot") throw new AdminError(400, "Account is not a GitHub Copilot account");
       if ([...loginFlows.values()].some((flow) => !flow.done)) throw new AdminError(409, "Another GitHub Copilot login is still in progress");
       beginLogin(account.id, true);
@@ -368,7 +368,7 @@ export function copilotRoutes(db: Database) {
       return { code: flow.code, done: flow.done, ok: flow.done ? flow.exitCode === 0 : undefined, error: flow.error, url: "https://github.com/login/device" };
     })
     .delete("/:accountId/login", async ({ params }) => {
-      const account = repo.getAccount(params.accountId);
+      const account = await repo.getAccount(params.accountId);
       if (!account) return { ok: true };
       const flow = loginFlows.get(account.id);
       if (account.enabled && !flow?.reconnect) throw new AdminError(409, "Connected accounts cannot be cancelled");
@@ -377,12 +377,12 @@ export function copilotRoutes(db: Database) {
       if (flow?.reconnect) return { ok: true };
       children.get(account.id)?.kill();
       children.delete(account.id);
-      repo.removeAccount(account.id);
+      await repo.removeAccount(account.id);
       await fsp.rm(homeFor(account.id), { recursive: true, force: true });
       return { ok: true };
     })
     .get("/:accountId/status", async ({ params }) => {
-      const account = repo.getAccount(params.accountId);
+      const account = await repo.getAccount(params.accountId);
       if (!account) throw new AdminError(404, "Account not found");
       const flow = loginFlows.get(account.id);
       if (flow && !flow.done) return { done: false, ok: false, message: "Waiting for GitHub device authorization…" };
@@ -391,7 +391,7 @@ export function copilotRoutes(db: Database) {
       return { done: !!account.enabled && status.ok, ok: status.ok, message: status.message, login: status.login };
     })
     .post("/:accountId/finalize", async ({ params }) => {
-      const account = repo.getAccount(params.accountId);
+      const account = await repo.getAccount(params.accountId);
       if (!account) throw new AdminError(404, "Account not found");
       const flow = loginFlows.get(account.id);
       if (!flow) throw new AdminError(409, "No login flow for this account");
@@ -434,11 +434,11 @@ export function copilotRoutes(db: Database) {
           .map((model) => typeof model.id === "string" ? model.id : null)
           .filter((id): id is string => Boolean(id))
           .map((id) => ({ id, contextLength: null, maxOutputTokens: null, capabilities: null }));
-        repo.replaceSyncedModels(account.provider_id, models);
+        await repo.replaceSyncedModels(account.provider_id, models);
         // Duplicate: this GitHub username already has another account → overwrite confirmation is required.
         // An account already labelled with the login but with a running login flow means a re-login → overwrite the token in the same home.
         const other = status.login
-          ? repo.listAccounts(account.provider_id).find((a) => a.id !== account.id && a.label === status.login)
+          ? (await repo.listAccounts(account.provider_id)).find((a) => a.id !== account.id && a.label === status.login)
           : undefined;
         if (other && !loginFlows.has(other.id)) {
           const flow = loginFlows.get(account.id);
@@ -455,21 +455,21 @@ export function copilotRoutes(db: Database) {
         if (status.login && (account.label.startsWith("pending-") || /^github-copilot-\d+$/.test(account.label))) {
           patch.label = status.login;
         }
-        repo.updateAccount(account.id, patch);
+        await repo.updateAccount(account.id, patch);
         return { done: true, ok: true, message: `Connected as ${status.login ?? account.label} - ${models.length} models synced` };
       } catch (error) {
         return { done: false, ok: false, message: `Connected, but model sync failed: ${error instanceof Error ? error.message : String(error)}` };
       }
     })
-    .post("/:accountId/overwrite", ({ params }) => {
-      const account = repo.getAccount(params.accountId);
+    .post("/:accountId/overwrite", async ({ params }) => {
+      const account = await repo.getAccount(params.accountId);
       if (!account) throw new AdminError(404, "Account not found");
       const flow = loginFlows.get(account.id);
-      const dupes = repo.listAccounts(account.provider_id).filter((a) => a.id !== account.id && flow?.dupeLogin && a.label === flow.dupeLogin);
+      const dupes = (await repo.listAccounts(account.provider_id)).filter((a) => a.id !== account.id && flow?.dupeLogin && a.label === flow.dupeLogin);
       for (const d of dupes) {
         children.get(d.id)?.kill();
         loginFlows.delete(d.id);
-        repo.removeAccount(d.id);
+        await repo.removeAccount(d.id);
       }
       return { ok: true };
     })
@@ -477,7 +477,7 @@ export function copilotRoutes(db: Database) {
       const parsed = copilotBulkSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, "providerId and accounts are required");
       const { providerId, accounts } = parsed.data;
-      const provider = repo.get(providerId);
+      const provider = await repo.get(providerId);
       if (!provider || provider.type !== "github-copilot") throw new AdminError(404, "GitHub Copilot provider not found");
 
       const lines = accounts.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
@@ -543,7 +543,7 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
 
   log(`Starting bulk login for ${lines.length} account(s)...`);
 
-  const existing = new Set(repo.listAccounts(job.providerId).map((a) => a.label.toLowerCase()));
+  const existing = new Set((await repo.listAccounts(job.providerId)).map((a) => a.label.toLowerCase()));
 
   for (const line of lines) {
     const [email, password] = line.split("|", 2).map((s) => s.trim());
@@ -566,8 +566,8 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
     log(`Processing: ${email}`);
 
     // Create the account in the DB first
-    const account = repo.addAccount(job.providerId, { label: email, baseUrl: null });
-    repo.updateAccount(account.id, { baseUrl: urlFor(account.id), enabled: false });
+    const account = await repo.addAccount(job.providerId, { label: email, baseUrl: null });
+    await repo.updateAccount(account.id, { baseUrl: urlFor(account.id), enabled: false });
     existing.add(email.toLowerCase());
     fs.mkdirSync(homeFor(account.id), { recursive: true });
 
@@ -604,17 +604,17 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
 
     const first = result[0];
     if (exitCode === 0 && first?.success) {
-      if (!repo.updateAccount(account.id, { enabled: true, lastWarmupStatus: "healthy", lastWarmupAt: new Date().toISOString(), lastWarmupDetail: "Bulk login successful" })) {
+      if (!await repo.updateAccount(account.id, { enabled: true, lastWarmupStatus: "healthy", lastWarmupAt: new Date().toISOString(), lastWarmupDetail: "Bulk login successful" })) {
         throw new Error("Replacement account no longer exists");
       }
       if (force) {
-        const dup = repo.listAccounts(job.providerId).find((a) => a.id !== account.id && a.label.toLowerCase() === email.toLowerCase());
+        const dup = (await repo.listAccounts(job.providerId)).find((a) => a.id !== account.id && a.label.toLowerCase() === email.toLowerCase());
         if (dup) {
           log(`FORCE: replacing existing account ${email}...`);
           children.get(dup.id)?.kill();
           children.delete(dup.id);
           loginFlows.delete(dup.id);
-          repo.removeAccount(dup.id);
+          await repo.removeAccount(dup.id);
         }
       }
       log(`SUCCESS: ${email}`);
@@ -623,7 +623,7 @@ async function runBulkJob(job: BulkJob, repo: ProvidersRepo, lines: string[], fo
       const errMsg = first?.error ?? `Exit ${exitCode}`;
       log(`FAILED: ${email} — ${errMsg} (removing from database)`);
       // Failure = do not keep it in the database. Remove the account and its folder.
-      repo.removeAccount(account.id);
+      await repo.removeAccount(account.id);
       await fsp.rm(homeFor(account.id), { recursive: true, force: true }).catch(() => {});
       job.results.push({ email, success: false, error: `${errMsg}${stderr ? `: ${stderr.slice(0, 200)}` : ""}` });
     }

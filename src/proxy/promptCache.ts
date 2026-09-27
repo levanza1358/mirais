@@ -164,24 +164,30 @@ function asNumber(v: unknown): number | undefined {
 
 /**
  * Convert a raw upstream `usage` object into canonical `Usage`, preserving
- * cache counters.
+ * cache counters and the reasoning token bucket where the provider exposes it.
  *
- * Every upstream dialect goes through here so cache telemetry cannot be lost by
- * a path that only copies `prompt_tokens`/`completion_tokens`: Chat Completions
- * uses those names, the Responses API uses `input_tokens`/`output_tokens`, and
- * cache counts are nested (`prompt_tokens_details.cached_tokens`) or renamed
- * (`cache_read_input_tokens`).
+ * Every upstream dialect goes through here so cache/reasoning telemetry cannot
+ * be lost by a path that only copies `prompt_tokens`/`completion_tokens`:
+ * Chat Completions uses those names, the Responses API uses
+ * `input_tokens`/`output_tokens`, cache counts are nested
+ * (`prompt_tokens_details.cached_tokens`) or renamed
+ * (`cache_read_input_tokens`), and reasoning tokens live at
+ * `output_tokens_details.reasoning_tokens` (Responses/Codex/xAI) or are absent
+ * (Anthropic surfaces them as part of `output_tokens`).
  */
 export function normalizeUsage(raw: unknown): Usage | null {
   if (!raw || typeof raw !== "object") return null;
   const u = raw as Record<string, unknown>;
   const prompt = asNumber(u.prompt_tokens) ?? asNumber(u.input_tokens) ?? 0;
   const completion = asNumber(u.completion_tokens) ?? asNumber(u.output_tokens) ?? 0;
+  const outDetails = u.output_tokens_details as Record<string, unknown> | undefined;
+  const reasoningTokens = asNumber(outDetails?.reasoning_tokens);
   return {
     prompt_tokens: prompt,
     completion_tokens: completion,
     total_tokens: asNumber(u.total_tokens) ?? prompt + completion,
     ...cacheTokensFrom(u),
+    ...(reasoningTokens !== undefined ? { reasoning_tokens: reasoningTokens } : {}),
   };
 }
 
