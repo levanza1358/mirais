@@ -301,8 +301,9 @@ export interface RequestLog {
   reasoning_effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
   /** Tokens burned inside the model's reasoning phase, when the provider reports them. */
   reasoning_tokens: number | null;
-  request_body: string | null;
-  response_body: string | null;
+  request_body?: string | null;
+  response_body?: string | null;
+  has_payload?: number | boolean;
   /** 'request' (real traffic) or 'warmup' (test/ping). */
   kind?: string;
 }

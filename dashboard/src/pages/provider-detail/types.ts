@@ -12,6 +12,9 @@ export type ModelTestResult = {
   context_length?: number | null;
   max_output_tokens?: number | null;
   capabilities?: string[];
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cached_tokens?: number; reasoning_tokens?: number } | null;
+  rpm_limit?: number | null;
+  rpm_remaining?: number | null;
   testing?: boolean;
 };
 

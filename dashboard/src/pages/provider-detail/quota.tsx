@@ -1,8 +1,18 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
-import { type CodexQuota, type CodexQuotaWindow, type CopilotQuota, type ProviderAccount, providers } from "../../api";
+import { type CodexQuota, type CodexQuotaWindow, type CopilotQuota, type Provider, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, ConfirmModal, Modal, fmtNum, toast } from "../../components/ui";
+
+/**
+ * Atria ships as a `custom`-type preset, so it cannot be detected by
+ * `provider.type` alone — fall back to the base URL host and the provider name.
+ */
+export function isAtriaProvider(provider: Pick<Provider, "type" | "name" | "base_url">): boolean {
+  if (provider.base_url && /(^|\/\/)(api\.)?atria-asi\.ai\b/i.test(provider.base_url)) return true;
+  const name = provider.name.toLowerCase();
+  return name === "atria" || name.startsWith("atria-");
+}
 
 export function windowLabel(windowData: CodexQuotaWindow | null, fallback: string): string {
   const seconds = windowData?.window_seconds;

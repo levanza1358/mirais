@@ -37,6 +37,7 @@ import { PATTERNS as blackbox } from "./model-catalog/blackbox";
 import { PATTERNS as amazon } from "./model-catalog/amazon";
 import { PATTERNS as githubCopilot } from "./model-catalog/github-copilot";
 import { PATTERNS as codex } from "./model-catalog/codex";
+import { PATTERNS as atria } from "./model-catalog/atria";
 
 const PATTERNS: Pattern[] = [
   ...openai,
@@ -56,6 +57,7 @@ const PATTERNS: Pattern[] = [
   ...amazon,
   ...githubCopilot,
   ...codex,
+  ...atria,
 ];
 
 /** Look up metadata for a model id by matching against known model families. */

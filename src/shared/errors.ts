@@ -11,6 +11,18 @@ export class GatewayError extends Error {
     public type: OpenAIErrorType,
     message: string,
     public code?: string,
+    /**
+     * `Retry-After` as parsed from the upstream response headers, in seconds.
+     * Kept structured (not just embedded in `message`) so the cooldown logic
+     * honours the upstream's suggestion verbatim instead of re-parsing text.
+     */
+    public retryAfterSec?: number,
+    /**
+     * Per-minute request-window hints. Providers such as Atria return these on
+     * both 429s *and* successful responses (`x-rpm-limit`, `x-rpm-remaining`),
+     * so they can drive adaptive backoff.
+     */
+    public rateLimit?: { limit?: number; remaining?: number },
   ) {
     super(message);
     this.name = "GatewayError";

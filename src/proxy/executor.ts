@@ -523,6 +523,8 @@ export async function executeRequest(
           model: candidate.modelId,
           status: gErr.status,
           attempt: attemptNo + 1,
+          retry_after_sec: gErr.retryAfterSec,
+          rpm_remaining: gErr.rateLimit?.remaining,
         });
         continue;
       }
@@ -534,6 +536,10 @@ export async function executeRequest(
 }
 
 function retryAfterMsFrom(err: GatewayError): number | undefined {
+  // Preferred: the header parsed structurally in `upstreamError`. The regex is
+  // a fallback for errors that never passed through `upstreamError` (e.g. a
+  // message built by a provider-specific handler).
+  if (err.retryAfterSec !== undefined) return err.retryAfterSec * 1000;
   const m = /retry[_ -]after[":= ]+(\d+)/i.exec(err.message);
   return m ? Number(m[1]) * 1000 : undefined;
 }
@@ -1036,5 +1042,38 @@ async function upstreamError(res: Response): Promise<GatewayError> {
     : res.status === 429 ? "rate_limit_error"
     : res.status >= 400 && res.status < 500 ? "invalid_request_error"
     : "server_error";
-  return new GatewayError(res.status, type, message, code);
+  const rateLimit = rateLimitHeaders(res.headers);
+  return new GatewayError(res.status, type, message, code, retryAfterSecFrom(res.headers), rateLimit);
+}
+
+/** Parse the standard `Retry-After` header (delta-seconds). HTTP-date values
+ * cannot be expressed as a fixed delay, so they fall back to `undefined` and
+ * let the caller apply its own default backoff. */
+function retryAfterSecFrom(headers: Headers): number | undefined {
+  const raw = headers.get("retry-after");
+  if (!raw) return undefined;
+  const secs = Number(raw.trim());
+  return Number.isFinite(secs) && secs >= 0 ? secs : undefined;
+}
+
+/** Read per-minute request-window hints. Atria sends `x-rpm-limit` and
+ * `x-rpm-remaining` on successful responses too, so this is generic — it just
+ * returns `undefined` for providers that don't emit them. */
+function rateLimitHeaders(headers: Headers): { limit?: number; remaining?: number } | undefined {
+  const limit = positiveInt(headers.get("x-rpm-limit"));
+  const remaining = nonNegativeInt(headers.get("x-rpm-remaining"));
+  if (limit === undefined && remaining === undefined) return undefined;
+  return { limit, remaining };
+}
+
+function positiveInt(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+function nonNegativeInt(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }

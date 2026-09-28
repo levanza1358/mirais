@@ -1,6 +1,6 @@
 # Universal reasoning with Mirais
 
-Mirais translates one universal `reasoning` block into the dialect each upstream actually wants, so an agent harness can keep a single config across OpenAI, Anthropic, xAI, ChatGPT Codex, GitHub Copilot, CodeBuddy, BlackBox, DeepSeek, Zhipu GLM, and any custom OpenAI-compatible endpoint.
+Mirais translates one universal `reasoning` block into the dialect each upstream actually wants, so an agent harness can keep a single config across OpenAI, Anthropic, xAI, ChatGPT Codex, GitHub Copilot, CodeBuddy, BlackBox, Atria, DeepSeek, Zhipu GLM, and any custom OpenAI-compatible endpoint.
 
 This guide covers:
 
@@ -51,6 +51,7 @@ Send a top-level `reasoning` object with any chat-completion, Responses, or Anth
 | CodeBuddy (global / CN) | codebuddy | — | — | — | — | — | — |
 | DeepSeek | openai-chat | ✓ | — | — | — | ✓ | — |
 | BlackBox | openai-chat | ✓ | — | — | — | — | — |
+| Atria | openai-chat | ✓ | — | — | — | — | — |
 | Zhipu GLM | openai-chat (Z.ai Coding Plan → anthropic) | ✓ | — | — | — | ✓ | — |
 | Custom OpenAI-compatible | custom | ✓ | — | — | — | depends on upstream | depends on upstream |
 

@@ -34,6 +34,16 @@ export const copilotBulkSchema = z.object({
   accounts: z.string().min(1),
 });
 
+/**
+ * Atria bulk account import: one `email|password` per line.
+ * See docs/10-atria-auto-login.md.
+ */
+export const atriaLoginSchema = z.object({
+  providerId: z.string().min(1),
+  lines: z.array(z.string()).min(1).max(500),
+  headed: z.boolean().optional(),
+});
+
 export const copilotQuotaSchema = z.object({
   quotaSnapshots: z.record(z.object({
     isUnlimitedEntitlement: z.boolean(),

@@ -34,6 +34,25 @@ function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
+/**
+ * MySQL returns `SUM()`/`AVG()` results as `DECIMAL`, and Bun's MySQL adapter
+ * decodes `DECIMAL` as a *string* to preserve precision. `COUNT(*)` is a
+ * `BIGINT` that fits in 32 bits, so it comes back as a number — which is why
+ * only the summed columns were ever wrong. Left uncoerced, these strings reach
+ * the dashboard and turn arithmetic into string concatenation
+ * (`"7865349" + "31275"` → `"786534931275"`), inflating token totals by
+ * roughly 1,000×.
+ *
+ * The SQL below therefore `CAST(... AS SIGNED|DOUBLE)`s every aggregate back to
+ * a number, and this helper is the belt-and-braces guarantee for any row that
+ * still arrives typed as a string.
+ */
+export function num(value: number | string | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function utcDayStart(): string {
   return `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 }
@@ -41,16 +60,16 @@ function utcDayStart(): string {
 export class LogsRepo {
   constructor(private db: Database) {}
 
-async insert(entry: LogInsert): Promise<void> {
-  await this.db
-      .query(
+  async insert(entry: LogInsert): Promise<void> {
+    const id = ulid();
+    const insert = this.db.transaction(async (tx) => {
+      await tx.query(
         `INSERT INTO request_logs
          (id, ts, key_id, endpoint, requested_model, provider, model, attempts, status, http_status, error,
-         input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, credit_usage, credit_source, latency_ms, tokens_saved, reasoning_effort, request_body, response_body, attempts_detail, account_label, kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        ulid(),
+         input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, credit_usage, credit_source, latency_ms, tokens_saved, reasoning_effort, attempts_detail, account_label, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
         nowIso(),
         entry.keyId,
         entry.endpoint,
@@ -71,12 +90,18 @@ async insert(entry: LogInsert): Promise<void> {
         entry.latencyMs,
         entry.tokensSaved,
         entry.reasoningEffort ?? null,
-        entry.requestBody ?? null,
-        entry.responseBody ?? null,
         entry.attemptsDetail ? JSON.stringify(entry.attemptsDetail) : null,
         entry.accountLabel ?? null,
         entry.kind ?? "request",
       );
+      if (entry.requestBody != null || entry.responseBody != null) {
+        await tx.query(
+          `INSERT INTO request_log_payloads (request_log_id, request_body, response_body, created_at)
+           VALUES (?, ?, ?, ?)`,
+        ).run(id, entry.requestBody ?? null, entry.responseBody ?? null, nowIso());
+      }
+    });
+    await insert();
   }
 
   async list(filters: {
@@ -101,15 +126,16 @@ async insert(entry: LogInsert): Promise<void> {
     if (filters.kind) { where.push("kind = ?"); params.push(filters.kind); }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    const count = await this.db.query(`SELECT COUNT(*) as c FROM request_logs ${whereSql}`).get<{ c: number }>(...params);
-    const total = count?.c ?? 0;
+    const count = await this.db.query(`SELECT COUNT(*) as c FROM request_logs ${whereSql}`).get<{ c: number | string }>(...params);
+    const total = num(count?.c);
     const items = await this.db
       .query(
         `SELECT rl.id, rl.ts, rl.ts AS created_at, rl.key_id, gk.label AS key_label, rl.endpoint, rl.requested_model, rl.provider, rl.model, rl.attempts, rl.status, rl.http_status, rl.error,
-                rl.input_tokens, rl.output_tokens, rl.cached_tokens, rl.cache_write_tokens, rl.reasoning_tokens, rl.credit_usage, rl.credit_source, rl.latency_ms, rl.tokens_saved, rl.reasoning_effort, rl.request_body, rl.response_body, rl.account_label, rl.kind
+                rl.input_tokens, rl.output_tokens, rl.cached_tokens, rl.cache_write_tokens, rl.reasoning_tokens, rl.credit_usage, rl.credit_source, rl.latency_ms, rl.tokens_saved, rl.reasoning_effort, rl.account_label, rl.kind,
+                EXISTS (SELECT 1 FROM request_log_payloads p WHERE p.request_log_id = rl.id) AS has_payload
          FROM request_logs rl
          LEFT JOIN gateway_keys gk ON gk.id = rl.key_id
-         ${whereSql} ORDER BY rl.ts DESC LIMIT ? OFFSET ?`,
+         ${whereSql} ORDER BY rl.ts DESC, rl.id DESC LIMIT ? OFFSET ?`,
       )
       .all<RequestLog>(...params, filters.limit, (filters.page - 1) * filters.limit);
     return { items, total };
@@ -117,7 +143,7 @@ async insert(entry: LogInsert): Promise<void> {
 
   /** Aggregated usage per (provider, model) for the Usage Log page — real
    * traffic only (warmup excluded). */
-  usageAggregate(days: number): Promise<Array<{
+  async usageAggregate(days: number): Promise<Array<{
     provider: string | null;
     model: string | null;
     requests: number;
@@ -130,50 +156,142 @@ async insert(entry: LogInsert): Promise<void> {
     errors: number;
     last_ts: string;
   }>> {
-    return this.db
+    const rows = await this.db
       .query(
         `SELECT provider, model,
                 COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                COALESCE(SUM(cached_tokens), 0) as cached_tokens,
-                COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens,
-                COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
-                COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
-                SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) as errors,
+                CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) as input_tokens,
+                CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) as output_tokens,
+                CAST(COALESCE(SUM(cached_tokens), 0) AS SIGNED) as cached_tokens,
+                CAST(COALESCE(SUM(cache_write_tokens), 0) AS SIGNED) as cache_write_tokens,
+                CAST(COALESCE(SUM(reasoning_tokens), 0) AS SIGNED) as reasoning_tokens,
+                CAST(COALESCE(AVG(latency_ms), 0) AS SIGNED) as avg_latency_ms,
+                CAST(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS SIGNED) as errors,
                 MAX(ts) as last_ts
          FROM request_logs
          WHERE ts >= ? AND kind = 'request'
          GROUP BY provider, model
          ORDER BY requests DESC`,
       )
-      .all(daysAgo(days));
+      .all<{
+        provider: string | null;
+        model: string | null;
+        requests: number | string;
+        input_tokens: number | string;
+        output_tokens: number | string;
+        cached_tokens: number | string;
+        cache_write_tokens: number | string;
+        reasoning_tokens: number | string;
+        avg_latency_ms: number | string;
+        errors: number | string;
+        last_ts: string;
+      }>(daysAgo(days));
+
+    return rows.map((row) => ({
+      provider: row.provider,
+      model: row.model,
+      requests: num(row.requests),
+      input_tokens: num(row.input_tokens),
+      output_tokens: num(row.output_tokens),
+      cached_tokens: num(row.cached_tokens),
+      cache_write_tokens: num(row.cache_write_tokens),
+      reasoning_tokens: num(row.reasoning_tokens),
+      avg_latency_ms: num(row.avg_latency_ms),
+      errors: num(row.errors),
+      last_ts: row.last_ts,
+    }));
   }
 
   async keyUsage(keyId: string): Promise<{ requests_today: number; tokens_today: number; tokens_total: number; requests_minute: number; requests_total: number; input_tokens_total: number; output_tokens_total: number; top_models: Array<{ model: string; requests: number; tokens: number }> }> {
-    const total = await this.db.query("SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ?").get<{ tokens: number }>(keyId);
-    const today = await this.db.query("SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ? AND ts >= ?").get<{ requests: number; tokens: number }>(keyId, utcDayStart());
-    const minute = await this.db.query("SELECT COUNT(*) AS requests FROM request_logs WHERE key_id = ? AND ts >= ?").get<{ requests: number }>(keyId, daysAgo(1 / 1440));
-    const totals = await this.db.query("SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens FROM request_logs WHERE key_id = ?").get<{ requests: number; input_tokens: number; output_tokens: number }>(keyId);
-    const topModels = await this.db.query("SELECT COALESCE(model, requested_model) AS model, COUNT(*) AS requests, COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ? GROUP BY COALESCE(model, requested_model) ORDER BY tokens DESC LIMIT 5").all<{ model: string; requests: number; tokens: number }>(keyId);
-    return { requests_today: today?.requests ?? 0, tokens_today: today?.tokens ?? 0, tokens_total: total?.tokens ?? 0, requests_minute: minute?.requests ?? 0, requests_total: totals?.requests ?? 0, input_tokens_total: totals?.input_tokens ?? 0, output_tokens_total: totals?.output_tokens ?? 0, top_models: topModels };
+    // Every SUM() is CAST back to SIGNED: MySQL evaluates it as DECIMAL, which
+    // Bun's driver decodes as a string (see `num` above).
+    const total = await this.db.query("SELECT CAST(COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS SIGNED) AS tokens FROM request_logs WHERE key_id = ?").get<{ tokens: number | string }>(keyId);
+    const today = await this.db.query("SELECT COUNT(*) AS requests, CAST(COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS SIGNED) AS tokens FROM request_logs WHERE key_id = ? AND ts >= ?").get<{ requests: number | string; tokens: number | string }>(keyId, utcDayStart());
+    const minute = await this.db.query("SELECT COUNT(*) AS requests FROM request_logs WHERE key_id = ? AND ts >= ?").get<{ requests: number | string }>(keyId, daysAgo(1 / 1440));
+    const totals = await this.db.query("SELECT COUNT(*) AS requests, CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) AS input_tokens, CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) AS output_tokens FROM request_logs WHERE key_id = ?").get<{ requests: number | string; input_tokens: number | string; output_tokens: number | string }>(keyId);
+    const topModels = await this.db.query("SELECT COALESCE(model, requested_model) AS model, COUNT(*) AS requests, CAST(COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS SIGNED) AS tokens FROM request_logs WHERE key_id = ? GROUP BY COALESCE(model, requested_model) ORDER BY tokens DESC LIMIT 5").all<{ model: string; requests: number | string; tokens: number | string }>(keyId);
+    return {
+      requests_today: num(today?.requests),
+      tokens_today: num(today?.tokens),
+      tokens_total: num(total?.tokens),
+      requests_minute: num(minute?.requests),
+      requests_total: num(totals?.requests),
+      input_tokens_total: num(totals?.input_tokens),
+      output_tokens_total: num(totals?.output_tokens),
+      top_models: topModels.map((m) => ({ model: m.model, requests: num(m.requests), tokens: num(m.tokens) })),
+    };
   }
 
   getById(id: string): Promise<RequestLog | null> {
-    return this.db.query("SELECT * FROM request_logs WHERE id = ?").get<RequestLog>(id);
+    return this.db.query(
+      `SELECT rl.*, COALESCE(p.request_body, rl.request_body) AS request_body,
+              COALESCE(p.response_body, rl.response_body) AS response_body,
+              CASE WHEN p.request_log_id IS NULL THEN 0 ELSE 1 END AS has_payload
+       FROM request_logs rl
+       LEFT JOIN request_log_payloads p ON p.request_log_id = rl.id
+       WHERE rl.id = ?`,
+    ).get<RequestLog>(id);
   }
 
   async getReplayBody(id: string): Promise<{ endpoint: string; body: Record<string, unknown> } | null> {
-    const row = await this.getById(id);
+    const row = await this.db.query(
+      `SELECT rl.kind, rl.endpoint, COALESCE(p.request_body, rl.request_body) AS request_body
+       FROM request_logs rl
+       LEFT JOIN request_log_payloads p ON p.request_log_id = rl.id
+       WHERE rl.id = ?`,
+    ).get<{ kind?: string; endpoint: string; request_body: string | null }>(id);
     if (!row || row.kind !== "request" || !row.request_body) return null;
     try {
       const parsed = JSON.parse(row.request_body) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
       const body = { ...(parsed as Record<string, unknown>), stream: false };
-      return { endpoint: "/v1/chat/completions", body };
+      return { endpoint: row.endpoint, body };
     } catch {
       return null;
     }
+  }
+
+  async purgePayloadsOlderThan(days: number): Promise<number> {
+    const res = await this.db.query("DELETE FROM request_log_payloads WHERE created_at < ?").run(daysAgo(days));
+    return res.changes;
+  }
+
+  async cleanupLegacyPayloads(batchSize = 250): Promise<number> {
+    const cutoff = daysAgo(7);
+    const tx = this.db.transaction(async (db) => {
+      const rows = await db.query(
+        `SELECT id, ts, request_body, response_body
+         FROM request_logs
+         WHERE request_body IS NOT NULL OR response_body IS NOT NULL
+         ORDER BY id ASC LIMIT ?`,
+      ).all<{ id: string; ts: string; request_body: string | null; response_body: string | null }>(batchSize);
+      if (rows.length === 0) {
+        await db.query("UPDATE request_log_payload_cleanup SET cursor_id = NULL, updated_at = ? WHERE id = 1").run(nowIso());
+        return 0;
+      }
+      for (const row of rows) {
+        if (row.request_body == null && row.response_body == null) continue;
+        if (row.ts >= cutoff) {
+          if (db.dialect === "mysql") {
+            await db.query(
+              `INSERT INTO request_log_payloads (request_log_id, request_body, response_body, created_at)
+               VALUES (?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE request_body = COALESCE(request_body, VALUES(request_body)), response_body = COALESCE(response_body, VALUES(response_body))`,
+            ).run(row.id, row.request_body, row.response_body, row.ts);
+          } else {
+            await db.query(
+              `INSERT INTO request_log_payloads (request_log_id, request_body, response_body, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(request_log_id) DO UPDATE SET request_body = COALESCE(request_log_payloads.request_body, excluded.request_body), response_body = COALESCE(request_log_payloads.response_body, excluded.response_body)`,
+            ).run(row.id, row.request_body, row.response_body, row.ts);
+          }
+        }
+        await db.query("UPDATE request_logs SET request_body = NULL, response_body = NULL WHERE id = ?").run(row.id);
+      }
+      await db.query("UPDATE request_log_payload_cleanup SET cursor_id = ?, updated_at = ? WHERE id = 1").run(rows.at(-1)?.id ?? null, nowIso());
+      return rows.length;
+    });
+    return tx();
   }
 
   async purgeOlderThan(days: number): Promise<number> {
@@ -192,35 +310,38 @@ async insert(entry: LogInsert): Promise<void> {
 
   async statsSummary(days: number) {
     const since = daysAgo(days);
+    // SUM()/AVG() come back from MySQL as DECIMAL → string in Bun's driver, so
+    // each is CAST to a JS-friendly numeric type before it reaches the client.
     const totals = await this.db
       .query(
         `SELECT COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                COALESCE(SUM(tokens_saved), 0) as tokens_saved,
-                AVG(latency_ms) as avg_latency
+                CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) as input_tokens,
+                CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) as output_tokens,
+                CAST(COALESCE(SUM(tokens_saved), 0) AS SIGNED) as tokens_saved,
+                COALESCE(AVG(latency_ms), 0) as avg_latency
         FROM request_logs WHERE ts >= ? AND kind = 'request'`,
       )
       .get<{
-        requests: number;
-        input_tokens: number;
-        output_tokens: number;
-        tokens_saved: number;
-        avg_latency: number | null;
+        requests: number | string;
+        input_tokens: number | string;
+        output_tokens: number | string;
+        tokens_saved: number | string;
+        avg_latency: number | string | null;
       }>(since);
 
     const successRow = await this.db
       .query("SELECT COUNT(*) as c FROM request_logs WHERE ts >= ? AND kind = 'request' AND status = 'success'")
-      .get<{ c: number }>(since);
+      .get<{ c: number | string }>(since);
 
+    const requests = num(totals?.requests);
     return {
       range_days: days,
-      requests: totals?.requests ?? 0,
-      input_tokens: totals?.input_tokens ?? 0,
-      output_tokens: totals?.output_tokens ?? 0,
-      tokens_saved: totals?.tokens_saved ?? 0,
-      avg_latency_ms: Math.round(totals?.avg_latency ?? 0),
-      success_rate: totals && totals.requests > 0 ? (successRow?.c ?? 0) / totals.requests : 1,
+      requests,
+      input_tokens: num(totals?.input_tokens),
+      output_tokens: num(totals?.output_tokens),
+      tokens_saved: num(totals?.tokens_saved),
+      avg_latency_ms: Math.round(num(totals?.avg_latency)),
+      success_rate: requests > 0 ? num(successRow?.c) / requests : 1,
     };
   }
 
@@ -229,14 +350,21 @@ async insert(entry: LogInsert): Promise<void> {
       .query(
         `SELECT LEFT(ts, 10) as day,
                 COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                COALESCE(SUM(tokens_saved), 0) as tokens_saved
+                CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) as input_tokens,
+                CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) as output_tokens,
+                CAST(COALESCE(SUM(tokens_saved), 0) AS SIGNED) as tokens_saved
          FROM request_logs
          WHERE ts >= ? AND kind = 'request'
          GROUP BY LEFT(ts, 10) ORDER BY day ASC`,
       )
-      .all(daysAgo(days));
+      .all<{ day: string; requests: number | string; input_tokens: number | string; output_tokens: number | string; tokens_saved: number | string }>(daysAgo(days))
+      .then((rows) => rows.map((row) => ({
+        day: row.day,
+        requests: num(row.requests),
+        input_tokens: num(row.input_tokens),
+        output_tokens: num(row.output_tokens),
+        tokens_saved: num(row.tokens_saved),
+      })));
   }
 
   statsByModel(days: number) {
@@ -244,12 +372,18 @@ async insert(entry: LogInsert): Promise<void> {
       .query(
         `SELECT COALESCE(model, requested_model) as model,
                 COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-          COALESCE(SUM(output_tokens), 0) as output_tokens
+                CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) as input_tokens,
+                CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) as output_tokens
          FROM request_logs WHERE ts >= ? AND kind = 'request'
          GROUP BY COALESCE(model, requested_model) ORDER BY requests DESC LIMIT 20`,
       )
-      .all(daysAgo(days));
+      .all<{ model: string; requests: number | string; input_tokens: number | string; output_tokens: number | string }>(daysAgo(days))
+      .then((rows) => rows.map((row) => ({
+        model: row.model,
+        requests: num(row.requests),
+        input_tokens: num(row.input_tokens),
+        output_tokens: num(row.output_tokens),
+      })));
   }
 
   statsByProvider(days: number) {
@@ -257,27 +391,42 @@ async insert(entry: LogInsert): Promise<void> {
       .query(
         `SELECT provider,
                 COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) as success_rate
+                CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) as input_tokens,
+                CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) as output_tokens,
+                CAST(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS SIGNED) * 1.0 / COUNT(*) as success_rate
          FROM request_logs WHERE ts >= ? AND kind = 'request' AND provider IS NOT NULL
          GROUP BY provider ORDER BY requests DESC`,
       )
-      .all(daysAgo(days));
+      .all<{ provider: string; requests: number | string; input_tokens: number | string; output_tokens: number | string; success_rate: number | string }>(daysAgo(days))
+      .then((rows) => rows.map((row) => ({
+        provider: row.provider,
+        requests: num(row.requests),
+        input_tokens: num(row.input_tokens),
+        output_tokens: num(row.output_tokens),
+        success_rate: num(row.success_rate),
+      })));
   }
 
   providerHealth(days = 7) {
     return this.db.query(
       `SELECT provider,
               COUNT(*) AS requests,
-              SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS errors,
-              SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS error_rate,
-              ROUND(COALESCE(AVG(latency_ms), 0)) AS avg_latency_ms,
+              CAST(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS SIGNED) AS errors,
+              CAST(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS SIGNED) * 1.0 / COUNT(*) AS error_rate,
+              CAST(COALESCE(AVG(latency_ms), 0) AS SIGNED) AS avg_latency_ms,
               MAX(ts) AS last_request_at
        FROM request_logs
       WHERE kind = 'request' AND provider IS NOT NULL AND ts >= ?
        GROUP BY provider ORDER BY requests DESC`,
-    ).all(daysAgo(days));
+    ).all<{ provider: string; requests: number | string; errors: number | string; error_rate: number | string; avg_latency_ms: number | string; last_request_at: string }>(daysAgo(days))
+      .then((rows) => rows.map((row) => ({
+        provider: row.provider,
+        requests: num(row.requests),
+        errors: num(row.errors),
+        error_rate: num(row.error_rate),
+        avg_latency_ms: num(row.avg_latency_ms),
+        last_request_at: row.last_request_at,
+      })));
   }
 
   /**

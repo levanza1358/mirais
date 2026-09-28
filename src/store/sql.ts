@@ -6,7 +6,11 @@ export type SqlDialect = "mysql" | "sqlite";
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 export class Database {
-  constructor(private readonly client: SQL, readonly dialect: SqlDialect = "mysql") {}
+  constructor(
+    private readonly client: SQL,
+    readonly dialect: SqlDialect = "mysql",
+    private readonly queryTimeoutMs = 30_000,
+  ) {}
 
   query(statement: string) {
     return {
@@ -20,8 +24,7 @@ export class Database {
         const prepared = this.prepareLimit(statement, values);
         let result: unknown;
         try {
-          const sql = inlineSql(prepared.statement, this.bind(prepared.values));
-          result = await this.client.unsafe<unknown>(sql);
+          result = await this.execute<unknown>(prepared.statement, this.bind(prepared.values));
         } catch (error) {
           throw error;
         }
@@ -36,7 +39,7 @@ export class Database {
   }
 
   transaction<Result>(work: (transactionDb: Database) => Promise<Result>): () => Promise<Result> {
-    return () => this.client.begin((client) => work(new Database(client, this.dialect)));
+    return () => this.client.begin((client) => work(new Database(client, this.dialect, this.queryTimeoutMs)));
   }
 
   async exec(statement: string): Promise<void> {
@@ -53,8 +56,7 @@ export class Database {
   ): Promise<Row[]> {
     const prepared = this.prepareLimit(statement, values);
     try {
-      const sql = inlineSql(prepared.statement, this.bind(prepared.values));
-      const rows = await this.client.unsafe<Row[]>(sql);
+      const rows = await this.execute<Row[]>(prepared.statement, this.bind(prepared.values));
       if (this.dialect === "mysql") {
         for (const row of rows) {
           if (typeof row !== "object" || row === null) continue;
@@ -66,6 +68,19 @@ export class Database {
       return rows;
     } catch (error) {
       throw error;
+    }
+  }
+
+  private async execute<Row>(statement: string, values: readonly SqlValue[]): Promise<Row> {
+    const query = this.client.unsafe<Row>(statement, values as SqlValue[]);
+    const timer = setTimeout(() => query.cancel(), this.queryTimeoutMs);
+    try {
+      return await query.execute();
+    } catch (error) {
+      if (query.cancelled) throw new Error(`Database query timed out after ${this.queryTimeoutMs}ms`, { cause: error });
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -107,18 +122,4 @@ export async function selectOne<Row extends object>(
   values: readonly SqlValue[] = [],
 ): Promise<Row | null> {
   return db.query(statement).get<Row>(...values);
-}
-
-function inlineSql(statement: string, values: readonly SqlValue[]): string {
-  let index = 0;
-  return statement.replace(/\?/g, () => {
-    const value = values[index++];
-    if (value === undefined) throw new Error("SQL placeholder count mismatch");
-    if (value === null) return "NULL";
-    if (typeof value === "boolean") return value ? "1" : "0";
-    if (typeof value === "number" || typeof value === "bigint") return String(value);
-    if (value instanceof Date) return `'${value.toISOString().slice(0, 19).replace("T", " ")}.${String(value.getUTCMilliseconds()).padStart(3, "0")}'`;
-    if (value instanceof Uint8Array) return `X'${Buffer.from(value).toString("hex")}'`;
-    return `'${String(value).replaceAll("'", "''")}'`;
-  });
 }

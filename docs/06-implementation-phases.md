@@ -15,7 +15,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 ## Phase 1 — Storage & Config (1 day) — DONE
 - [x] `config.ts` with zod env validation
 - [x] `store/db.ts`: bootstrap portable MySQL, connect through Bun.SQL, and run the migration runner
-- [x] SQLite-to-MySQL importer: resumable, idempotent, batched import from `DATA_DIR/mirais.db`
+- [x] Portable MySQL runtime: bootstrap, pooled Bun.SQL connection, sorted idempotent migrations, and query timeout
 - [x] `0001_init.sql` (full schema from doc 04) + repos for providers/accounts/keys/combos/settings
 - [x] Persist per-account/model cooldowns, terminal OAuth reauthentication state, and prompt-cache usage (`0026`–`0028`)
 - ✅ unit tests: migration idempotent, repos CRUD round-trip
@@ -57,7 +57,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 - [x] Models (table, aliases, playground drawer with streaming)
 - [x] Combos (drag-and-drop editor, test resolution)
 - [x] API Keys (create → one-time reveal, limits UI)
-- [x] Logs (virtualized table, filters, detail drawer)
+- [x] Logs (paginated metadata table, filters, lazy detail panel, payload retention)
 - [x] Settings (gateway, token saver, change password, about)
 - [x] API-key concurrency/model-ACL editing, Overview runtime health, and reduced-motion behavior
 - [x] Start-on-boot switch and prompt-cache token columns on the Usage page

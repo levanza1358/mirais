@@ -82,7 +82,7 @@ Centered card on a subtle aurora-gradient background: logo mark, "Mirais" wordma
 - History sidebar (`lg` and up): "New chat" button plus a list of saved conversations, each titled from its first user message; hovering reveals a delete button. Conversations are kept in `localStorage` (`mirais.chats`, newest 50) and written when streaming settles. The composer's `+` starts a fresh chat and the trash icon deletes the current one.
 
 ### 3.3 Providers (`/providers`)
-Card grid of **provider presets** (1-col → 4-col on xl), driven by a static catalog (`dashboard/src/providerCatalog.ts`): OpenAI / ChatGPT, OpenAI Codex, Anthropic, BlackBoxAI, GitHub Copilot, DeepSeek, xAI, GLM, and Custom. Each card:
+Card grid of **provider presets** (1-col → 4-col on xl), driven by a static catalog (`dashboard/src/providerCatalog.ts`): OpenAI / ChatGPT, OpenAI Codex, Anthropic, BlackBoxAI, GitHub Copilot, DeepSeek, xAI, GLM, Atria, and Custom. Each card:
 ```
 ┌──────────────────────────────────────┐
 │ [OA] OpenAI (Codex)            ● ──○ │  ← status dot + enable switch
@@ -125,9 +125,9 @@ Table: Label, Key (prefix + copy-disabled note), Created, Last used, Limits (rpm
 - Disable → row greys out; revoke → confirm modal ("existing clients will break").
 
 ### 3.7 Logs (`/logs`)
-- Sticky filter bar: status (all/success/error), model, provider, key, free-text search, time range, auto-refresh toggle.
-- Virtualized table (thousands of rows): time, status icon, endpoint, requested model → routed model, provider, tokens (in→out, saved badge `-312 tok`), latency.
-- **Row → right drawer:** full timeline of attempts (`attempt 1 anthropic 429 → cooldown`, `attempt 2 openai ✓`), headers, and (when `TRACK_PAYLOADS=full`) collapsible pretty-printed request/response JSON with copy buttons.
+- Filter bar: status (all/success/error), model, provider, time range, and event tab (requests/warmups/claims/model tests). The API also accepts `key_id`, `from`, `to`, and pagination `page`/`limit`.
+- Paginated table: time, status icon, endpoint, requested model → routed model, provider, tokens (in→out, saved badge `-312 tok`), latency.
+- **Row → detail panel:** recorded failover attempts (`attempt 1 anthropic 429 → cooldown`, `attempt 2 openai ✓`), and (when `TRACK_PAYLOADS=full`) collapsible pretty-printed request/response JSON with copy buttons. Lists fetch metadata only; payloads load from `/api/logs/:id` on row expansion. Claims and model tests use same lazy detail behavior.
 - Footer: "purge logs older than …" action.
 
 ### 3.8 Settings (`/settings`)

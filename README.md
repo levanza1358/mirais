@@ -60,9 +60,9 @@ The global `mirais` command remembers the install location — no `cd` needed.
 ## Uninstall
 
 **Back up first.** Uninstall permanently deletes the Mirais install directory,
-SQLite database, logs, `.env`, and `data/backups`. Use the dashboard's **Backup
-now** action or copy the data directory while Mirais is stopped. Keep any
-backups you want to preserve outside the install directory.
+portable MySQL data, logs, `.env`, and `data/backups`. Use the dashboard's **Backup
+now** action or copy the data directory and `.mysql` while Mirais is stopped. Keep
+any backups you want to preserve outside the install directory.
 
 Windows PowerShell:
 

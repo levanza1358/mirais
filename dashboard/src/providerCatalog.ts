@@ -3,6 +3,7 @@
 // exist yet it is created on the fly with these defaults.
 
 import anthropicIcon from "./assets/provider-icons/anthropic.svg";
+import atriaIcon from "./assets/provider-icons/atria-official.png";
 import blackboxIcon from "./assets/provider-icons/blackbox.png";
 import codebuddyIcon from "./assets/provider-icons/codebuddy.svg";
 import deepseekIcon from "./assets/provider-icons/deepseek.svg";
@@ -133,6 +134,17 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     color: "#0EA5E9",
     credentialUrl: "https://tokenrouter.com/",
     baseUrl: "https://api.tokenrouter.com/v1",
+  },
+  {
+    type: "custom",
+    name: "atria",
+    displayName: "Atria",
+    description: "Atria-Dawn-Preview via the Atria API (OpenAI / Anthropic / Responses compatible)",
+    textIcon: "AT",
+    iconSrc: atriaIcon,
+    color: "#7C3AED",
+    credentialUrl: "https://api.atria-asi.ai/console/keys",
+    baseUrl: "https://api.atria-asi.ai/v1",
   },
   {
     type: "custom",

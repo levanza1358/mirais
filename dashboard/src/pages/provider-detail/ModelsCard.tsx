@@ -67,6 +67,9 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
         context_length: res.context_length,
         max_output_tokens: res.max_output_tokens,
         capabilities: res.capabilities,
+        usage: res.usage,
+        rpm_limit: res.rpm_limit,
+        rpm_remaining: res.rpm_remaining,
       };
       setResults((r) => ({ ...r, [modelId]: out }));
       const modelLabel = modelId;
@@ -193,6 +196,7 @@ export function ModelsCard({ provider: p }: { provider: Provider }) {
             if (caps.length) meta.push(`Supports: ${caps.join(", ")}`);
             if (m.credit_rate != null) meta.push(`Estimated cost: ${m.credit_rate} ${m.credit_unit ?? "credit"}(s) per 1,000 tokens`);
             if (planRequirement) meta.push(`ChatGPT plan: ${planRequirement} required`);
+            if (typeof r?.rpm_limit === "number") meta.push(`Rate limit: ${r.rpm_limit} req/min${typeof r.rpm_remaining === "number" ? ` · ${r.rpm_remaining} remaining this minute` : ""}`);
             const testLine = r?.testing ? "Testing…" : r ? (r.ok ? `${r.preview_text ?? `Test: OK · ${r.latency_ms}ms`}` : `Test failed: ${r.detail ?? "error"}`) : null;
             const tip = [modelLabel, m.model_id !== modelLabel ? m.model_id : null, ...meta, testLine].filter(Boolean).join("\n");
             return (

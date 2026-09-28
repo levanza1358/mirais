@@ -7,6 +7,7 @@ import type { Database } from "./store/sql";
 import { authRoutes, passwordEnabled, sessionGuard } from "./admin/auth";
 import { oauthRoutes } from "./admin/oauth";
 import { copilotRoutes, startCopilotSidecars, waitCopilotSidecar } from "./admin/copilot";
+import { atriaLoginRoutes } from "./admin/atria-login";
 import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, providerHealthRoutes, auditRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
@@ -49,8 +50,17 @@ async function purgeOldLogs(): Promise<void> {
   try {
     const settings = new SettingsRepo(db);
     const days = Number(await settings.get("log_retention_days") ?? 30);
-    const removed = await new LogsRepo(db).purgeOlderThan(days);
-    if (removed > 0) log.info("purged old request logs", { removed, retention_days: days });
+  const logs = new LogsRepo(db);
+  let legacyProcessed = 0;
+  for (let batch = 0; batch < 100; batch += 1) {
+    const processed = await logs.cleanupLegacyPayloads();
+    legacyProcessed += processed;
+    if (processed < 250) break;
+  }
+  const payloadsRemoved = await logs.purgePayloadsOlderThan(7);
+
+    const removed = await logs.purgeOlderThan(days);
+    if (legacyProcessed > 0 || payloadsRemoved > 0 || removed > 0) log.info("purged old request logs", { removed, legacy_processed: legacyProcessed, payloads_removed: payloadsRemoved, retention_days: days });
   } catch (err) {
     log.warn("request log retention purge failed", { err: err instanceof Error ? err.message : String(err) });
   }
@@ -208,8 +218,8 @@ async function runAutoWarmups() {
           outputTokens: null,
           latencyMs: Date.now() - started,
           tokensSaved: 0,
-          requestBody: `Auto warmup check for account ${acc.label}`,
-          responseBody: ok ? `OK (${Date.now() - started}ms)` : `ERROR: ${detail ?? `HTTP ${status}`}`,
+          requestBody: config.trackPayloads === "full" ? `Auto warmup check for account ${acc.label}` : null,
+          responseBody: config.trackPayloads === "full" ? (ok ? `OK (${Date.now() - started}ms)` : `ERROR: ${detail ?? `HTTP ${status}`}`) : null,
           kind: "warmup",
         });
 
@@ -321,6 +331,7 @@ const app = new Elysia()
   .use(sessionGuard(db))
   .use(oauthRoutes(db))
   .use(copilotRoutes(db))
+  .use(atriaLoginRoutes(db))
   .use(providerRoutes(db))
   .use(aliasRoutes(db))
   .use(comboRoutes(db))

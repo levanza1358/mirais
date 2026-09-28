@@ -76,7 +76,7 @@ Priority: **P0** must-have v1 · **P1** should-have v1 · **P2** v1.x stretch
 - FR-4.4 Terse mode (optional system-prompt injection)
 
 ### FR-5 Gateway API Keys — P0
-- FR-5.1 Issue/revoke/enable keys; SHA-256 hashed storage; one-time plaintext reveal
+- FR-5.1 Issue/revoke/enable keys; recoverable local plaintext storage with prefix display; constant-time lookup and legacy SHA-256 fallback
 - FR-5.2 Per-key limits: model ACL, requests/min, concurrency, daily token budget, expiry
 - FR-5.3 Per-key usage stats
 
@@ -108,8 +108,8 @@ Priority: **P0** must-have v1 · **P1** should-have v1 · **P2** v1.x stretch
 | Category | Requirement |
 |---|---|
 | **Performance** | p50 proxy overhead < 15 ms (excluding upstream); ≥ 500 concurrent SSE streams on 2 vCPU/2 GB; dashboard first load < 1 s local |
-| **Reliability** | No request data loss on crash mid-stream (log row written on abort); SQLite WAL; restart-safe |
-| **Security** | Gateway keys hashed (SHA-256) with display prefix only; dashboard password on by default (`12345678` until changed), stored as a `Bun.password` hash with HMAC-signed session cookies and a configurable lifetime (`RULES.md` R1.3); dashboard-only scope, never `/v1/*`; constant-time compare; `DATA_DIR` 0700 on Linux; no telemetry. External dashboard access remains primarily a network concern. |
+| **Reliability** | No request data loss on crash mid-stream (log row written on abort); pooled MySQL; restart-safe migrations and query timeout |
+| **Security** | Gateway keys stored plaintext for local recovery (with legacy hash lookup fallback); dashboard password on by default (`12345678` until changed), stored as a `Bun.password` hash with HMAC-signed session cookies and a configurable lifetime (`RULES.md` R1.3); dashboard-only scope, never `/v1/*`; constant-time compare; `DATA_DIR` 0700 on Linux; no telemetry. External dashboard access remains primarily a network concern. |
 | **Compatibility** | Windows 10/11 x64, Ubuntu 22.04/24.04 x64 (+arm64 via Docker); Bun ≥ 1.1; Chrome/Edge/Firefox latest |
 | **Observability** | Structured JSON logs to stdout; `/health` for monitors; in-app logs page |
 | **Maintainability** | 100% TypeScript strict; typecheck + tests green in CI on both OSes |

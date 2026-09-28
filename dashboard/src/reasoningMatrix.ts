@@ -149,6 +149,18 @@ export const REASONING_MATRIX: ReasoningCapability[] = [
     note: "Z.ai Coding Plan uses Anthropic Messages (dialect: anthropic); standard GLM uses Chat Completions. Mirais picks the dialect from the base URL.",
   },
   {
+    id: "atria",
+    label: "Atria",
+    dialect: "openai-chat",
+    effort: true,
+    budget_tokens: false,
+    summary: false,
+    include: false,
+    stream_reasoning: false,
+    reports_tokens: false,
+    note: "Atria-Dawn-Preview speaks OpenAI Chat Completions. Mirais forwards `reasoning_effort` and streams `reasoning_content` deltas when the upstream emits them; the model reports no separate reasoning token counter.",
+  },
+  {
     id: "custom",
     label: "Custom OpenAI-compatible",
     dialect: "custom",

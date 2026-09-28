@@ -1,7 +1,7 @@
 # 04 — Database Schema
 
-MySQL 8.4 LTS via Bun's native `Bun.SQL` client. The private portable server runs from `.mysql/`; tables use InnoDB, `utf8mb4_bin`, and foreign keys. `${DATA_DIR}/mirais.db` is a legacy SQLite source used only by the one-time importer.
-Migrations live in `src/store/mysql-migrations/` and run at boot (`0001_init.sql`, `0002_…sql`, applied in order, tracked in `_migrations`). The SQLite importer uses separate markers so interrupted imports can resume safely.
+MySQL 8.4 LTS via Bun's native `Bun.SQL` client. The private portable server runs from `.mysql/`; tables use InnoDB, `utf8mb4_bin`, and foreign keys. MySQL is the active runtime database.
+Migrations live in `src/store/mysql-migrations/` and run at boot, applied in sorted order and tracked in `_migrations`. SQLite migration files under `src/store/migrations/` support test fixtures only; production startup does not open or import SQLite databases.
 
 ## Migration runner
 
@@ -153,13 +153,29 @@ CREATE TABLE request_logs (
   latency_ms      INTEGER,
   tokens_saved    INTEGER DEFAULT 0,         -- by token saver
   reasoning_effort TEXT,                     -- requested thinking mode; never reasoning content
-  request_body    TEXT,                      -- only when TRACK_PAYLOADS=full
-  response_body   TEXT
+  request_body    TEXT,                      -- legacy compatibility; new payloads use request_log_payloads
+  response_body   TEXT                       -- legacy compatibility; new payloads use request_log_payloads
 );
 CREATE INDEX idx_logs_ts       ON request_logs(ts DESC);
 CREATE INDEX idx_logs_model    ON request_logs(model);
 CREATE INDEX idx_logs_provider ON request_logs(provider);
 CREATE INDEX idx_logs_key      ON request_logs(key_id);
+CREATE INDEX idx_logs_kind_ts ON request_logs(kind, ts DESC);
+CREATE INDEX idx_logs_kind_status_ts ON request_logs(kind, status, ts DESC);
+CREATE INDEX idx_logs_kind_provider_ts ON request_logs(kind, provider, ts DESC);
+
+Payloads are stored separately so list queries never read large bodies:
+
+```sql
+CREATE TABLE request_log_payloads (
+  request_log_id TEXT PRIMARY KEY REFERENCES request_logs(id) ON DELETE CASCADE,
+  request_body TEXT,
+  response_body TEXT,
+  created_at TEXT NOT NULL
+);
+```
+
+The payload migration backfills existing bodies and keeps legacy body columns as a compatibility fallback. Runtime maintenance moves legacy bodies in resumable batches of 250 rows, using `request_log_payload_cleanup.cursor_id`; existing payload fields are never overwritten. Rows newer than seven days are moved to the payload table; older legacy bodies are intentionally discarded by seven-day payload retention. Payloads purge after seven days; metadata follows `log_retention_days`.
 
 ### Admin audit log
 
@@ -198,7 +214,7 @@ CREATE TABLE settings (
 
 **Migration note** — `0008_remove_pricing.sql` removes the legacy `pricing` table and old money-related columns from existing databases.
 
-**Retention** — nightly task deletes `request_logs` older than `settings.log_retention_days` (default 30). If `TRACK_PAYLOADS=full`, bodies are purged after 7 days regardless.
+**Retention** — scheduled maintenance deletes `request_logs` older than `settings.log_retention_days` (default 30). Payload rows purge after 7 days regardless of metadata retention. Legacy body columns are migrated in batches of 250 and cleared after recent payloads are copied; old legacy bodies are discarded by the seven-day payload policy.
 
 **Backups** — `bun run scripts/backup.ts` writes `DATA_DIR/backups/mirais-accounts-<ts>.json`. It contains providers and provider-account credentials only. Restore adds missing accounts and leaves gateway keys, models, settings, logs, and usage unchanged.
 

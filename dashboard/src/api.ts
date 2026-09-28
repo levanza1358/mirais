@@ -182,6 +182,17 @@ export interface RequestLog {
   reasoning_effort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
   request_body?: string | null;
   response_body?: string | null;
+  has_payload?: number | boolean;
+  attempts_detail?: Array<{
+    provider?: string;
+    model?: string;
+    accountLabel?: string;
+    outcome?: string;
+    httpStatus?: number;
+    error?: string;
+    latencyMs?: number;
+    reason?: string;
+  }> | string | null;
   kind?: string;
 }
 
@@ -353,6 +364,9 @@ export const providers = {
   codexQuota: (accId: string) => req<CodexQuota>(`/api/providers/accounts/${accId}/codex-quota`),
   codexQuotaReset: (accId: string) => req<{ ok: boolean; message: string }>(`/api/providers/accounts/${accId}/codex-quota/reset`, { method: "POST" }),
   copilotQuota: (accId: string) => req<CopilotQuota>(`/api/providers/accounts/${accId}/copilot-quota`),
+  atriaCaptureStatus: () => req<AtriaCaptureDeps>("/api/providers/atria-capture/status"),
+  atriaCapture: (providerId: string, force = false) =>
+    req<AtriaCaptureResult>("/api/providers/atria-capture", { method: "POST", body: JSON.stringify({ providerId, force }) }),
   copilotStart: (providerId: string, label: string) =>
     req<{ accountId: string; url: string }>("/api/copilot/start", { method: "POST", body: JSON.stringify({ providerId, label }) }),
   copilotReconnect: (accountId: string) =>
@@ -377,6 +391,18 @@ export const providers = {
     req<{ job: { id: string; done: boolean; error: string | null; results: Array<{ email: string; success: boolean; error?: string | null }>; logs: string[] } | null }>(`/api/copilot/bulk/latest/${encodeURIComponent(providerId)}`),
   copilotBulkDismiss: (providerId: string) =>
     req<{ ok: boolean }>(`/api/copilot/bulk/latest/${encodeURIComponent(providerId)}`, { method: "DELETE" }),
+  atriaLogin: (providerId: string, lines: string[], headed = false) =>
+    req<{ jobId: string; total: number }>("/api/providers/atria-login", { method: "POST", body: JSON.stringify({ providerId, lines, headed }) }),
+  atriaLoginStatus: (jobId: string) =>
+    req<{ id: string; done: boolean; error: string | null; startedAt: string; results: Array<{ email: string; success: boolean; error?: string | null }> }>(
+      `/api/providers/atria-login/${encodeURIComponent(jobId)}`),
+  atriaLoginLogs: (jobId: string) =>
+    req<{ logs: string[] }>(`/api/providers/atria-login/${encodeURIComponent(jobId)}/logs`),
+  atriaLoginLatest: (providerId: string) =>
+    req<{ job: { id: string; done: boolean; error: string | null; results: Array<{ email: string; success: boolean; error?: string | null }>; logs: string[] } | null }>(
+      `/api/providers/atria-login/latest/${encodeURIComponent(providerId)}`),
+  atriaLoginDismiss: (providerId: string) =>
+    req<{ ok: boolean }>(`/api/providers/atria-login/latest/${encodeURIComponent(providerId)}`, { method: "DELETE" }),
   oauthStart: (providerId: string) =>
     req<{ url: string; state: string }>("/api/oauth/openai/start", { method: "POST", body: JSON.stringify({ providerId }) }),
   oauthRedirectUrl: (url: string) => `/api/oauth/openai/redirect?url=${encodeURIComponent(url)}`,
@@ -434,7 +460,22 @@ export const providers = {
     }
   },
   testModel: (id: string, modelId: string) =>
-    req<{ ok: boolean; status: number; latency_ms: number; model: string; detail?: string; preview_text?: string; context_length?: number | null; max_output_tokens?: number | null; capabilities?: string[] }>(
+    req<{
+      ok: boolean;
+      status: number;
+      latency_ms: number;
+      model: string;
+      detail?: string;
+      preview_text?: string;
+      context_length?: number | null;
+      max_output_tokens?: number | null;
+      capabilities?: string[];
+      usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cached_tokens?: number; reasoning_tokens?: number } | null;
+      /** Per-minute request-window hints (e.g. Atria's `x-rpm-*`); null when the
+       *  upstream does not emit them. */
+      rpm_limit?: number | null;
+      rpm_remaining?: number | null;
+    }>(
       `/api/providers/${id}/models/${encodeURIComponent(modelId)}/test`, { method: "POST" }),
   sync: (id: string) => req<{ synced: number; models: string[] }>(`/api/providers/${id}/sync`, { method: "POST" }),
   // ── xAI OAuth Device Flow ──
@@ -547,6 +588,33 @@ export interface CopilotQuota {
   quotaSnapshots: Record<string, CopilotQuotaSnapshot | undefined>;
 }
 
+/** One prerequisite needed for automatic Atria console session capture. */
+export interface AtriaCaptureCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+  hint?: string;
+}
+
+export interface AtriaCaptureDeps {
+  ok: boolean;
+  platform: string;
+  checks: AtriaCaptureCheck[];
+}
+
+export interface AtriaCaptureResult {
+  captured: number;
+  skipped: number;
+  failed: number;
+  total: number;
+  signed_in?: boolean;
+  verified?: boolean;
+  expires_at?: string;
+  message?: string;
+  errors?: string[];
+}
+
 // ── aliases / combos ──
 export const aliases = {
   list: () => req<Alias[]>("/api/aliases"),
@@ -648,7 +716,7 @@ export const logs = {
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") q.set(k, String(v));
     return req<{ items: RequestLog[]; total: number }>(`/api/logs?${q}`);
   },
-  get: (id: string) => req<RequestLog & { attempts_detail?: unknown }>(`/api/logs/${id}`),
+  get: (id: string) => req<RequestLog>(`/api/logs/${id}`),
   replay: (id: string) => req<Record<string, unknown>>(`/api/logs/${id}/replay`, { method: "POST" }),
   usage: (days = 7) => req<UsageRow[]>(`/api/logs/usage?days=${days}`),
   usageByKey: (keyId: string) => req<{ requests_today: number; tokens_today: number; tokens_total: number; requests_minute: number; requests_total: number; input_tokens_total: number; output_tokens_total: number; top_models: Array<{ model: string; requests: number; tokens: number }> }>(`/api/logs/usage-by-key?key_id=${encodeURIComponent(keyId)}`),

@@ -76,6 +76,21 @@ export function AddCustomModelModal({
                     <Badge key={cap} tone={caps.includes(cap) ? "success" : "muted"}>{cap}</Badge>
                   ))}
                 </div>
+                {result.usage && (
+                  <div className="text-text-muted">
+                    Tokens: <span className="text-text-primary">{result.usage.prompt_tokens.toLocaleString()}</span> in
+                    {" · "}
+                    <span className="text-text-primary">{result.usage.completion_tokens.toLocaleString()}</span> out
+                  </div>
+                )}
+                {typeof result.rpm_limit === "number" && (
+                  <div className="text-text-muted">
+                    Rate limit: <span className="text-text-primary">{result.rpm_limit}</span> req/min
+                    {typeof result.rpm_remaining === "number" && (
+                      <> · <span className="text-text-primary">{result.rpm_remaining}</span> remaining this minute</>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import type { Database } from "../store/sql";
-import type { Provider, ProviderAccount } from "../shared/types";
+import type { Provider, ProviderAccount, Usage } from "../shared/types";
 import { ProvidersRepo } from "../store/repos/providers";
 import { LogsRepo } from "../store/repos/logs";
 import { SettingsRepo } from "../store/repos/settings";
@@ -17,9 +17,13 @@ import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
 import { log } from "../utils/logger";
 import { SseParser } from "../proxy/translator/stream";
+import { normalizeUsage } from "../proxy/promptCache";
+import { isAtriaProvider } from "../proxy/atria-usage";
+import { captureAtriaSession, checkAtriaCaptureDependencies } from "../../scripts/atria-farm/index";
 import { CODEBUDDY_CN_UNUSABLE_CREDITS, CODEBUDDY_MODELS, codeBuddyErrorDetail, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
 import { copilotEntitlementError, copilotLoginForAccount, copilotResolvedLabel, waitCopilotSidecar, checkCopilotQuota } from "./copilot";
 import { AuditRepo } from "../store/repos/audit";
+import { config } from "../config";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
@@ -48,6 +52,20 @@ export function copilotWarmupError(body: unknown, status: number): string {
 function mask(key: string): string {
   if (key.length <= 8) return "••••••••";
   return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+}
+
+/** Parse an integer header that must be > 0 (e.g. `x-rpm-limit`). */
+function positiveIntHeader(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** Parse an integer header that may be 0 (e.g. `x-rpm-remaining`). */
+function nonNegativeIntHeader(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 function extractTestPreviewFromOpenAiPayload(payload: unknown): string | undefined {
@@ -321,8 +339,8 @@ export function providerRoutes(db: Database) {
       outputTokens: null,
       latencyMs: result.latency_ms,
       tokensSaved: 0,
-      requestBody: `Warmup check for account ${acc.label}`,
-      responseBody: result.ok ? `OK (${result.latency_ms}ms)` : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`,
+      requestBody: config.trackPayloads === "full" ? `Warmup check for account ${acc.label}` : null,
+      responseBody: config.trackPayloads === "full" ? (result.ok ? `OK (${result.latency_ms}ms)` : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`) : null,
       kind: "warmup",
     });
 
@@ -496,7 +514,7 @@ export function providerRoutes(db: Database) {
         outputTokens: null,
         latencyMs: Date.now() - started,
         tokensSaved: 0,
-        responseBody: result.message,
+        responseBody: config.trackPayloads === "full" ? result.message : null,
         kind: "claim",
       });
       await audit.record(result.ok ? "updated" : "failed", "provider_account", account.id, { action: "daily_checkin", message: result.message });
@@ -580,6 +598,9 @@ export function providerRoutes(db: Database) {
 
       for (const account of accounts) {
         try {
+          // ── Atria has no reliable quota endpoint; quota scraping was removed. ──
+          if (isAtriaProvider(p)) continue;
+
           // ── CodeBuddy providers: use CodeBuddy-specific usage API ──
           if (p.type === "codebuddy-global" || p.type === "codebuddy-cn") {
             const snap = await fetchCodeBuddyUsage(account, baseUrlFor(p));
@@ -690,6 +711,72 @@ export function providerRoutes(db: Database) {
       const parsed = copilotQuotaSchema.safeParse(await response.json());
       if (!parsed.success) throw new AdminError(502, "GitHub Copilot returned an invalid quota response");
       return parsed.data;
+    })
+    // ── Atria console session auto-capture ──
+    // Atria's session cookie is HttpOnly and its sign-in is captcha-gated, so
+    // it cannot be minted headlessly. Instead a persistent browser profile
+    // signs in once and we harvest the cookie for every account that has none
+    // (or whose cookie has gone stale). One click replaces N manual pastes.
+    .get("/atria-capture/status", () => checkAtriaCaptureDependencies())
+    .post("/atria-capture", async ({ body }) => {
+      const input = (body ?? {}) as { providerId?: unknown; force?: unknown };
+      const providerId = typeof input.providerId === "string" ? input.providerId : null;
+      if (!providerId) throw new AdminError(400, "providerId is required");
+      const provider = await repo.get(providerId);
+      if (!provider) throw new AdminError(404, "Provider not found");
+      if (!isAtriaProvider(provider)) throw new AdminError(400, "Session capture is only available for Atria providers");
+
+      const accounts = await repo.listAccounts(provider.id);
+      if (!accounts.length) throw new AdminError(400, "This provider has no accounts to capture for");
+
+      const deps = await checkAtriaCaptureDependencies();
+      const blocked = deps.checks.filter((check) => !check.ok && check.key !== "profile");
+      if (blocked.length) {
+        throw new AdminError(400, `Cannot capture: ${blocked.map((check) => `${check.label} (${check.detail})`).join(", ")}. Install the missing dependencies first.`);
+      }
+
+      const force = input.force === true;
+      const targets = force ? accounts : accounts.filter((account) => !account.session_cookie);
+      if (!targets.length) {
+        return { captured: 0, skipped: accounts.length, failed: 0, total: accounts.length, message: "Every account already has a session cookie. Use force to refresh them." };
+      }
+
+      // The browser opens on the very first run so the operator can sign in.
+      // Once the profile holds a session this is fully headless.
+      const headed = !deps.checks.find((check) => check.key === "profile")?.ok;
+      const snapshot = await captureAtriaSession({ check: true, headed });
+      if (!snapshot.success || !snapshot.cookies.length) {
+        const detail = snapshot.error === "not_signed_in"
+          ? "No saved Atria session — retry with a visible window to sign in once."
+          : (snapshot.error ?? "capture failed");
+        throw new AdminError(502, `Atria session capture failed: ${detail}`);
+      }
+
+      const cookie = snapshot.cookies[0];
+      let captured = 0;
+      let failed = 0;
+      const errors: string[] = [];
+      for (const account of targets) {
+        try {
+          await repo.updateAccount(account.id, { sessionCookie: cookie });
+          captured += 1;
+        } catch (error) {
+          failed += 1;
+          errors.push(`${account.label}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      log.info("atria session captured", { provider: provider.name, captured, failed });
+      return {
+        captured,
+        skipped: accounts.length - targets.length,
+        failed,
+        total: accounts.length,
+        signed_in: snapshot.signed_in,
+        verified: snapshot.verified ?? false,
+        expires_at: snapshot.expires_at,
+        errors: errors.length ? errors : undefined,
+      };
     })
     // ── models ──
     .get("/:id/models", async ({ params }) => {
@@ -805,10 +892,10 @@ export function providerRoutes(db: Database) {
           outputTokens: null,
           latencyMs: result.latency_ms,
           tokensSaved: 0,
-          requestBody: testPrompt,
-          responseBody: result.ok
+          requestBody: config.trackPayloads === "full" ? testPrompt : null,
+          responseBody: config.trackPayloads === "full" ? (result.ok
             ? `OK (${result.latency_ms}ms)${result.preview_text ? ` — ${result.preview_text}` : ""}`
-            : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`,
+            : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`) : null,
           kind: "test",
         });
       };
@@ -911,6 +998,7 @@ export function providerRoutes(db: Database) {
         let context_length: number | null = null;
         let max_output_tokens: number | null = null;
         let capabilities: string[] | undefined;
+        let usage: Usage | null = null;
         if (!res.ok) {
           const text = (await res.text()).slice(0, 300);
           try {
@@ -921,6 +1009,7 @@ export function providerRoutes(db: Database) {
           }
         } else {
           try {
+            let payload: unknown;
             if (isCodeBuddyProviderType(p.type)) {
               preview_text = res.body ? await readCodeBuddyPreviewFromSse(res.body) : undefined;
             } else if (p.type === "xai" && usedAccount.auth_kind === "oauth") {
@@ -928,7 +1017,7 @@ export function providerRoutes(db: Database) {
             } else if (isCodexAccount(p.type, usedAccount)) {
               preview_text = res.body ? await readCodexPreviewFromSse(res.body) : undefined;
             } else {
-              const payload = await res.json();
+              payload = await res.json();
               preview_text = upstreamFormat(p) === "anthropic"
                 ? extractTestPreviewFromAnthropicPayload(payload)
                 : extractTestPreviewFromOpenAiPayload(payload);
@@ -937,11 +1026,18 @@ export function providerRoutes(db: Database) {
             context_length = meta?.contextLength ?? null;
             max_output_tokens = meta?.maxOutputTokens ?? null;
             capabilities = meta?.capabilities ?? [];
+            const payloadUsage = (payload as { usage?: Record<string, number> } | undefined)?.usage;
+            usage = payloadUsage ? normalizeUsage(payloadUsage) ?? null : null;
           } catch {
             preview_text = undefined;
           }
         }
-        const successResult = { ok: res.ok, status: res.status, latency_ms: latency, model: modelId, account: usedAccount.label, detail, preview_text, context_length, max_output_tokens, capabilities };
+        // Per-minute request-window hints (Atria sends these on successes too).
+        const rpmLimit = positiveIntHeader(res.headers.get("x-rpm-limit"));
+        const rpmRemaining = nonNegativeIntHeader(res.headers.get("x-rpm-remaining"));
+        // Atria has no reliable quota endpoint; quota scraping was removed.
+        const quota: null = null;
+        const successResult = { ok: res.ok, status: res.status, latency_ms: latency, model: modelId, account: usedAccount.label, detail, preview_text, context_length, max_output_tokens, capabilities, usage, rpm_limit: rpmLimit ?? null, rpm_remaining: rpmRemaining ?? null, quota };
         await writeTestLog({ ok: successResult.ok, status: successResult.status, latency_ms: successResult.latency_ms, detail: successResult.detail, preview_text: successResult.preview_text });
         return successResult;
       } catch (err) {
@@ -955,6 +1051,9 @@ export function providerRoutes(db: Database) {
           context_length: null,
           max_output_tokens: null,
           capabilities: [],
+          usage: null,
+          rpm_limit: null,
+          rpm_remaining: null,
         };
         await writeTestLog({ ok: false, status: 0, latency_ms: errorResult.latency_ms, detail: errorResult.detail });
         return errorResult;
@@ -1045,17 +1144,25 @@ export function providerRoutes(db: Database) {
 
       function capsOf(m: UpstreamModel): string[] {
         const caps = new Set<string>();
+        // An explicit upstream `capabilities` map is authoritative: if the
+        // provider tells us a flag is false (Atria declares text-only via
+        // `input_modalities`, mirrored into `capabilities`), a name heuristic
+        // must not override it back on. Every absent key stays "not declared",
+        // so the name heuristics below still fill genuine gaps.
+        const declared = m.capabilities
+          ? new Set(Object.entries(m.capabilities).filter(([, v]) => v).map(([k]) => k.toLowerCase()))
+          : null;
         for (const sp of m.supported_parameters ?? []) {
           const s = sp.toLowerCase();
           if (s.includes("reason")) caps.add("reasoning");
           if (s === "tools" || s === "tool_choice" || s === "function_call") caps.add("tools");
           if (s.includes("response_format") || s.includes("structured")) caps.add("json");
         }
-        if (m.capabilities) {
-          for (const [k, v] of Object.entries(m.capabilities)) if (v) caps.add(k.toLowerCase());
+        if (declared) {
+          for (const k of declared) caps.add(k);
         }
         const idl = m.id.toLowerCase();
-        if (/vision|imag|vl[-/]|photo|seedream|flux|banana/.test(idl)) caps.add("vision");
+        if (!declared?.has("vision") && /vision|imag|vl[-/]|photo|seedream|flux|banana/.test(idl)) caps.add("vision");
         if (/reason|think|r1|o1|o3|deepthink/.test(idl)) caps.add("reasoning");
         if (/pdf|document/.test(idl)) caps.add("pdf");
         return [...caps];
