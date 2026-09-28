@@ -5,7 +5,7 @@ import { type Provider, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, Card, ConfirmModal, Modal, Select, Switch, fmtNum, fmtTime, toast } from "../../components/ui";
 import { AccountMetaModal } from "./AccountMetaModal";
 import { AddAccountModal } from "./AddAccountModal";
-import { CodexQuotaModal, InlineCodexQuota, InlineCopilotQuota, quotaTitle } from "./quota";
+import { CodexQuotaModal, InlineCodexQuota, InlineCopilotQuota, isAtriaProvider, quotaTitle } from "./quota";
 import { ACCOUNT_PAGE_SIZE_OPTIONS, DEFAULT_ACCOUNTS_PER_PAGE } from "./types";
 import { downloadCsv, toCsv } from "../../utils/csv";
 
@@ -109,6 +109,21 @@ export function AccountsCard({ provider }: { provider: Provider }) {
       invalidate();
       queryClient.invalidateQueries({ queryKey: ["codex-quota"] });
       toast(result.message, result.ok ? "success" : "error");
+    },
+    onError: (error: Error) => toast(error.message, "error"),
+  });
+
+  // Atria's console cookie is HttpOnly and its login is captcha-gated, so it
+  // cannot be minted headlessly. This opens a persistent browser profile once
+  // (sign in by hand), then harvests the cookie into every account lacking one.
+  const captureSessions = useMutation({
+    mutationFn: (force: boolean) => providers.atriaCapture(provider.id, force),
+    onSuccess: (result) => {
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ["atria-quota"] });
+      if (result.message) toast(result.message, "success");
+      else if (result.failed) toast(`Captured ${result.captured}, failed ${result.failed}${result.errors?.length ? ` — ${result.errors[0]}` : ""}`, "error");
+      else toast(`Captured sessions for ${result.captured} account${result.captured === 1 ? "" : "s"}${result.skipped ? ` (${result.skipped} already set)` : ""}`);
     },
     onError: (error: Error) => toast(error.message, "error"),
   });
@@ -243,6 +258,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
             {accounts.length > 0 && <Button variant="ghost" size="sm" disabled={exportAccounts.isPending} onClick={() => exportAccounts.mutate()} aria-label={`Export all ${accounts.length} accounts`} title="Download every account with its credentials (CSV)">{exportAccounts.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export</Button>}
             {provider.type === "codebuddy-cn" && accounts.length > 0 && <Button variant="ghost" size="sm" disabled={claimAll.isPending} onClick={() => claimAll.mutate()} aria-label="Claim daily bonus for all CodeBuddy China accounts" title="Run CodeBuddy China daily claim for every enabled account">{claimAll.isPending ? <Loader2 size={14} className="animate-spin" /> : <CalendarCheck size={14} />} Claim all</Button>}
             {accounts.length > 0 && <Button variant="ghost" size="sm" onClick={() => setDeleteScopeMenu(true)} aria-label="Delete accounts"><Trash2 size={14} className="text-danger" /> Delete</Button>}
+            {isAtriaProvider(provider) && accounts.length > 0 && <Button variant="ghost" size="sm" disabled={captureSessions.isPending} onClick={() => captureSessions.mutate(false)} aria-label="Auto-capture Atria console sessions" title="Sign in once in the browser window; Mirais harvests the console session cookie for every account that has none"><RefreshCw size={14} className={captureSessions.isPending ? "animate-spin" : ""} /> Capture sessions</Button>}
             <Button size="sm" onClick={() => setAdding(true)}><Plus size={14} /> Add account</Button>
           </div>
         </div>

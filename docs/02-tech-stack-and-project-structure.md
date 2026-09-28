@@ -7,7 +7,7 @@
 | Runtime | **Bun ≥ 1.1** | Fast startup, native TypeScript, built-in SQL client, test runner, bundler. Single toolchain. Runs on Windows & Linux. |
 | HTTP framework | **Elysia** | Bun-native, tiny, type-safe, plugin model, first-class SSE/stream support. |
 | Validation | **zod** | Env + request body validation with TS inference. |
-| DB | **MySQL 8.4 LTS** via Bun's native `Bun.SQL` client | Portable server under `.mysql/`, InnoDB tables, connection pooling, and better performance for large request-log datasets. A legacy SQLite file can be imported automatically at startup. |
+| DB | **MySQL 8.4 LTS** via Bun's native `Bun.SQL` client | Portable server under `.mysql/`, InnoDB tables, connection pooling, query timeout, and better performance for large request-log datasets. |
 | Dashboard | **React 18 + Vite + Tailwind CSS v4** | Fast SPA, huge ecosystem, utility-first styling, dark mode out of the box. |
 | Dashboard components | Custom + **lucide-react** icons + **recharts** (analytics charts) | No heavy UI kit; clean bespoke design, small bundle. |
 | State/data (dashboard) | **TanStack Query** | Server-state caching for admin REST API. |
@@ -140,7 +140,7 @@ mirais/
 # ── Server ──
 PORT=1463
 HOST=127.0.0.1                 # use 0.0.0.0 to expose on LAN/Tailscale
-DATA_DIR=./data                # legacy import source, backups, music, and logs
+DATA_DIR=./data                # backups, music, and runtime data
 MYSQL_PORT=14631               # portable MySQL listens on loopback
 
 # ── Dashboard auth ──
@@ -149,9 +149,10 @@ SESSION_TTL_HOURS=12            # default login lifetime; configurable in Settin
 
 # ── Behaviour ──
 TOKEN_SAVER=on                 # on | off
-TRACK_PAYLOADS=full            # none | meta | full   (full stores req/resp bodies)
+TRACK_PAYLOADS=full            # none | meta | full   (full stores payloads; list queries stay metadata-only)
 REQUEST_BODY_LIMIT_MB=25
 UPSTREAM_TIMEOUT_MS=120000
+DB_QUERY_TIMEOUT_MS=30000       # cancel long-running MySQL queries
 # Match this with `codex --version` after updating the official Codex CLI.
 # Codex uses it to decide which ChatGPT-authenticated models to return.
 CODEX_CLIENT_VERSION=0.145.0
@@ -169,7 +170,7 @@ LOG_LEVEL=info                 # debug | info | warn | error
 |---------|----------|
 | Paths | Always `node:path`/`Bun.file` APIs — never hardcode `/` or `\`. |
 | Line endings | `.gitattributes` with `* text=auto eol=lf` (Bun fine either way). |
-| SQLite | `bun:sqlite` ships with Bun on both OS — no native build step. |
+| MySQL | Portable MySQL runs on both OS; Bun SQL handles pooled parameterized queries. SQLite migration files remain only for test fixtures. |
 | Service | Windows → `nssm` or Task Scheduler; Ubuntu → systemd unit (see doc 07). |
 | Firewall | Windows prompts on first listen; Ubuntu Server needs `ufw allow 1463/tcp` only if `HOST=0.0.0.0`. |
 | Dev parity | Same commands (`bun run dev`) on both. No WSL required on Windows. |

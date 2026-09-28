@@ -300,6 +300,8 @@ function ProviderCard({
   const quotaData = quota?.data;
   const quotaTotal = quotaData?.total_credits;
   const quotaUnlimited = quotaData?.unlimited;
+  // Atria reports a token balance, not credits — label it accordingly.
+  const quotaUnit = preset.name === "atria" || (provider?.base_url ?? preset.baseUrl ?? "").includes("atria-asi.ai") ? "tokens" : "credits";
 
   return (
     <div
@@ -343,7 +345,7 @@ function ProviderCard({
                     quotaUnlimited
                       ? "Unlimited credits"
                       : quotaTotal != null
-                        ? quotaTotal.toLocaleString() + " credits"
+                        ? quotaTotal.toLocaleString() + " " + quotaUnit
                         : quotaData.free_remaining_pct != null
                           ? quotaData.free_remaining_pct + "% available"
                           : quotaData.accounts_free + " free account" + (quotaData.accounts_free === 1 ? "" : "s")

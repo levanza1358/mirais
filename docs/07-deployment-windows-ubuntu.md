@@ -82,7 +82,7 @@ HOST=127.0.0.1           # recommended behind a reverse proxy
 DATA_DIR=/opt/mirais/data   # ⚠️ use an absolute path on VPS, not "./data"
 ```
 
-> **`DATA_DIR` matters.** If you leave it as `./data`, the legacy SQLite file lands
+> **`DATA_DIR` matters.** If you leave it as `./data`, runtime data lands
 > wherever the process was started from. On `mirais start` (the bundled
 > CLI) this is the install root, so it Just Works. But if you run via
 > `systemd`, `pm2`, `docker`, or any launcher that doesn't `cd` into the
@@ -138,7 +138,7 @@ Alternative without extra tools: **Task Scheduler** → trigger "At log on", act
 
 **Firewall:** first listen may prompt — allow "Private networks". If you keep `HOST=127.0.0.1` no inbound rule is needed.
 
-**Data location:** `%CD%\data` (backups, music, logs, and an optional legacy `mirais.db`). The active database is the portable MySQL server under `.mysql`; back it up with the dashboard's "Backup now" or while stopped.
+**Data location:** `%CD%\data` (backups, music, and runtime data). The active database is the portable MySQL server under `.mysql`; back it up with the dashboard's "Backup now" or while stopped.
 
 ## 3B. Ubuntu / Ubuntu Server — systemd service
 

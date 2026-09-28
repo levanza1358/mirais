@@ -17,6 +17,9 @@ The single source of truth is the documentation set:
 | [docs/05-uiux-design.md](docs/05-uiux-design.md) | Any dashboard work |
 | [docs/06-implementation-phases.md](docs/06-implementation-phases.md) | Knowing what to build next |
 | [docs/07-deployment-windows-ubuntu.md](docs/07-deployment-windows-ubuntu.md) | Deployment/service/Docker work |
+| [docs/08-codebuddy-compatibility.md](docs/08-codebuddy-compatibility.md) | CodeBuddy provider request shaping |
+| [docs/09-reasoning.md](docs/09-reasoning.md) | Reasoning translation across providers |
+| [docs/10-atria-auto-login.md](docs/10-atria-auto-login.md) | Atria bulk account import (auto-login + API key capture) |
 | [PRD.md](PRD.md) | Understanding *what* and *why* |
 | [DESIGN.md](DESIGN.md) | Technical & UI design decisions (ADRs) |
 | [RULES.md](RULES.md) | Coding rules — **binding, not optional** |

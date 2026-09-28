@@ -8,7 +8,7 @@ Two API surfaces:
 
 ### Payload logging
 
-`TRACK_PAYLOADS` defaults to `full`, retaining request and response payloads for new gateway requests. The dashboard **Logs** detail view displays captured bodies and provides copy controls. This mode can contain user prompts, tool outputs, and model responses; use it only on a trusted machine. Set it to `meta` or `none` when payload capture is not wanted. Authorization headers and provider credentials are never recorded by request logging.
+`TRACK_PAYLOADS` defaults to `full`, retaining request and response payloads for new gateway requests and full-payload auxiliary events (warmup, claim, and model test). The dashboard **Logs** detail view displays captured bodies and provides copy controls. This mode can contain user prompts, tool outputs, model responses, account labels, and test output; use it only on a trusted machine. Set it to `meta` or `none` to suppress all request/response body storage. Authorization headers and provider credentials are never recorded by request logging.
 
 ---
 
@@ -116,6 +116,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | POST | `/api/autostart` | `{ enabled: boolean }` → enable/disable start-on-boot. Windows uses the per-user Startup folder; Linux writes a systemd unit and needs root or passwordless sudo (`400` with an actionable message otherwise) |
 | GET | `/api/provider-health?days=` | Per-provider request count, error count/rate, average latency, and last request time |
 | GET | `/api/audit?page=&limit=` | Paginated admin configuration changes. Secrets and request/response bodies are never recorded |
+| GET | `/api/logs/:id` | Returns metadata and lazily loaded request/response payloads for one log |
 | GET | `/api/logs/:id/replay` | Returns a captured canonical request payload when payload tracking is enabled |
 | POST | `/api/logs/:id/replay` | Explicitly re-routes a captured request through the current gateway configuration; may consume provider quota |
 | POST | `/api/providers/:id/warmup/stream?status=` | Streams warmup results for enabled accounts filtered by `all`, `healthy`, `rate_limited`, `failing`, or `unknown` |
@@ -124,7 +125,11 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 
 ### Providers & accounts
 
-`Provider` = an upstream service. Built-in types include `openai`, `anthropic`, `deepseek`, `xai`, `glm`, `blackbox`, `codebuddy-global`, `codebuddy-cn`, `github-copilot`, and `custom` (custom = any OpenAI-compatible base URL). `github-copilot` uses a local OpenAI-compatible Copilot SDK sidecar for each account.
+`Provider` = an upstream service. Built-in types include `openai`, `anthropic`, `deepseek`, `xai`, `glm`, `blackbox`, `codebuddy-global`, `codebuddy-cn`, `github-copilot`, and `custom` (custom = any OpenAI-compatible base URL). `github-copilot` uses a local OpenAI-compatible Copilot SDK sidecar for each account. Well-known OpenAI-compatible services that need no bespoke transport (e.g. **Atria** at `https://api.atria-asi.ai/v1`, model `Atria-Dawn-Preview`) ship as `custom`-type **presets** in the dashboard provider catalog (`dashboard/src/providerCatalog.ts`) so they appear as one-click cards without a new provider type.
+
+Atria rate-limits by **requests per minute per account** (shared across all API keys and all three of its APIs). It returns `Retry-After`, `x-rpm-limit`, and `x-rpm-remaining` on `429`s and repeats the `x-rpm-*` pair on successful responses. Mirais parses `Retry-After` structurally and honours it for the cooldown window, and reports `x-rpm-*` on `POST /api/providers/:id/models/:modelId/test` as `rpm_limit` / `rpm_remaining`.
+
+Atria exposes **no quota-balance API** — `/v1/usage`, `/v1/dashboard/billing/usage`, `/v1/dashboard/billing/subscription`, `/v1/quota` and `/v1/me` all return `404 not_found`. The console-scraped token balance was removed (the API key alone is enough to route requests); per-provider token consumption comes from Mirais' own request logs (`GET /api/providers/:id/accounts/usage`).
 
 | Method | Path | Notes |
 |--------|------|-------|
@@ -141,7 +146,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | GET | `/api/providers/accounts/:accId/codex-quota` | ChatGPT/Codex quota snapshot (OAuth accounts only) → `{ plan_type, email, limit_reached, primary, secondary, credits }`; each window has `used_percent, remaining_percent, window_seconds, resets_in_seconds, reset_at`. `secondary` = the 5-hour window when the plan has one |
 | POST | `/api/providers/accounts/:accId/codex-quota/reset` | Attempt ChatGPT/Codex banked reset for an OAuth account → `{ ok, message }` |
 | GET | `/api/providers/accounts/:accId/copilot-quota` | Live GitHub Copilot quota snapshots keyed by type (`premium_interactions`, `chat`, `completions`) with remaining percentage, entitlement usage, and reset date |
-| GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
+| GET | `/api/logs?kind=` | Metadata-only request logs; `kind=request\|warmup\|claim\|test` filters event types. Response includes `has_payload`; request/response bodies are loaded only from `GET /api/logs/:id`. |
 | GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, cached_tokens, cache_write_tokens, avg_latency_ms, errors, last_ts }]` |
 | POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (the unified `openai` provider) |
 | POST | `/api/copilot/start` | Start an isolated GitHub Copilot browser login: `{ providerId, label }` → `{ accountId, url }`. Opens GitHub's official login flow; no GitHub password is sent to Mirais. |
@@ -157,7 +162,7 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | POST | `/api/providers/:id/warmup/stream` | Server-Sent Events for sequential enabled-account warmup. Emits `start`, `account_start`, `account_result`, and `complete`; results include account ID, `warmup_status`, upstream status, latency, and detail. Copilot warmup starts its local sidecar and preserves SDK errors; xAI OAuth retries one transient connection failure; Blackbox uses a minimal chat completion. |
 | POST | `/api/providers/:id/test` | Connectivity test against the upstream `/models` endpoint → `{ ok, status, latency_ms, account }`. For OAuth accounts: a token refresh stands in for the test (Codex backend has no `/models`) |
 | POST | `/api/providers/:id/sync` | Fetch full model list from upstream `/models` and register all → `{ synced, models, pruned }`. For OAuth accounts: syncs the live Codex catalog (`{codex}/models?client_version=1.0.0`). Sync only adds/updates models; previously synced models are removed (`pruned`) only when the `model_sync_prune` setting is enabled (default off). Upstream null/empty metadata never erases values already stored for a model. |
-| POST | `/api/providers/:id/models/:modelId/test` | Per-model test: tiny chat completion (`max_tokens: 16`) against the upstream → `{ ok, status, latency_ms, model, detail? }`. For OAuth accounts: a streaming Codex `/responses` call (backend requires `stream: true`) |
+| POST | `/api/providers/:id/models/:modelId/test` | Per-model test: tiny chat completion (`max_tokens: 16`) against the upstream → `{ ok, status, latency_ms, model, detail?, preview_text?, context_length?, max_output_tokens?, capabilities?, usage?, rpm_limit?, rpm_remaining? }`. `rpm_limit` / `rpm_remaining` mirror the upstream's `x-rpm-*` headers when present. For OAuth accounts: a streaming Codex `/responses` call (backend requires `stream: true`) |
 | GET | `/api/providers/:id/models` | Models known for this provider |
 | GET | `/api/xai/farm/check` | xAI Farm prerequisite report for IMAP settings, Python, Python packages, and Camoufox browser. |
 | POST | `/api/xai/farm/install-missing` | Starts a fixed-command background installation job. Creates `<install-root>/.venv` when absent, installs its packages, and downloads Camoufox into `<install-root>/.camoufox`. Returns the initial job status; concurrent jobs return `409`. |
@@ -197,8 +202,8 @@ Gateway API keys support multiple independent credentials. Each key can have `ra
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, thinking mode, tokens, cache-read/cache-write tokens, latency, cost, error). Only the requested thinking setting is stored; reasoning content is never logged. |
-| GET | `/api/logs/:id` | Detail incl. payloads if `TRACK_PAYLOADS=full` |
+| GET | `/api/logs?page=&limit=&status=&model=&provider=&key_id=&kind=&from=&to=` | Paginated metadata-only log history. `page` defaults to 1, `limit` defaults to 50 and accepts 1–200. Payloads are excluded; response includes `has_payload`. |
+| GET | `/api/logs/:id` | Detail incl. payloads if `TRACK_PAYLOADS=full`; payload detail is lazy-loaded and may be absent after seven-day payload retention. `attempts_detail` contains the failover timeline when recorded. |
 | DELETE | `/api/logs` | Purge (body: `{ before: "ISO-date" }`) |
 
 ### Grok-4.5 reasoning and tool work

@@ -36,6 +36,10 @@ scripts/_tmp_*.py
 scripts/_tmp_*.ts
 .camoufox/
 .venv/
+# Persistent Atria browser profile — holds a live, authenticated session cookie.
+.atria-profile/
+.atria-profiles/
+.tmp-log-test.txt
 scripts/xfarm/result_*.json
 scripts/xfarm/config_*.json
 __pycache__/

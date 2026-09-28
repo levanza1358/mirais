@@ -141,10 +141,16 @@ export function logRoutes(db: Database) {
     return Number.isFinite(n) && n >= 1 && n <= 365 ? Math.floor(n) : 7;
   };
   return new Elysia({ prefix: "/api/logs" })
-    .get("/", ({ query }) =>
-      logs.list({
-        page: Math.max(1, Number.isFinite(Number(query.page)) ? Number(query.page) : 1),
-        limit: Math.min(200, Math.max(1, Number.isFinite(Number(query.limit)) ? Number(query.limit) : 50)),
+    .get("/", ({ query }) => {
+      const parsePage = (raw: unknown, fallback: number, max: number) => {
+        if (raw == null || raw === "") return fallback;
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value < 1 || value > max) throw new AdminError(400, "Pagination must be a positive integer");
+        return value;
+      };
+      return logs.list({
+        page: parsePage(query.page, 1, Number.MAX_SAFE_INTEGER),
+        limit: parsePage(query.limit, 50, 200),
         model: query.model,
         provider: query.provider,
         status: query.status,
@@ -152,8 +158,8 @@ export function logRoutes(db: Database) {
         from: query.from,
         to: query.to,
         kind: query.kind,
-      }),
-    )
+      });
+    })
     .get("/usage", ({ query }) => logs.usageAggregate(days(query.days)))
     .get("/usage-by-key", ({ query }) => {
       if (typeof query.key_id !== "string" || !query.key_id) throw new AdminError(400, "key_id is required");

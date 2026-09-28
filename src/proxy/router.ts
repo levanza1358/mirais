@@ -12,8 +12,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   glm: "https://open.bigmodel.cn/api/paas/v4",
   blackbox: "https://enterprise.blackbox.ai",
   "codebuddy-global": "https://www.codebuddy.ai/v2",
-  "codebuddy-cn": "https://copilot.tencent.com/v2",
-};
+  "codebuddy-cn": "https://copilot.tencent.com/v2",  atria: "https://api.atria-asi.ai/v1",};
 
 export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   mode: "balanced",

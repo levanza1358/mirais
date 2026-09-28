@@ -14,10 +14,10 @@ Technical and product design decisions for Mirais, each with context and consequ
 **Decision:** Client API (`/v1`), admin API (`/api`), static dashboard (`/`) all on `:1463`.
 **Consequences:** + trivial to run/secure/document; − one process is a blast-radius (mitigated by process supervisor restart + crash-rate NFR).
 
-## ADR-003: SQLite via `bun:sqlite`, no ORM
-**Context:** Single-instance gateway; native modules (better-sqlite3) break cross-platform installs; ORMs hide SQL we *want* to see.
-**Decision:** Raw SQL in thin repo modules; WAL mode; ULID ids; migration files applied in order.
-**Consequences:** + zero-dep, auditable, identical on Win/Ubuntu; − hand-written queries (fine at ~8 tables).
+## ADR-003: Portable MySQL via Bun.SQL, no ORM
+**Context:** Request logs can contain large payloads and need pooled concurrent access; native SQLite modules and ORMs add deployment or audit cost.
+**Decision:** Runtime uses portable MySQL 8.4 through Bun.SQL; raw parameterized SQL in thin repo modules; ULID ids; migration files applied in order. SQLite migration files remain test fixtures only.
+**Consequences:** + pooled access, InnoDB foreign keys, auditable SQL, identical on Windows/Ubuntu; − private MySQL process must be bootstrapped and supervised.
 
 ## ADR-004: Canonical format = OpenAI Chat Completions
 **Context:** Two client protocols (OpenAI, Anthropic), N upstreams.
@@ -44,10 +44,10 @@ Technical and product design decisions for Mirais, each with context and consequ
 **Decision:** Ordered rule set with per-rule toggles; count `tokens_saved`; optional terse system-prompt injection; per-request bypass header.
 **Consequences:** + transparent, testable, debuggable; − misses savings ML could catch (backlog: pluggable compressor).
 
-## ADR-009: Gateway keys hashed, shown once
-**Context:** Keys are bearer secrets; DB theft shouldn't leak usable keys.
-**Decision:** SHA-256 hash stored; prefix kept for display; constant-time compare; plaintext revealed only at creation.
-**Consequences:** + leak-resistant; − lost key = re-issue (documented in UI).
+## ADR-009: Gateway keys recoverable in local install
+**Context:** Single-user local installs need recoverable gateway credentials for client configuration and backup; network access remains the primary boundary.
+**Decision:** New gateway keys store plaintext locally plus prefix; legacy `key_hash` remains for lookup fallback; constant-time comparison is used.
+**Consequences:** + operators can recover keys; − protect `.mysql/` and `DATA_DIR` with filesystem permissions and never expose admin APIs directly.
 
 ## ADR-010: Dashboard auth = single password + signed cookie (SUPERSEDED by ADR-016)
 **Context:** Single-user/team tool; multi-user auth is a non-goal.

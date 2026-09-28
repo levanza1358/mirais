@@ -304,9 +304,9 @@ export default function Logs() {
       ) : tab === "warmup" ? (
         <WarmupList items={items} />
       ) : tab === "claim" ? (
-        <ClaimList items={items} />
+        <ClaimList items={items} expanded={expanded} onToggle={(id) => setExpanded(expanded === id ? null : id)} />
       ) : tab === "test" ? (
-        <TestList items={items} />
+        <TestList items={items} expanded={expanded} onToggle={(id) => setExpanded(expanded === id ? null : id)} />
       ) : (
         <RequestList
           items={items}
@@ -381,11 +381,18 @@ function RequestList({
 }
 
 function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; expanded: boolean; onToggle: () => void; modelMap: Map<string, string> }) {
+  const detail = useQuery({
+    queryKey: ["log-detail", l.id],
+    queryFn: () => logs.get(l.id),
+    enabled: expanded,
+    staleTime: 60_000,
+  });
   const replay = useMutation({
     mutationFn: () => logs.replay(l.id),
     onSuccess: () => toast("Request replay completed"),
     onError: (error) => toast(error.message, "error"),
   });
+  const full = detail.data ?? l;
   return (
     <>
       <div className="cursor-pointer px-5 py-4 hover:bg-bg-raised/30" onClick={onToggle}>
@@ -433,14 +440,32 @@ function LogRow({ log: l, expanded, onToggle, modelMap }: { log: RequestLog; exp
             <Detail k="Latency" v={fmtMs(l.latency_ms)} />
             {l.error && <Detail k="Error" v={l.error} />}
           </div>
-          <Payload title="Request body" value={l.request_body} />
-          <Payload title="Response body" value={l.response_body} />
-          {l.request_body && l.kind === "request" && <div className="mt-4 flex items-center justify-between rounded-lg border border-warning/20 bg-warning/5 px-3 py-2"><span className="text-xs text-warning">Replay sends a new request and may consume provider quota.</span><Button size="sm" variant="outline" loading={replay.isPending} onClick={(event) => { event.stopPropagation(); if (window.confirm("Replay this request through the current routing configuration?")) replay.mutate(); }}>Replay request</Button></div>}
-          {!l.request_body && !l.response_body && <p className="mt-4 text-xs text-text-muted">No payload was captured for this request. Set <code>TRACK_PAYLOADS=full</code>, restart Mirais, then send a new request.</p>}
+          {detail.data?.attempts_detail && <AttemptsDetail value={detail.data.attempts_detail} />}
+          {detail.isLoading ? <Skeleton className="mt-4 h-24 w-full" /> : detail.isError ? <p className="mt-4 text-xs text-danger">Failed to load log detail: {(detail.error as Error).message}</p> : <>
+            <Payload title="Request body" value={full.request_body} />
+            <Payload title="Response body" value={full.response_body} />
+            {full.request_body && l.kind === "request" && <div className="mt-4 flex items-center justify-between rounded-lg border border-warning/20 bg-warning/5 px-3 py-2"><span className="text-xs text-warning">Replay sends a new request and may consume provider quota.</span><Button size="sm" variant="outline" loading={replay.isPending} onClick={(event) => { event.stopPropagation(); if (window.confirm("Replay this request through the current routing configuration?")) replay.mutate(); }}>Replay request</Button></div>}
+            {!full.request_body && !full.response_body && <p className="mt-4 text-xs text-text-muted">No payload was captured for this request. Set <code>TRACK_PAYLOADS=full</code>, restart Mirais, then send a new request.</p>}
+          </>}
         </div>
       ) : null}
     </>
   );
+}
+
+function AttemptsDetail({ value }: { value: NonNullable<RequestLog["attempts_detail"]> }) {
+  const attempts = typeof value === "string" ? (() => {
+    try { return JSON.parse(value) as unknown; } catch { return null; }
+  })() : value;
+  if (!Array.isArray(attempts) || attempts.length === 0) return null;
+  return <section className="mt-4 rounded-lg border border-border bg-bg-base/60 p-3"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">Attempts</p><div className="mt-2 space-y-2">{attempts.map((attempt, index) => {
+    if (!attempt || typeof attempt !== "object") return null;
+    const item = attempt as Record<string, unknown>;
+    const label = [item.provider, item.model, item.accountLabel].filter((part): part is string => typeof part === "string" && part.length > 0).join(" · ");
+    const status = typeof item.httpStatus === "number" ? `HTTP ${item.httpStatus}` : typeof item.outcome === "string" ? item.outcome : "unknown";
+    const detail = typeof item.error === "string" ? item.error : typeof item.reason === "string" ? item.reason : "";
+    return <div key={index} className="rounded border border-border/70 px-3 py-2 text-xs"><div className="flex flex-wrap gap-2"><span className="font-medium">Attempt {index + 1}</span><span className="text-text-muted">{label || "—"}</span><span className="text-text-muted">{status}</span>{typeof item.latencyMs === "number" && <span className="text-text-muted">{fmtMs(item.latencyMs)}</span>}</div>{detail && <p className="mt-1 break-words text-danger">{detail}</p>}</div>;
+  })}</div></section>;
 }
 
 function Detail({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
@@ -514,82 +539,44 @@ function WarmupRow({ log }: { log: RequestLog }) {
   );
 }
 
-function ClaimList({ items }: { items: RequestLog[] }) {
-  return (
-    <Card className="overflow-hidden p-0">
-      <div className="divide-y divide-border">
-        {items.map((item) => {
-          const success = item.status === "success";
-          return (
-            <div key={item.id} className="grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr_0.8fr_1.4fr] lg:items-center">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={success ? "success" : "danger"}>{success ? "claimed" : "failed"}</Badge>
-                  <span className="text-xs text-text-muted">{fmtTime(item.ts)}</span>
-                </div>
-                <p className="mt-2 font-mono text-sm text-text-primary">{item.account_label ?? item.requested_model}</p>
-                <p className="mt-1 text-xs text-text-muted">{item.provider ?? "—"}</p>
-              </div>
-              <div className="grid gap-1 text-xs text-text-muted">
-                <span>Latency: <span className="text-text-primary">{fmtMs(item.latency_ms)}</span></span>
-                <span>HTTP: <span className="text-text-primary">{item.http_status ?? "—"}</span></span>
-              </div>
-              <div className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-xs text-text-muted">
-                {item.error ?? item.response_body ?? "Claim completed successfully."}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
+function DetailToggle({ expanded }: { expanded: boolean }) {
+  return <span className="text-xs text-text-muted">{expanded ? "Hide detail" : "Open detail"}</span>;
 }
 
-function TestList({ items }: { items: RequestLog[] }) {
-  return (
-    <Card className="overflow-hidden p-0">
-      <div className="divide-y divide-border">
-        {items.map((l) => (
-          <TestRow key={l.id} log={l} />
-        ))}
-      </div>
-    </Card>
-  );
+function AuxLogDetail({ log, showRequest }: { log: RequestLog; showRequest: boolean }) {
+  const detail = useQuery({ queryKey: ["log-detail", log.id], queryFn: () => logs.get(log.id), enabled: true, staleTime: 60_000 });
+  if (detail.isLoading) return <Skeleton className="h-20 w-full" />;
+  if (detail.isError) return <p className="text-xs text-danger">Failed to load log detail: {(detail.error as Error).message}</p>;
+  return <>
+    {showRequest && <Payload title="Request body" value={detail.data?.request_body} />}
+    <Payload title="Response body" value={detail.data?.response_body} />
+  </>;
 }
 
-function TestRow({ log }: { log: RequestLog }) {
-  return (
-    <div className="px-5 py-4 hover:bg-bg-raised/30">
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr_auto] lg:items-center">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={log.status === "success" ? "success" : "danger"}>{log.status}</Badge>
-            <span className="text-xs text-text-muted">{fmtTime(log.ts)}</span>
-          </div>
-          <p className="mt-2 font-mono text-sm text-text-primary">{log.requested_model}</p>
-          <p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"} · account {log.account_label ?? "—"}</p>
-          {log.error && <p className="mt-1 truncate text-xs text-danger" title={log.error}>{log.error}</p>}
-        </div>
-        <div className="grid gap-1 text-xs text-text-muted">
-          <span>Latency: <span className="text-text-primary">{fmtMs(log.latency_ms)}</span></span>
-          {log.response_body && (
-            <span className="truncate" title={log.response_body}>
-              Result:{" "}
-              <span className="text-text-primary">
-                {log.response_body.slice(0, 80)}
-                {log.response_body.length > 80 ? "…" : ""}
-              </span>
-            </span>
-          )}
-        </div>
-        <div className="text-xs text-text-muted">
-          {log.http_status != null ? (
-            <Badge tone={log.http_status >= 200 && log.http_status < 300 ? "success" : "danger"}>HTTP {log.http_status}</Badge>
-          ) : (
-            "—"
-          )}
-        </div>
-      </div>
+function ClaimList({ items, expanded, onToggle }: { items: RequestLog[]; expanded: string | null; onToggle: (id: string) => void }) {
+  return <Card className="overflow-hidden p-0"><div className="divide-y divide-border">{items.map((item) => <ClaimRow key={item.id} log={item} expanded={expanded === item.id} onToggle={() => onToggle(item.id)} />)}</div></Card>;
+}
+
+function ClaimRow({ log, expanded, onToggle }: { log: RequestLog; expanded: boolean; onToggle: () => void }) {
+  const success = log.status === "success";
+  return <>
+    <div className="cursor-pointer grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr_0.8fr_1.4fr_auto] lg:items-center hover:bg-bg-raised/30" onClick={onToggle}>
+      <div><div className="flex flex-wrap items-center gap-2"><Badge tone={success ? "success" : "danger"}>{success ? "claimed" : "failed"}</Badge><span className="text-xs text-text-muted">{fmtTime(log.ts)}</span></div><p className="mt-2 font-mono text-sm text-text-primary">{log.account_label ?? log.requested_model}</p><p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"}</p></div>
+      <div className="grid gap-1 text-xs text-text-muted"><span>Latency: <span className="text-text-primary">{fmtMs(log.latency_ms)}</span></span><span>HTTP: <span className="text-text-primary">{log.http_status ?? "—"}</span></span></div>
+      <div className="rounded-xl border border-border/70 bg-bg-base/60 px-3 py-2 text-xs text-text-muted">{log.error ?? "Claim result available in detail."}</div>
+      <DetailToggle expanded={expanded} />
     </div>
-  );
+    {expanded && <div className="border-t border-border bg-bg-base/50 px-4 py-3"><AuxLogDetail log={log} showRequest={false} /></div>}
+  </>;
+}
+
+function TestList({ items, expanded, onToggle }: { items: RequestLog[]; expanded: string | null; onToggle: (id: string) => void }) {
+  return <Card className="overflow-hidden p-0"><div className="divide-y divide-border">{items.map((log) => <TestRow key={log.id} log={log} expanded={expanded === log.id} onToggle={() => onToggle(log.id)} />)}</div></Card>;
+}
+
+function TestRow({ log, expanded, onToggle }: { log: RequestLog; expanded: boolean; onToggle: () => void }) {
+  return <>
+    <div className="cursor-pointer px-5 py-4 hover:bg-bg-raised/30" onClick={onToggle}><div className="grid gap-4 lg:grid-cols-[1.4fr_1fr_auto] lg:items-center"><div><div className="flex flex-wrap items-center gap-2"><Badge tone={log.status === "success" ? "success" : "danger"}>{log.status}</Badge><span className="text-xs text-text-muted">{fmtTime(log.ts)}</span></div><p className="mt-2 font-mono text-sm text-text-primary">{log.requested_model}</p><p className="mt-1 text-xs text-text-muted">{log.provider ?? "—"} · account {log.account_label ?? "—"}</p>{log.error && <p className="mt-1 truncate text-xs text-danger" title={log.error}>{log.error}</p>}</div><div className="grid gap-1 text-xs text-text-muted"><span>Latency: <span className="text-text-primary">{fmtMs(log.latency_ms)}</span></span><span>{log.has_payload ? "Result available" : "No captured result"}</span></div><div className="flex items-center gap-2 text-xs text-text-muted">{log.http_status != null ? <Badge tone={log.http_status >= 200 && log.http_status < 300 ? "success" : "danger"}>HTTP {log.http_status}</Badge> : "—"}<DetailToggle expanded={expanded} /></div></div></div>
+    {expanded && <div className="border-t border-border bg-bg-base/50 px-4 py-3"><AuxLogDetail log={log} showRequest /></div>}
+  </>;
 }

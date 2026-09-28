@@ -91,6 +91,8 @@ sequenceDiagram
 - **Streaming-first**: SSE is piped chunk-by-chunk; translation works on incremental events, never buffers the full body (except non-stream requests).
 - **Failover only on retriable errors**: 429, 500/502/503/504, network errors, upstream auth failure (account revoked), and SSE streams that end before producing output. Client errors are returned as-is except `413` on Combo routes: the rejecting model is skipped because another model may accept the same context size. Once output is forwarded, the request is never retried.
 - **Cooldowns**: retriable failures create an in-memory attempt cooldown. Model-scoped 429 windows are also persisted per account/model so a restart does not immediately retry an exhausted model; expired cooldowns are swept every minute.
+- **Upstream rate-limit hints**: a `429`'s `Retry-After` header is parsed structurally (not scraped from the error text) and drives the persisted cooldown window. Providers that advertise a per-minute request window — Atria returns `x-rpm-limit` / `x-rpm-remaining` on *successful* responses too — have those values captured and surfaced in the model-test result so operators can see remaining headroom.
+- **No Atria quota**: Atria publishes no quota API (every `/v1/usage`, `/v1/dashboard/billing/*`, `/v1/quota`, `/v1/me` path 404s) and the console-scraped token balance was removed — the API key alone is enough to route requests. `src/proxy/atria-usage.ts` now only exposes `isAtriaProvider` (provider detection used by auto-login and session capture).
 - **Bounded request bodies**: client JSON bodies are limited by `REQUEST_BODY_LIMIT_MB` (default 25 MB), including bodies without a trustworthy `Content-Length`.
 - **Credential-safe upstream fetches**: same-host HTTP(S) redirects are followed manually; cross-host redirects are rejected so provider credentials are never replayed to another host.
 - **Idempotent logging**: usage is logged after the response completes (or aborts), keyed by request id.
@@ -108,8 +110,9 @@ sequenceDiagram
 | `src/proxy/refresh.ts` | Per-account OAuth refresh single-flight and persisted reauthentication state |
 | `src/utils/upstreamUrl.ts` | Upstream URL safety checks and credential-safe redirect following |
 | `src/proxy/promptCache.ts` | Provider prompt-cache hints and cache-token usage normalization |
+| `src/proxy/atria-usage.ts` | Exposes `isAtriaProvider` (Atria provider detection) used by auto-login and session capture. The console token-quota scraper was removed. |
 | `src/tokensaver/` | tool_result compression rules (git diff/stat, grep, ls/tree, test output), optional terse-mode system prompt injection |
-| `src/store/` | MySQL access layer and repositories; `.mysql/` contains the private portable server and `data/mirais.db` is retained as a legacy import source |
+| `src/store/` | MySQL access layer, migrations, and repositories; `.mysql/` contains the private portable server |
 | `src/usage/` | Token counting (tiktoken / heuristic), cost table, aggregation queries |
 | `src/shared/` | Types, errors, OpenAI/Anthropic schemas |
 
@@ -150,7 +153,7 @@ GitHub Copilot has no public OpenAI-compatible inference endpoint. Mirais includ
 
 Each model's **context length**, **max output tokens**, and **capabilities** are stored per model (migration `0002`). They are never hardcoded per account — they follow the model's own spec:
 
-- At **sync**, upstream-provided metadata wins; when the upstream returns none (e.g. BlackBox's `/models` only returns `{ id, object, created }`), [src/proxy/modelMeta.ts](../src/proxy/modelMeta.ts) fills the gap from a catalog keyed by **model-family name pattern** (GPT-5, Claude, Gemini, DeepSeek, Llama, Mistral, Qwen, Grok, GLM, Kimi, Nemotron, …). Image/video-generation models (veo, sora, stable-diffusion, …) have no chat context and stay `null`.
+- At **sync**, upstream-provided metadata wins; when the upstream returns none (e.g. BlackBox's `/models` only returns `{ id, object, created }`), [src/proxy/modelMeta.ts](../src/proxy/modelMeta.ts) fills the gap from a catalog keyed by **model-family name pattern** (GPT-5, Claude, Gemini, DeepSeek, Llama, Mistral, Qwen, Grok, GLM, Kimi, Nemotron, Atria Dawn, …). Image/video-generation models (veo, sora, stable-diffusion, …) have no chat context and stay `null`.
 - At **request time**, the executor **clamps `max_tokens`** to the selected provider model's stored output limit (`clampMaxTokens`), falling back to the static model catalog when upstream metadata is unavailable. The clamp runs before OpenAI, Anthropic, CodeBuddy, and Codex dialect conversion, preventing upstream "max_tokens too large" errors.
 
 ## 4.5 Provider Prompt Caching
@@ -173,8 +176,8 @@ Runs **before** translation, on the canonical request:
 ## 6. Data & State
 
 - **MySQL 8.4 LTS** runs privately under `.mysql/` on `127.0.0.1:${MYSQL_PORT}` (default `14631`). The server is bootstrapped on first start and uses InnoDB.
-- If `DATA_DIR/mirais.db` exists, first startup imports its supported tables into MySQL in resumable batches. The SQLite file is never modified.
-- Round-robin cursors and short-lived attempt cooldowns live in memory. Model-scoped account cooldown windows and terminal OAuth reauthentication state are persisted in SQLite.
+- MySQL is the active runtime database. Migrations in `src/store/mysql-migrations/` run at startup and are tracked in `_migrations`.
+- Round-robin cursors and short-lived attempt cooldowns live in memory. Model-scoped account cooldown windows and terminal OAuth reauthentication state are persisted in MySQL.
 - Dashboard password is on by default (`12345678` until changed) and can be turned off: `Bun.password` hash in `settings`, plus a random `session_secret`. Session = HMAC-signed cookie keyed by `secret + password hash`, so changing the password revokes every session. Lifetime is configurable (`dashboard_session_hours`, default `SESSION_TTL_HOURS`), 30 days with "remember". It never applies to `/v1/*`.
 - Nothing else leaves the machine; no telemetry.
 
@@ -200,5 +203,5 @@ Admin API errors: `{ "error": "message" }` with proper HTTP status.
 ## 9. Scalability & Limits (v1 scope)
 
 - Single-process, single-instance. Bun handles thousands of concurrent SSE streams fine on modest hardware.
-- SQLite is sufficient for a single user/team gateway (WAL, batched usage inserts).
+- The portable MySQL pool is sufficient for a single user/team gateway; request-log list queries exclude large payload bodies and cancel queries exceeding `DB_QUERY_TIMEOUT_MS`.
 - Out of scope for v1: multi-node clustering, shared state, Postgres.

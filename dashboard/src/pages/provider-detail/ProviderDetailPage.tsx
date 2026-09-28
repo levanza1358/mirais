@@ -6,10 +6,12 @@ import { providerHealth, type Provider, providers } from "../../api";
 import { Badge, Button, Card, ConfirmModal, Modal, Skeleton, Switch, toast } from "../../components/ui";
 import { presetFor } from "../../providerCatalog";
 import { AccountsCard } from "./AccountsCard";
+import { AtriaLoginCard } from "./AtriaLoginCard";
 import { BackLink } from "./BackLink";
 import { BulkLoginCard } from "./BulkLoginCard";
 import { ModelsCard } from "./ModelsCard";
 import { ProviderModal } from "./ProviderModal";
+import { isAtriaProvider } from "./quota";
 import { XaiAccountTestCard } from "./XaiAccountTestCard";
 import { XaiFarmCard } from "./XaiFarmCard";
 import { XaiFarmLogsCard } from "./XaiFarmLogsCard";
@@ -206,6 +208,8 @@ export function ProviderDetailPage() {
           {copilotTab === "accounts" && <AccountsCard provider={provider} />}
           {copilotTab === "bulk-login" && <BulkLoginCard providerId={provider.id} />}
         </>
+      ) : isAtriaProvider(provider) ? (
+        <><AccountsCard provider={provider} /><AtriaLoginCard providerId={provider.id} /></>
       ) : <AccountsCard provider={provider} />}
       <ModelsCard provider={provider} />
       {editing && <ProviderModal provider={provider} onClose={() => setEditing(false)} />}

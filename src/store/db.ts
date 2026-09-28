@@ -33,7 +33,7 @@ async function openDatabase(): Promise<Database> {
     connectionTimeout: 30,
   });
   await client.connect();
-  const database = new Database(client, "mysql");
+  const database = new Database(client, "mysql", config.dbQueryTimeoutMs);
   try {
     await migrate(database);
   } catch (error) {
