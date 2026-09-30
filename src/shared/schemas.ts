@@ -368,6 +368,7 @@ export const settingsUpdateSchema = z.object({
     }).strict()).optional(),
   }).optional(),
   log_retention_days: z.number().int().min(1).max(365).optional(),
+  audit_retention_days: z.number().int().min(1).max(3650).optional(),
   session_remember_default: z.boolean().optional(),
   network_binding: z.object({
     exposed: z.boolean(),

@@ -19,6 +19,7 @@ import { LogsRepo } from "./store/repos/logs";
 import { DailyUsageRepo } from "./store/repos/usage";
 import { SettingsRepo } from "./store/repos/settings";
 import { ProvidersRepo } from "./store/repos/providers";
+import { AuditRepo } from "./store/repos/audit";
 import { baseUrlFor } from "./proxy/router";
 import { codexQuotaDetail, ensureFreshToken, fetchCodexUsage, isCodexAccount, isCodexQuotaExhausted } from "./proxy/codex";
 import { isCodeBuddyProviderType, codeBuddyChatUrl, CODEBUDDY_MODELS } from "./admin/codebuddy-provider";
@@ -55,16 +56,21 @@ async function purgeOldLogs(): Promise<void> {
   try {
     const settings = new SettingsRepo(db);
     const usageDays = Number(await settings.get("log_retention_days") ?? 30);
+    const auditDays = Number(await settings.get("audit_retention_days") ?? 90);
     const logs = new LogsRepo(db);
     const usage = new DailyUsageRepo(db);
+    const audit = new AuditRepo(db);
     const removed = await logs.purgeOlderThan(LOG_TTL_DAYS);
     const removedUsage = await usage.purgeOlderThan(usageDays);
-    if (removed > 0 || removedUsage > 0) {
+    const removedAudit = await audit.purgeOlderThan(auditDays);
+    if (removed > 0 || removedUsage > 0 || removedAudit > 0) {
       log.info("purged old logs", {
         removed,
         log_ttl_days: LOG_TTL_DAYS,
         removed_usage: removedUsage,
         usage_retention_days: usageDays,
+        removed_audit: removedAudit,
+        audit_retention_days: auditDays,
       });
     }
   } catch (err) {

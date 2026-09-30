@@ -7,7 +7,12 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   DATA_DIR: z.string().default("./data"),
   TOKEN_SAVER: z.enum(["on", "off"]).default("on"),
-  TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("full"),
+  // Default `meta` so request/response bodies are not stored unless the
+  // operator explicitly opts in. `full` captures the full prompt + reply
+  // (the largest single contributor to disk growth — a chat response can be
+  // hundreds of KB and rows live only one day before purge). Use `full` only
+  // when actively debugging a request you cannot reproduce.
+  TRACK_PAYLOADS: z.enum(["none", "meta", "full"]).default("meta"),
   REQUEST_BODY_LIMIT_MB: z.coerce.number().positive().default(25),
   // Server-level cap for file uploads (backup restore). Bun rejects larger
   // request bodies with 413 before any route runs.

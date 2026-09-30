@@ -41,4 +41,18 @@ export class AuditRepo {
     await this.db.query("DELETE FROM admin_audit_log").run();
     return before;
   }
+
+  /**
+   * Retention sweep: drop rows older than `days` days. The trail is metadata
+   * only (action, resource, resource_id, sanitized detail) — no request
+   * bodies, no credentials — so the oldest entries are safe to drop after the
+   * configured window. Called hourly from `server.ts#purgeOldLogs()`.
+   */
+  async purgeOlderThan(days: number): Promise<number> {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const before = (await this.db.query("SELECT COUNT(*) AS c FROM admin_audit_log WHERE ts < ?").get<{ c: number }>(cutoff))?.c ?? 0;
+    if (before === 0) return 0;
+    await this.db.query("DELETE FROM admin_audit_log WHERE ts < ?").run(cutoff);
+    return before;
+  }
 }

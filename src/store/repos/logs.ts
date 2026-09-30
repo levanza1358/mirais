@@ -36,6 +36,28 @@ export interface LogInsert {
 export const LOG_KINDS = ["request", "warmup", "claim", "test"] as const;
 export type LogKind = (typeof LOG_KINDS)[number];
 
+/**
+ * Hard cap on the size of free-form text columns we store in `request_logs`.
+ * A 32 KB body is plenty for previewing a request — the full payload lives
+ * in the provider's logs and the upstream replay buffer. Truncating keeps the
+ * row footprint bounded so a chat response with hundreds of KB of streamed
+ * tokens cannot blow the SQLite file past a GB.
+ */
+const MAX_BODY_BYTES = 32 * 1024;
+
+/** Truncate a string to at most `bytes` UTF-8 bytes, returning the original if smaller. */
+function truncateBody(value: string | null | undefined, maxBytes = MAX_BODY_BYTES): string | null {
+  if (!value) return null;
+  // Fast path: ASCII or short UTF-8 → byte length ≈ string length.
+  if (value.length <= maxBytes) return value;
+  const buf = Buffer.from(value, "utf8");
+  if (buf.length <= maxBytes) return value;
+  // Slice by bytes then lop off any half-encoded UTF-8 char at the tail.
+  let end = maxBytes;
+  while (end > 0 && (buf[end - 1]! & 0xc0) === 0xc0) end--;
+  return buf.subarray(0, end).toString("utf8");
+}
+
 function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -77,9 +99,13 @@ async insert(entry: LogInsert): Promise<void> {
         entry.latencyMs,
         entry.tokensSaved,
         entry.reasoningEffort ?? null,
-        entry.requestBody ?? null,
-        entry.responseBody ?? null,
-        entry.attemptsDetail ? JSON.stringify(entry.attemptsDetail) : null,
+        // Cap free-form text columns so a 500 KB streaming reply can't push a
+        // single row past 1 MB. Operators who need the full body should set
+        // `TRACK_PAYLOADS=full` and route the upstream provider's own request
+        // log; we only keep a preview here.
+        truncateBody(entry.requestBody),
+        truncateBody(entry.responseBody),
+        truncateBody(entry.attemptsDetail ? JSON.stringify(entry.attemptsDetail) : null),
         entry.accountLabel ?? null,
         entry.kind ?? "request",
       );

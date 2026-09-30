@@ -323,8 +323,6 @@ export function providerRoutes(db: Database) {
       outputTokens: null,
       latencyMs: result.latency_ms,
       tokensSaved: 0,
-      requestBody: `Warmup check for account ${acc.label}`,
-      responseBody: result.ok ? `OK (${result.latency_ms}ms)` : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`,
       kind: "warmup",
     });
 
@@ -498,7 +496,6 @@ export function providerRoutes(db: Database) {
         outputTokens: null,
         latencyMs: Date.now() - started,
         tokensSaved: 0,
-        responseBody: result.message,
         kind: "claim",
       });
       await audit.record(result.ok ? "updated" : "failed", "provider_account", account.id, { action: "daily_checkin", message: result.message });
@@ -807,10 +804,6 @@ export function providerRoutes(db: Database) {
           outputTokens: null,
           latencyMs: result.latency_ms,
           tokensSaved: 0,
-          requestBody: testPrompt,
-          responseBody: result.ok
-            ? `OK (${result.latency_ms}ms)${result.preview_text ? ` — ${result.preview_text}` : ""}`
-            : `ERROR: ${result.detail ?? `HTTP ${result.status}`}`,
           kind: "test",
         });
       };

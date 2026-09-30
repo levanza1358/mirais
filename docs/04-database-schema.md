@@ -152,8 +152,8 @@ CREATE TABLE request_logs (
   latency_ms      INTEGER,
   tokens_saved    INTEGER DEFAULT 0,         -- by token saver
   reasoning_effort TEXT,                     -- requested thinking mode; never reasoning content
-  request_body    TEXT,                      -- only when TRACK_PAYLOADS=full
-  response_body   TEXT
+  request_body    TEXT,                      -- only when TRACK_PAYLOADS=full; capped at 32 KB by LogsRepo.insert
+  response_body   TEXT                       -- same
 );
 CREATE INDEX idx_logs_ts       ON request_logs(ts DESC);
 CREATE INDEX idx_logs_model    ON request_logs(model);
@@ -230,12 +230,14 @@ Retention is `settings.log_retention_days` (default 30); the hourly sweep calls 
 
 | table | window | scope |
 |------|--------|-------|
-| `request_logs` (every `kind`) | **1 day** (fixed) | operational telemetry, request/error detail, captured bodies, replay |
+| `request_logs` (every `kind`) | **1 day** (fixed) | operational telemetry, request/error detail, captured bodies (capped at 32 KB per body), replay |
 | `daily_usage` rows | `settings.log_retention_days` (default 30) | per-day counters that survive the `request_logs` purge so Overview/Stats still have history |
-| `admin_audit_log` rows | never | ungentle: keeping the trail matters when the operator later asks "who changed the rate limit" |
+| `admin_audit_log` rows | `settings.audit_retention_days` (default 90) | metadata-only trail; oldest rows drop before the table can grow unbounded |
 | `gateway_keys` | never | credentials; only the operator's rotation touches this |
 
-`daily_usage` is upserted by `LogsRepo.insert()` for `kind='request'` only — warmups, claims, and model-test pings stay short-lived. The sweep runs hourly rather than nightly so the one-day window never slips to almost 48 hours. Operators can also clear a kind (or every log) on demand from the Logs page or `DELETE /api/logs/all?kind=`. The dashboard's "Clear all logs" button invokes the same endpoint without a `kind`, which additionally empties `admin_audit_log`, the `daily_usage` rollup, and drops the orphan payload tables (`request_log_payloads`, `request_log_payload_cleanup`) left behind by the abandoned `fix/logs-hardening` branch. Use `DELETE /api/logs/files` to truncate the on-disk log files (`data/mirais.log`, `data/xai-farm.log.jsonl`, `data/xfarm-device-debug.json`) — file handles the gateway already holds keep appending after truncation, so restart Mirais to start a fresh log.
+`daily_usage` is upserted by `LogsRepo.insert()` for `kind='request'` only — warmups, claims, and model-test pings stay short-lived. The sweep runs hourly rather than nightly so the one-day window never slips to almost 48 hours. Operators can also clear a kind (or every log) on demand from the Logs page or `DELETE /api/logs/all?kind=`. The dashboard's "Clear all logs" button invokes the same endpoint without a `kind`, which additionally empties `admin_audit_log` and the `daily_usage` rollup. Use `DELETE /api/logs/files` to truncate the on-disk log files (`data/mirais.log`, `data/xai-farm.log.jsonl`, `data/xfarm-device-debug.json`) — file handles the gateway already holds keep appending after truncation, so restart Mirais to start a fresh log.
+
+**Disk safety** — three guards keep the SQLite file under a few hundred MB at sustained traffic: (1) `TRACK_PAYLOADS` defaults to `meta`, so request/response bodies are not stored unless the operator opts into `full`; (2) when `full` is on, `LogsRepo.insert()` truncates every free-form text column (`request_body`, `response_body`, `attempts_detail`) to 32 KB UTF-8 so a 500 KB streaming reply cannot push a single row past 1 MB; (3) warmup/claim/test rows never write bodies, since `daily_usage` only counts `kind='request'` and nothing else reads them.
 
 **Backups** — `bun run scripts/backup.ts` writes `DATA_DIR/backups/mirais-accounts-<ts>.json`. It contains providers and provider-account credentials only. Restore adds missing accounts and leaves gateway keys, models, settings, logs, and usage unchanged.
 

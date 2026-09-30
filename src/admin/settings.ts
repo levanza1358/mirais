@@ -63,6 +63,7 @@ export function settingsRoutes(db: Database) {
       ponytail: await settings.getJson("ponytail"),
       reasoning: await settings.getJson("reasoning"),
       log_retention_days: Number(await settings.get("log_retention_days") ?? 30),
+      audit_retention_days: Number(await settings.get("audit_retention_days") ?? 90),
       session_remember_default: await settings.get("session_remember_default") === "1",
       network_binding: await currentNetworkBinding(),
       model_sync_mode: await settings.getJson("model_sync_mode") ?? "curated",
@@ -90,6 +91,9 @@ export function settingsRoutes(db: Database) {
       if (parsed.data.reasoning) await settings.setJson("reasoning", parsed.data.reasoning);
       if (parsed.data.log_retention_days !== undefined) {
         await settings.set("log_retention_days", String(parsed.data.log_retention_days));
+      }
+      if (parsed.data.audit_retention_days !== undefined) {
+        await settings.set("audit_retention_days", String(parsed.data.audit_retention_days));
       }
       if (parsed.data.session_remember_default !== undefined) {
         await settings.set("session_remember_default", parsed.data.session_remember_default ? "1" : "0");
