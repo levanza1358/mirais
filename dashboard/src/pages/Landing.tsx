@@ -2,15 +2,8 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { keys, stats } from "../api";
-import { Button, CopyButton, Skeleton } from "../components/ui";
+import { Button, CopyButton, Skeleton, fmtNum } from "../components/ui";
 import { storedKeyFor } from "../keyStore";
-
-function fmtNum(n: number | undefined): string {
-  if (n === undefined || n === null) return "—";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
 
 export default function Landing() {
   const navigate = useNavigate();

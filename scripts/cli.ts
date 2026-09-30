@@ -308,18 +308,18 @@ async function doctor(json = false): Promise<void> {
 
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.mkdirSync(path.join(config.dataDir, "backups"), { recursive: true });
-  let mysqlError: unknown;
+  let dbError: unknown;
   try {
     const database = await getDb();
     await database.query("SELECT 1").get();
   } catch (err) {
-    mysqlError = err;
+    dbError = err;
   } finally {
     await closeDb();
   }
   await check(
-    mysqlError ? `MySQL database (${mysqlError instanceof Error ? mysqlError.message : String(mysqlError)})` : "MySQL database",
-    !mysqlError,
+    dbError ? `SQLite database (${dbError instanceof Error ? dbError.message : String(dbError)})` : "SQLite database",
+    !dbError,
   );
 
   const pid = readPid();
@@ -337,9 +337,7 @@ async function doctor(json = false): Promise<void> {
       version: appVersion(installRoot),
       installRoot,
       dataDir: config.dataDir,
-      dbPath: config.dbPath,
-      mysqlDir: config.mysqlDir,
-      mysqlPort: config.mysqlPort,
+      dbPath: config.dbFile,
       url: displayUrl,
       checks,
     }, null, 2));

@@ -14,8 +14,7 @@ Legend: ✅ exit criteria = all boxes checked and manual smoke passed on **both 
 
 ## Phase 1 — Storage & Config (1 day) — DONE
 - [x] `config.ts` with zod env validation
-- [x] `store/db.ts`: bootstrap portable MySQL, connect through Bun.SQL, and run the migration runner
-- [x] SQLite-to-MySQL importer: resumable, idempotent, batched import from `DATA_DIR/mirais.db`
+- [x] `store/db.ts`: open SQLite (`DATA_DIR/mirais.db`, WAL mode, foreign keys on) via Bun.SQL and run the migration runner
 - [x] `0001_init.sql` (full schema from doc 04) + repos for providers/accounts/keys/combos/settings
 - [x] Persist per-account/model cooldowns, terminal OAuth reauthentication state, and prompt-cache usage (`0026`–`0028`)
 - ✅ unit tests: migration idempotent, repos CRUD round-trip

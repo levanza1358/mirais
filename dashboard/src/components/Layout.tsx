@@ -16,14 +16,10 @@ import {
   ChevronDown,
   Menu,
   MessageSquare,
-  Music,
   X,
 } from "lucide-react";
 import { health } from "../api";
 import { APP_BUILD } from "../main";
-import { MiniPlayer } from "./music/MiniPlayer";
-import { useAudioElement } from "./music/useAudioElement";
-import { useMediaSession } from "./music/useMediaSession";
 
 type NavGroup = {
   id: string;
@@ -59,13 +55,6 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "media",
-    label: "Media",
-    items: [
-      { to: "/dashboard/music", label: "Music", icon: Music },
-    ],
-  },
-  {
     id: "system",
     label: "System",
     items: [
@@ -80,11 +69,10 @@ const MOBILE_NAV: Array<{ to: string; label: string; icon: typeof LayoutDashboar
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { to: "/dashboard/providers", label: "Providers", icon: Boxes },
-  { to: "/dashboard/music", label: "Music", icon: Music },
   { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-const DEFAULT_OPEN_GROUPS = new Set<string>(["dashboard", "infrastructure", "operations", "media", "system"]);
+const DEFAULT_OPEN_GROUPS = new Set<string>(["dashboard", "infrastructure", "operations", "system"]);
 
 export function Layout({ children }: { children: ReactNode }) {
   const { data: h } = useQuery({
@@ -302,9 +290,6 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </main>
 
-      <MusicShell />
-      <MiniPlayer />
-
       {/* Mobile bottom navigation */}
       <nav
         aria-label="Primary"
@@ -357,14 +342,3 @@ export function PageHeader({ title, subtitle, children }: { title: string; subti
   );
 }
 
-/**
- * Mounts the player audio element exactly once at the dashboard root and
- * bridges the player store with the browser's Media Session API so OS-level
- * controls (lock screen, headset buttons, media keys) follow whatever
- * tracks the user picks.
- */
-function MusicShell() {
-  useAudioElement();
-  useMediaSession();
-  return null;
-}

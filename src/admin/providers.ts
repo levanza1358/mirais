@@ -3,6 +3,7 @@ import type { Database } from "../store/sql";
 import type { Provider, ProviderAccount } from "../shared/types";
 import { ProvidersRepo } from "../store/repos/providers";
 import { LogsRepo } from "../store/repos/logs";
+import { DailyUsageRepo } from "../store/repos/usage";
 import { SettingsRepo } from "../store/repos/settings";
 import { providerCreateSchema, providerUpdateSchema, accountCreateSchema, accountBulkCreateSchema, accountUpdateSchema, providerModelUpdateSchema, upstreamModelsResponseSchema, copilotQuotaSchema, codexImportBatchSchema } from "../shared/schemas";
 import { z } from "zod";
@@ -149,6 +150,7 @@ export function providerRoutes(db: Database) {
   const repo = new ProvidersRepo(db);
   const audit = new AuditRepo(db);
   const logs = new LogsRepo(db);
+  const usage = new DailyUsageRepo(db);
   const settings = new SettingsRepo(db);
 
   async function warmupAccount(provider: Provider, acc: ProviderAccount) {
@@ -563,7 +565,7 @@ export function providerRoutes(db: Database) {
     .get("/:id/accounts/usage", async ({ params }) => {
       const p = await repo.get(params.id);
       if (!p) throw new AdminError(404, "Provider not found");
-      return logs.usageByAccount(p.name);
+      return usage.usageByAccount(p.name);
     })
     // ── provider-level quota summary (aggregated across all accounts) ──
     .get("/:id/quota", async ({ params }) => {

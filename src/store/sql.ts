@@ -3,6 +3,44 @@ import type { SQL } from "bun";
 export type SqlValue = string | number | bigint | boolean | Date | Uint8Array | null;
 export type SqlDialect = "mysql" | "sqlite";
 
+/**
+ * Coerce a SQL numeric value to a JS number.
+ *
+ * MySQL types `SUM()`/`AVG()` over integer columns as DECIMAL, and Bun's MySQL
+ * adapter hands DECIMAL back as a **string** — so `SUM(input_tokens)` arrives as
+ * `"300581189"`, not `300581189`. Any JS `+` over two such values concatenates
+ * digits instead of adding them (R1.11: token math is integer math), so
+ * aggregates are normalized to `number` at the repo boundary.
+ */
+export function num(value: unknown, fallback = 0): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string") {
+    if (value.trim() === "") return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
+/**
+ * Copy `row` with the listed aggregate columns coerced through `num()`.
+ *
+ * Apply this at the repo boundary to every non-aggregated numeric column read
+ * out of a MySQL `SUM()`/`AVG()`: `COUNT(*)` is already a number and passes
+ * through untouched, while DECIMAL aggregates become real numbers. The single
+ * cast is the SQL boundary itself — the caller's `Row` type is what the query
+ * claims to return, and this is where the claim is made true.
+ */
+export function coerceAggregates<Row extends object>(row: Row, fields: readonly (keyof Row)[]): Row {
+  const out: Record<string, unknown> = { ...(row as Record<string, unknown>) };
+  for (const field of fields) {
+    const key = field as string;
+    out[key] = num(out[key]);
+  }
+  return out as Row;
+}
+
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 export class Database {

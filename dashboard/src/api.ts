@@ -653,6 +653,15 @@ export const logs = {
   usage: (days = 7) => req<UsageRow[]>(`/api/logs/usage?days=${days}`),
   usageByKey: (keyId: string) => req<{ requests_today: number; tokens_today: number; tokens_total: number; requests_minute: number; requests_total: number; input_tokens_total: number; output_tokens_total: number; top_models: Array<{ model: string; requests: number; tokens: number }> }>(`/api/logs/usage-by-key?key_id=${encodeURIComponent(keyId)}`),
   clearUsage: () => req<{ ok: boolean; cleared: number }>("/api/logs/usage", { method: "DELETE" }),
+  /** Delete logs. No `kind` clears every log view (requests, warmups, claims,
+   * tests), every audit row, the daily_usage rollup, and the orphan payload
+   * tables at once. */
+  clear: (kind?: "request" | "warmup" | "claim" | "test") =>
+    req<{ ok: boolean; kind: string | null; cleared: number; audit_cleared?: number; usage_cleared?: number; tables_dropped?: number }>(`/api/logs/all${kind ? `?kind=${kind}` : ""}`, { method: "DELETE" }),
+  /** Truncate the on-disk log files (`mirais.log`, `xai-farm.log.jsonl`,
+   * `xfarm-device-debug.json`, bundled MySQL log) and report bytes freed. */
+  clearFiles: () =>
+    req<{ ok: boolean; truncated: string[]; freed_bytes: number }>(`/api/logs/files`, { method: "DELETE" }),
 };
 
 export const settings = {
@@ -661,187 +670,6 @@ export const settings = {
 };
 
 export const health = () => req<{ status: string; uptime_s?: number; version?: string }>("/health");
-
-// ── music ──
-
-export interface MusicTrack {
-  id: string;
-  title: string;
-  artist: string | null;
-  album: string | null;
-  duration_sec: number | null;
-  mime_type: string | null;
-  size_bytes: number | null;
-  source_type: "file" | "url";
-  storage_path: string | null;
-  source_url: string | null;
-  thumbnail_url: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface MusicPlaylist {
-  id: string;
-  name: string;
-  description: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface MusicPlaylistWithTracks extends MusicPlaylist {
-  tracks: Array<MusicTrack & { position: number }>;
-}
-
-export interface MusicTrackList {
-  items: MusicTrack[];
-  total: number;
-}
-
-export interface PlayHistoryEntry {
-  id: string;
-  track_id: string;
-  played_at: string;
-  position_ms: number;
-  completed: boolean;
-}
-
-export interface MusicTrackInput {
-  title: string;
-  artist?: string | null;
-  album?: string | null;
-  duration_sec?: number | null;
-  mime_type?: string | null;
-  size_bytes?: number | null;
-  source_type: "file" | "url";
-  storage_path?: string | null;
-  source_url?: string | null;
-  thumbnail_url?: string | null;
-}
-
-export interface MusicPlaylistInput {
-  name: string;
-  description?: string | null;
-  tracks?: Array<{ track_id: string }>;
-}
-
-export interface MusicTrackUpdate {
-  title?: string;
-  artist?: string | null;
-  album?: string | null;
-  duration_sec?: number | null;
-  thumbnail_url?: string | null;
-}
-
-export interface MusicPlaylistUpdate {
-  name?: string;
-  description?: string | null;
-  tracks?: Array<{ track_id: string }>;
-}
-
-/**
- * Multipart upload helper for music files. Uses XMLHttpRequest so we can attach
- * an `upload.onprogress` listener — `fetch` doesn't expose upload progress in
- * the browser.
- */
-export function uploadMusicFile(
-  trackId: string,
-  file: File,
-  onProgress?: (percent: number) => void,
-): Promise<{ ok: boolean; size_bytes: number }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/api/music/tracks/${trackId}/audio`);
-    xhr.upload.onprogress = (event) => {
-      if (!onProgress || !event.lengthComputable) return;
-      onProgress(Math.round((event.loaded / event.total) * 100));
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          resolve(JSON.parse(xhr.responseText) as { ok: boolean; size_bytes: number });
-        } catch (err) {
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      } else {
-        let message = `HTTP ${xhr.status}`;
-        try {
-          const body = JSON.parse(xhr.responseText) as { error?: string };
-          if (typeof body.error === "string") message = body.error;
-        } catch { /* keep default */ }
-        reject(new ApiError(xhr.status, message));
-      }
-    };
-    xhr.onerror = () => reject(new Error("Network error"));
-    const form = new FormData();
-    form.append("file", file);
-    xhr.send(form);
-  });
-}
-
-export const music = {
-  listTracks: (filters: { q?: string; artist?: string; album?: string; limit?: number; offset?: number } = {}) => {
-    const params = new URLSearchParams();
-    if (filters.q) params.set("q", filters.q);
-    if (filters.artist) params.set("artist", filters.artist);
-    if (filters.album) params.set("album", filters.album);
-    if (filters.limit != null) params.set("limit", String(filters.limit));
-    if (filters.offset != null) params.set("offset", String(filters.offset));
-    const query = params.toString();
-    return req<MusicTrackList>(`/api/music/tracks${query ? `?${query}` : ""}`);
-  },
-  getTrack: (id: string) => req<MusicTrack>(`/api/music/tracks/${id}`),
-  createTrack: (input: MusicTrackInput) => req<MusicTrack>("/api/music/tracks", { method: "POST", body: JSON.stringify(input) }),
-  updateTrack: (id: string, patch: MusicTrackUpdate) => req<MusicTrack>(`/api/music/tracks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  deleteTrack: (id: string) => req<{ ok: boolean }>(`/api/music/tracks/${id}`, { method: "DELETE" }),
-  /** Returns the absolute audio URL — the browser plays this directly. */
-  audioUrl: (id: string) => `/api/music/tracks/${id}/audio`,
-  recordPlay: (id: string, position_ms: number, completed: boolean) =>
-    req<PlayHistoryEntry>(`/api/music/tracks/${id}/play?position_ms=${Math.max(0, Math.floor(position_ms))}&completed=${completed ? "1" : "0"}`),
-  listPlaylists: () => req<MusicPlaylist[]>("/api/music/playlists"),
-  getPlaylist: (id: string) => req<MusicPlaylistWithTracks>(`/api/music/playlists/${id}`),
-  createPlaylist: (input: MusicPlaylistInput) => req<MusicPlaylistWithTracks>("/api/music/playlists", { method: "POST", body: JSON.stringify(input) }),
-  updatePlaylist: (id: string, patch: MusicPlaylistUpdate) => req<MusicPlaylistWithTracks>(`/api/music/playlists/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  deletePlaylist: (id: string) => req<{ ok: boolean }>(`/api/music/playlists/${id}`, { method: "DELETE" }),
-  addPlaylistTrack: (playlistId: string, trackId: string) =>
-    req<Array<MusicTrack & { position: number }>>(`/api/music/playlists/${playlistId}/tracks`, { method: "POST", body: JSON.stringify({ track_id: trackId }) }),
-  removePlaylistTrack: (playlistId: string, trackId: string) =>
-    req<Array<MusicTrack & { position: number }>>(`/api/music/playlists/${playlistId}/tracks/${trackId}`, { method: "DELETE" }),
-};
-
-export interface YouTubeSearchResult {
-  id: string;
-  title: string;
-  author: string;
-  duration_sec: number | null;
-  thumbnail_url: string | null;
-}
-
-export interface InvidiousConfig {
-  instances: string[];
-  timeout_ms: number;
-}
-
-export const youtube = {
-  search: (q: string, page?: number) => {
-    const params = new URLSearchParams({ q });
-    if (page) params.set("page", String(page));
-    return req<{ items: YouTubeSearchResult[] } | { error: string }>(
-      `/api/music/youtube/search?${params.toString()}`,
-    );
-  },
-  suggestions: (q: string) => {
-    const params = new URLSearchParams({ q });
-    return req<{ suggestions: string[] } | { error: string }>(
-      `/api/music/youtube/suggestions?${params.toString()}`,
-    );
-  },
-  import: (input: { video_id?: string; url?: string; playlist_id?: string }) =>
-    req<MusicTrack>("/api/music/youtube/import", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  config: () => req<InvidiousConfig>("/api/music/youtube/config"),
-};
 
 export interface AuthState {
   password_set: boolean;

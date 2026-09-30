@@ -1,4 +1,5 @@
 import type { Database } from "./store/sql";
+import { num } from "./store/sql";
 import type { GatewayKey } from "./shared/types";
 import { nowIso } from "./utils/id";
 
@@ -36,7 +37,8 @@ export async function checkRateLimit(db: Database, key: GatewayKey): Promise<{ r
          FROM request_logs WHERE key_id = ? AND ts >= ?`,
       )
       .get<{ t: number }>(key.id, `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
-    if ((row?.t ?? 0) >= key.daily_token_budget) {
+    // SUM over BIGINT is DECIMAL and arrives as a string from the MySQL adapter.
+    if (num(row?.t) >= key.daily_token_budget) {
       return { retryAfterSec: secondsUntilMidnight() };
     }
   }
@@ -45,7 +47,7 @@ export async function checkRateLimit(db: Database, key: GatewayKey): Promise<{ r
     const row = await db
       .query("SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) as t FROM request_logs WHERE key_id = ?")
       .get<{ t: number }>(key.id);
-    if ((row?.t ?? 0) >= key.token_budget) {
+    if (num(row?.t) >= key.token_budget) {
       return { retryAfterSec: 0 };
     }
   }

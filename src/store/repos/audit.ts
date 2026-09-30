@@ -27,4 +27,18 @@ export class AuditRepo {
       .all<AuditEntry>(safeLimit, (safePage - 1) * safeLimit);
     return { items, total };
   }
+
+  /**
+   * Delete every audit-log row. Used by the "Clear all logs" feature when the
+   * operator asks to wipe logs without exception. The next call to `record()`
+   * starts a fresh trail.
+   */
+  async clearAll(): Promise<number> {
+    // See `LogsRepo.clearKind()` for why the generic affected-rows value is
+    // unreliable: Bun's SQLite adapter does not return one.
+    const before = (await this.db.query("SELECT COUNT(*) AS c FROM admin_audit_log").get<{ c: number }>())?.c ?? 0;
+    if (before === 0) return 0;
+    await this.db.query("DELETE FROM admin_audit_log").run();
+    return before;
+  }
 }

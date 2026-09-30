@@ -21,18 +21,11 @@ const attempts = new Map<string, { count: number; resetAt: number }>();
  * Paths that stay reachable without a dashboard session. The gateway proxy
  * (`/v1/*`) is never covered here: it authenticates with gateway keys, so a
  * dashboard password never affects API clients.
- *
- * `/api/music/*` is intentionally public: the music library is consumed by
- * the browser's `<audio>` element with no gateway keys in play, and gating
- * it on the dashboard password would force the player to mirror the session
- * cookie. Operators who need to lock the library down can restrict access
- * at the network boundary (R1.3).
  */
 function isPublicPath(path: string): boolean {
   if (!path.startsWith("/api/")) return true;
   return path.startsWith("/api/auth/")
-    || path === "/api/health"
-    || path.startsWith("/api/music/");
+    || path === "/api/health";
 }
 
 async function storedHash(settings: SettingsRepo): Promise<string | null> {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, keepPreviousData, useMutation } from "@tanstack/react-query";
+import { useQuery, keepPreviousData, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
   ChevronLeft,
@@ -11,10 +11,11 @@ import {
   CalendarCheck,
   ScrollText,
   TestTube2,
+  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import { logs, providers, type RequestLog } from "../api";
-import { Badge, Button, Card, EmptyState, Select, Skeleton, fmtMs, fmtNum, fmtTime, toast } from "../components/ui";
+import { Badge, Button, Card, ConfirmModal, EmptyState, Select, Skeleton, fmtMs, fmtNum, fmtTime, toast } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 // Labels show the full model id (no alias shortening).
 import { downloadCsv, toCsv } from "../utils/csv";
@@ -61,6 +62,7 @@ function isLogTab(value: string | null): value is LogTab {
 }
 
 export default function Logs() {
+  const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
   const tab: LogTab = isLogTab(tabParam) ? tabParam : "request";
@@ -72,6 +74,8 @@ export default function Logs() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  /** Non-null while the clear-logs confirmation is open. "all" clears every kind. */
+  const [clearScope, setClearScope] = useState<LogTab | "all" | null>(null);
 
   // Reset pagination + filters when switching tabs so each tab opens fresh.
   useEffect(() => {
@@ -113,6 +117,43 @@ export default function Logs() {
   });
 
   const resetDates = () => { setFromDate(""); setToDate(""); setPage(1); };
+
+  // Every log view reads the same table, so a clear invalidates the log lists,
+  // the Overview counters, and the timeseries chart together.
+  const clear = useMutation({
+    mutationFn: (scope: LogTab | "all") => logs.clear(scope === "all" ? undefined : scope),
+    onSuccess: (res, scope) => {
+      qc.invalidateQueries({ queryKey: ["logs"] });
+      qc.invalidateQueries({ queryKey: ["logs-recent"] });
+      qc.invalidateQueries({ queryKey: ["stats-summary"] });
+      qc.invalidateQueries({ queryKey: ["stats-timeseries"] });
+      qc.invalidateQueries({ queryKey: ["audit"] });
+      const summary = scope === "all"
+        ? `Cleared all logs (${fmtNum(res.cleared)} entries`
+          + (res.audit_cleared ? `, ${fmtNum(res.audit_cleared)} audit` : "")
+          + (res.usage_cleared ? `, ${fmtNum(res.usage_cleared)} usage` : "")
+          + (res.tables_dropped ? `, ${fmtNum(res.tables_dropped)} tables dropped` : "")
+          + ")"
+        : `Cleared ${TAB_META[scope].label.toLowerCase()} (${fmtNum(res.cleared)} entries)`;
+      toast(summary);
+      setClearScope(null);
+      setPage(1);
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
+
+  // On-disk log files (`mirais.log`, `xai-farm.log.jsonl`, …) live outside the
+  // database — clearing DB rows does not touch them. Offer a separate button
+  // and a step-2 confirmation so the operator cannot nuke them by accident.
+  const [clearFiles, setClearFiles] = useState(false);
+  const truncateFiles = useMutation({
+    mutationFn: () => logs.clearFiles(),
+    onSuccess: (res) => {
+      toast(`Truncated ${fmtNum(res.truncated.length)} log file(s) — freed ${fmtNum(Math.ceil(res.freed_bytes / 1024))} KB`);
+      setClearFiles(false);
+    },
+    onError: (e) => toast(e.message, "error"),
+  });
 
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
@@ -161,6 +202,31 @@ export default function Logs() {
       <PageHeader title="Logs">
         <Button variant="outline" size="sm" onClick={exportCsv} disabled={items.length === 0} title="Export current view to CSV">
           <Download size={14} /> Export CSV
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={() => setClearScope(tab)}
+          disabled={total === 0}
+          title={`Delete every ${meta.label.toLowerCase()} entry`}
+        >
+          <Trash2 size={14} /> Clear {meta.label.toLowerCase()}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setClearScope("all")}
+          title="Delete requests, warmups, claims, model tests, audit trail, and orphan payload tables at once"
+        >
+          <Trash2 size={14} /> Clear all logs
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setClearFiles(true)}
+          title="Truncate mirais.log, xai-farm.log.jsonl, xfarm-device-debug.json, and the bundled MySQL log"
+        >
+          <Trash2 size={14} /> Clear log files
         </Button>
       </PageHeader>
 
@@ -330,6 +396,30 @@ export default function Logs() {
           </div>
         </div>
       ) : null}
+
+      <ConfirmModal
+        open={clearScope !== null}
+        onClose={() => setClearScope(null)}
+        onConfirm={() => clearScope && clear.mutate(clearScope)}
+        title={clearScope === "all" ? "Clear all logs" : `Clear ${clearScope ? TAB_META[clearScope].label.toLowerCase() : ""} logs`}
+        message={
+          clearScope === "all"
+            ? "Delete every request, warmup, claim, and model-test row, every audit-log row, and drop the orphan payload tables? Overview counters and the audit trail will reset. This cannot be undone. The on-disk log files are not touched — use \"Clear log files\" for those."
+            : `Delete every ${clearScope ? TAB_META[clearScope].label.toLowerCase() : ""} entry? This cannot be undone.`
+        }
+        danger
+        loading={clear.isPending}
+      />
+
+      <ConfirmModal
+        open={clearFiles}
+        onClose={() => setClearFiles(false)}
+        onConfirm={() => truncateFiles.mutate()}
+        title="Clear log files"
+        message="Truncate mirais.log, xai-farm.log.jsonl, xfarm-device-debug.json, and the bundled MySQL log to zero bytes? Anything currently written there is gone. Rotating files (file handles the gateway still holds) keep appending after truncation — restart Mirais to start a fresh log. This cannot be undone."
+        danger
+        loading={truncateFiles.isPending}
+      />
     </div>
   );
 }

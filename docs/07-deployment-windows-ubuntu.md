@@ -138,7 +138,7 @@ Alternative without extra tools: **Task Scheduler** → trigger "At log on", act
 
 **Firewall:** first listen may prompt — allow "Private networks". If you keep `HOST=127.0.0.1` no inbound rule is needed.
 
-**Data location:** `%CD%\data` (backups, music, logs, and an optional legacy `mirais.db`). The active database is the portable MySQL server under `.mysql`; back it up with the dashboard's "Backup now" or while stopped.
+**Data location:** `%CD%\data` holds `mirais.db` (the active database, SQLite), `backups/`, and `mirais.log`. Back it up with the dashboard's "Backup now" or by stopping Mirais and copying the file.
 
 ## 3B. Ubuntu / Ubuntu Server — systemd service
 
@@ -289,8 +289,37 @@ curl http://localhost:1463/v1/chat/completions \
 | Repair stale install / bad root | `mirais fix` |
 | Backup | Dashboard → Settings → Data → **Backup now** (or `bun run scripts/backup.ts`, cron it) |
 | Logs | journalctl / `data/service.log` / in-app Logs page |
-| Dashboard access | Protect the reverse proxy, firewall, VPN, or private network; Mirais has no application-level dashboard password |
+| Dashboard access | The dashboard password is on by default (`12345678` until changed) and can be turned off in Settings. It guards the dashboard alone (never `/v1/*`) and never replaces network-level access control — when Mirais is exposed beyond a trusted network, restrict access with a reverse proxy, firewall, VPN, or private network. |
+| Inspect the database | See [5.1 Opening the SQLite file](#51-opening-the-sqlite-file) |
 | Monitor | `/health` from Uptime Kuma etc.; disk space of `DATA_DIR` |
+
+### 5.1 Opening the SQLite file
+
+The active store is `mirais.db` at `${DATA_DIR}/mirais.db`. SQLite needs no client binary; use any of:
+
+```bash
+# Bun-native (no install): same SQL dialect, can hit the live file.
+bunx --bun sqlite3 DATA_DIR/mirais.db
+# If you prefer the SQLite CLI (Linux packages, brew, scoop):
+sqlite3 DATA_DIR/mirais.db
+```
+
+Useful once inside:
+
+```sql
+.tables                                       -- list all tables
+SELECT kind, COUNT(*) FROM request_logs GROUP BY kind;          -- rows per log view
+SELECT COUNT(*) FROM request_logs WHERE request_body IS NOT NULL; -- bodies still within the 1-day window
+SELECT action, COUNT(*) FROM admin_audit_log GROUP BY action;   -- audit trail
+```
+
+`scripts/restore.ts` re-imports provider accounts from a JSON backup
+(`DATA_DIR/backups/mirais-accounts-*.json`) into the active SQLite file. It is
+idempotent: accounts whose API key or label already exist are skipped, so
+running it twice never duplicates.
+
+`scripts/backup.ts` is the inverse — it writes the same JSON shape and works
+against the active SQLite store directly.
 
 ## 6. Troubleshooting
 

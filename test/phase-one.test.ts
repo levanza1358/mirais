@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AuditRepo } from "../src/store/repos/audit";
 import { LogsRepo } from "../src/store/repos/logs";
+import { DailyUsageRepo } from "../src/store/repos/usage";
 import { freshDb } from "./helpers";
 
 describe("phase-one observability", () => {
@@ -21,7 +22,8 @@ describe("phase-one observability", () => {
 
   test("provider health aggregates request outcomes", async () => {
     const db = await freshDb();
-    const logs = new LogsRepo(db);
+    const usage = new DailyUsageRepo(db);
+    const logs = new LogsRepo(db, usage);
     const base = {
       keyId: null,
       endpoint: "/v1/chat/completions",
@@ -37,7 +39,7 @@ describe("phase-one observability", () => {
     await logs.insert({ ...base, status: "success", httpStatus: 200, error: null });
     await logs.insert({ ...base, status: "error", httpStatus: 500, error: "upstream" });
 
-    const health = await logs.providerHealth(7);
+    const health = await usage.providerHealth(7);
     expect(health).toHaveLength(1);
     expect(health[0]).toMatchObject({ provider: "openai", requests: 2, errors: 1, error_rate: 0.5, avg_latency_ms: 100 });
   });

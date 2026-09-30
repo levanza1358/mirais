@@ -1,7 +1,6 @@
 # 04 — Database Schema
 
-MySQL 8.4 LTS via Bun's native `Bun.SQL` client. The private portable server runs from `.mysql/`; tables use InnoDB, `utf8mb4_bin`, and foreign keys. `${DATA_DIR}/mirais.db` is a legacy SQLite source used only by the one-time importer.
-Migrations live in `src/store/mysql-migrations/` and run at boot (`0001_init.sql`, `0002_…sql`, applied in order, tracked in `_migrations`). The SQLite importer uses separate markers so interrupted imports can resume safely.
+SQLite (single file at `${DATA_DIR}/mirais.db`) via Bun's native `Bun.SQL` client. WAL mode is on for atomic writes; foreign keys are enforced. Migrations live in `src/store/migrations/*.sql` and run at boot in order, tracked in `_migrations`.
 
 ## Migration runner
 
@@ -186,6 +185,35 @@ CREATE TABLE settings (
 -- stored in settings: key='dashboard_password_hash' (empty string = turned off)
 -- stored in settings: key='session_secret'
 -- stored in settings: key='dashboard_session_hours'
+
+### Daily usage rollup
+
+Migration `0037_daily_usage.sql` adds a long-lived counter table that survives the 1-day `request_logs` purge. `LogsRepo.insert()` upserts one row per `(utc_day, provider, model, account_label)` for `kind='request'` only — warmups/claims/tests are not rolled up. Stats, Overview, and per-account usage all read from here.
+
+```sql
+CREATE TABLE daily_usage (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  utc_day             TEXT NOT NULL,            -- 'YYYY-MM-DD' UTC
+  provider            TEXT,
+  model               TEXT,
+  account_label       TEXT,
+  requests            INTEGER NOT NULL DEFAULT 0,
+  input_tokens        INTEGER NOT NULL DEFAULT 0,
+  output_tokens       INTEGER NOT NULL DEFAULT 0,
+  cached_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+  tokens_saved        INTEGER NOT NULL DEFAULT 0,
+  errors              INTEGER NOT NULL DEFAULT 0,
+  total_latency_ms    INTEGER NOT NULL DEFAULT 0,
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(utc_day, provider, model, account_label)
+);
+CREATE INDEX idx_daily_usage_day      ON daily_usage(utc_day);
+CREATE INDEX idx_daily_usage_provider ON daily_usage(provider);
+```
+
+Retention is `settings.log_retention_days` (default 30); the hourly sweep calls `dailyUsage.purgeOlderThan(days)` once per hour.
 ```
 
 ## Notes & Policies
@@ -194,11 +222,20 @@ CREATE TABLE settings (
 
 **Usage accounting flow**
 1. Request finishes (or aborts) → normalize upstream usage, including cache reads/writes when reported; otherwise estimate ordinary input/output tokens locally.
-2. Insert one `request_logs` row. Aggregation queries in `usage/aggregate.ts` read only this table.
+2. Insert one `request_logs` row (lives 1 day) **and** upsert one `daily_usage` row for the matching `(utc_day, provider, model, account_label)` bucket (lives `log_retention_days`). Overview/Stats/usageByAccount all read from `daily_usage` after the log rows disappear.
 
 **Migration note** — `0008_remove_pricing.sql` removes the legacy `pricing` table and old money-related columns from existing databases.
 
-**Retention** — nightly task deletes `request_logs` older than `settings.log_retention_days` (default 30). If `TRACK_PAYLOADS=full`, bodies are purged after 7 days regardless.
+**Retention** — one hourly sweep in `src/server.ts#purgeOldLogs()` applies these windows. `request_logs` is short-lived (operational telemetry); `daily_usage` is the long-lived rollup that powers Overview/Stats after the logs disappear:
+
+| table | window | scope |
+|------|--------|-------|
+| `request_logs` (every `kind`) | **1 day** (fixed) | operational telemetry, request/error detail, captured bodies, replay |
+| `daily_usage` rows | `settings.log_retention_days` (default 30) | per-day counters that survive the `request_logs` purge so Overview/Stats still have history |
+| `admin_audit_log` rows | never | ungentle: keeping the trail matters when the operator later asks "who changed the rate limit" |
+| `gateway_keys` | never | credentials; only the operator's rotation touches this |
+
+`daily_usage` is upserted by `LogsRepo.insert()` for `kind='request'` only — warmups, claims, and model-test pings stay short-lived. The sweep runs hourly rather than nightly so the one-day window never slips to almost 48 hours. Operators can also clear a kind (or every log) on demand from the Logs page or `DELETE /api/logs/all?kind=`. The dashboard's "Clear all logs" button invokes the same endpoint without a `kind`, which additionally empties `admin_audit_log`, the `daily_usage` rollup, and drops the orphan payload tables (`request_log_payloads`, `request_log_payload_cleanup`) left behind by the abandoned `fix/logs-hardening` branch. Use `DELETE /api/logs/files` to truncate the on-disk log files (`data/mirais.log`, `data/xai-farm.log.jsonl`, `data/xfarm-device-debug.json`) — file handles the gateway already holds keep appending after truncation, so restart Mirais to start a fresh log.
 
 **Backups** — `bun run scripts/backup.ts` writes `DATA_DIR/backups/mirais-accounts-<ts>.json`. It contains providers and provider-account credentials only. Restore adds missing accounts and leaves gateway keys, models, settings, logs, and usage unchanged.
 

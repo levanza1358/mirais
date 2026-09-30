@@ -107,20 +107,22 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 
 | Method | Path | Returns |
 |--------|------|---------|
-| GET | `/api/stats/summary?range=24h\|7d\|30d` | `{ requests, inputTokens, outputTokens, estCostUsd, avgLatencyMs, successRate }` + delta vs previous range |
-| GET | `/api/stats/timeseries?range=…&bucket=hour\|day` | `[{ t, requests, tokens, cost }]` for charts |
-| GET | `/api/stats/by-model?range=…` | `[{ model, requests, tokens, cost, errors }]` |
-| GET | `/api/stats/by-provider?range=…` | `[{ provider, requests, tokens, cost, errors, avgLatencyMs }]` |
+| GET | `/api/stats/summary?days=1\|…\|90` | `{ range_days, requests, input_tokens, output_tokens, tokens_saved, avg_latency_ms, success_rate }` for the last `days` (default `7`). Reads from the `daily_usage` rollup; survives the 1-day `request_logs` purge. |
+| GET | `/api/stats/timeseries?days=` | `[{ day, requests, input_tokens, output_tokens, tokens_saved }]` — one row per UTC day (24h/7d/30d range selector). Same source. |
+| GET | `/api/stats/by-model?days=` | `[{ model, requests, input_tokens, output_tokens }]` (top 20 by request count). Same source. |
+| GET | `/api/stats/by-provider?days=` | `[{ provider, requests, input_tokens, output_tokens, success_rate }]`. Same source. |
 | GET | `/api/health` | Runtime health: version, uptime, provider/account counts, storage, memory, in-flight requests, and active cooldowns |
 | GET | `/api/autostart` | Start-on-boot state → `{ platform, method: "windows-startup" \| "systemd" \| "unsupported", enabled, manageable, detail }` |
 | POST | `/api/autostart` | `{ enabled: boolean }` → enable/disable start-on-boot. Windows uses the per-user Startup folder; Linux writes a systemd unit and needs root or passwordless sudo (`400` with an actionable message otherwise) |
-| GET | `/api/provider-health?days=` | Per-provider request count, error count/rate, average latency, and last request time |
+| GET | `/api/provider-health?days=` | `[{ provider, requests, errors, error_rate, avg_latency_ms, last_request_at }]` |
 | GET | `/api/audit?page=&limit=` | Paginated admin configuration changes. Secrets and request/response bodies are never recorded |
 | GET | `/api/logs/:id/replay` | Returns a captured canonical request payload when payload tracking is enabled |
 | POST | `/api/logs/:id/replay` | Explicitly re-routes a captured request through the current gateway configuration; may consume provider quota |
 | POST | `/api/providers/:id/warmup/stream?status=` | Streams warmup results for enabled accounts filtered by `all`, `healthy`, `rate_limited`, `failing`, or `unknown` |
 
 `GET /api/logs/usage-by-key?key_id=` returns lifetime and daily token usage, request counts, and the top five models for API-key administration.
+
+All token/request counters above are JSON **numbers**, never strings. SQLite returns them as `INTEGER`/`REAL`; if you ever swap the underlying driver for one that hands back `BIGINT` strings (e.g. MySQL `DECIMAL`), `src/store/sql.ts#num()`/`coerceAggregates()` normalize them at the repo boundary so clients can add and format them directly.
 
 ### Providers & accounts
 
@@ -141,8 +143,8 @@ Unified catalog in OpenAI list format: policy-allowed enabled models from enable
 | GET | `/api/providers/accounts/:accId/codex-quota` | ChatGPT/Codex quota snapshot (OAuth accounts only) → `{ plan_type, email, limit_reached, primary, secondary, credits }`; each window has `used_percent, remaining_percent, window_seconds, resets_in_seconds, reset_at`. `secondary` = the 5-hour window when the plan has one |
 | POST | `/api/providers/accounts/:accId/codex-quota/reset` | Attempt ChatGPT/Codex banked reset for an OAuth account → `{ ok, message }` |
 | GET | `/api/providers/accounts/:accId/copilot-quota` | Live GitHub Copilot quota snapshots keyed by type (`premium_interactions`, `chat`, `completions`) with remaining percentage, entitlement usage, and reset date |
-| GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup` filters warmup pings. When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
-| GET | `/api/logs/usage?days=` | Usage log — real traffic (`kind='request'`) aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, cached_tokens, cache_write_tokens, avg_latency_ms, errors, last_ts }]` |
+| GET | `/api/logs?kind=` | Request logs; `kind=request\|warmup\|claim\|test` selects the view (see [Logs](#logs)). When `TRACK_PAYLOADS=full`, new entries include `request_body` (prompt preview) + `response_body` (reply or `ERROR: …`); earlier entries remain without bodies. |
+| GET | `/api/logs/usage?days=` | Real traffic aggregated per provider+model → `[{ provider, model, requests, input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, avg_latency_ms, errors, last_ts }]`. Reads from the `daily_usage` rollup. |
 | POST | `/api/oauth/openai/start` | Start ChatGPT (Codex) OAuth login: `{ providerId }` → `{ url }` to open in the browser (the unified `openai` provider) |
 | POST | `/api/copilot/start` | Start an isolated GitHub Copilot browser login: `{ providerId, label }` → `{ accountId, url }`. Opens GitHub's official login flow; no GitHub password is sent to Mirais. |
 | POST | `/api/copilot/:accountId/reconnect` | Restart GitHub device authorization for an existing Copilot account while preserving its ID, metadata, and usage history. |
@@ -195,11 +197,16 @@ Gateway API keys support multiple independent credentials. Each key can have `ra
 
 ### Logs
 
+All log views (`request`, `warmup`, `claim`, `test`) live in one `request_logs` table and are selected by the `kind` column.
+
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/logs?cursor=&status=&model=&provider=&keyId=&q=` | Paginated request history (id, ts, model, provider, status, thinking mode, tokens, cache-read/cache-write tokens, latency, cost, error). Only the requested thinking setting is stored; reasoning content is never logged. |
+| GET | `/api/logs?page=&limit=&kind=&status=&model=&provider=&key_id=&from=&to=` | Paginated history (id, ts, model, provider, status, thinking mode, tokens, cache-read/cache-write tokens, latency, credit, error). `kind` selects the view and defaults to no filter. Only the requested thinking setting is stored; reasoning content is never logged. |
 | GET | `/api/logs/:id` | Detail incl. payloads if `TRACK_PAYLOADS=full` |
-| DELETE | `/api/logs` | Purge (body: `{ before: "ISO-date" }`) |
+| GET | `/api/logs/usage?days=` | Real traffic only (`kind='request'`) aggregated per provider+model |
+| DELETE | `/api/logs/all?kind=` | Clear logs. `kind` must be one of `request`, `warmup`, `claim`, `test` (`400` otherwise); omitted or empty clears **all four** plus every `admin_audit_log` row and drops the orphan `request_log_payloads` / `request_log_payload_cleanup` tables → `{ ok: true, kind, cleared, audit_cleared, tables_dropped }`. Use this for "wipe every log without exception". |
+| DELETE | `/api/logs/files` | Truncate the on-disk log files (`data/mirais.log`, `data/xai-farm.log.jsonl`, `data/xfarm-device-debug.json`) → `{ ok: true, truncated: string[], freed_bytes }`. File handles the gateway already holds keep appending after truncation — restart Mirais to start a fresh log. |
+| DELETE | `/api/logs/usage` | Legacy alias for clearing every log row; kept for compatibility |
 
 ### Grok-4.5 reasoning and tool work
 

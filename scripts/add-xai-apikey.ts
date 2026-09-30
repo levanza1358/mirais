@@ -46,7 +46,7 @@ if (apiKeys.length === 0) {
   process.exit(1);
 }
 
-const db = await getDb(config.dbPath);
+const db = await getDb(config.dbFile);
 const repo = new ProvidersRepo(db);
 
 // Find xAI provider

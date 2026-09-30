@@ -18,6 +18,7 @@ import { GatewayError } from "../shared/errors";
 import { ProvidersRepo } from "../store/repos/providers";
 import { AliasesRepo, CombosRepo } from "../store/repos/routing";
 import { LogsRepo } from "../store/repos/logs";
+import { DailyUsageRepo } from "../store/repos/usage";
 import { SettingsRepo } from "../store/repos/settings";
 import type { CanonicalRequest, CanonicalResponse, RoutingPolicy, Usage, ReasoningEffort } from "../shared/types";
 import { log } from "../utils/logger";
@@ -28,7 +29,8 @@ import type { GatewayKey } from "../shared/types";
 export function v1Routes(db: Database) {
   const providersRepo = new ProvidersRepo(db);
   const router = new Router(providersRepo, new AliasesRepo(db), new CombosRepo(db));
-  const logs = new LogsRepo(db);
+  const usage = new DailyUsageRepo(db);
+  const logs = new LogsRepo(db, usage);
   const settings = new SettingsRepo(db);
   const app = new Elysia({ prefix: "/v1" });
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, Globe2, Lock, Music, Power, Youtube } from "lucide-react";
-import { settings, backups, healthInfo, providers, auth, autostart, youtube, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
+import { Plus, Trash2, Download, Upload, History, RotateCcw, Palette, Database, Eye, EyeOff, SettingsIcon, HardDrive, Info, Save, Zap, Mail, ExternalLink, Brain, FileCode, Coffee, ChevronDown, ChevronUp, Globe2, Lock, Power } from "lucide-react";
+import { settings, backups, healthInfo, providers, auth, autostart, type BackupEntry, type TokenSaverSettings, type HeadroomSettings, type PonytailSettings, type CavemanSettings } from "../api";
 import { REASONING_MATRIX } from "../reasoningMatrix";
 import { Button, Card, ConfirmModal, Input, Modal, Skeleton, Switch, toast, uploadProgress, dismissProgress } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -48,7 +48,7 @@ function readStoredAccent(): string {
 /*  Tab definitions                                                    */
 /* ------------------------------------------------------------------ */
 
-type SettingsTab = "general" | "appearance" | "models" | "tokensaver" | "reasoning" | "music" | "backup" | "imap" | "about";
+type SettingsTab = "general" | "appearance" | "models" | "tokensaver" | "reasoning" | "backup" | "imap" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: "general",    label: "General",     icon: <SettingsIcon className="w-4 h-4" /> },
@@ -56,7 +56,6 @@ const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: "models",     label: "Models",      icon: <Zap className="w-4 h-4" /> },
   { id: "tokensaver", label: "Token Saver", icon: <Save className="w-4 h-4" /> },
   { id: "reasoning",  label: "Reasoning",   icon: <Brain className="w-4 h-4" /> },
-  { id: "music",      label: "Music",       icon: <Music className="w-4 h-4" /> },
   { id: "backup",     label: "Backup",      icon: <HardDrive className="w-4 h-4" /> },
   { id: "imap",       label: "IMAP",        icon: <Mail className="w-4 h-4" /> },
   { id: "about",      label: "About",       icon: <Info className="w-4 h-4" /> },
@@ -103,7 +102,6 @@ export default function Settings() {
         {tab === "models" && <ModelSyncSection />}
         {tab === "tokensaver" && <TokenSaverSection />}
         {tab === "reasoning" && <ReasoningSection />}
-        {tab === "music" && <MusicSection />}
         {tab === "backup" && <BackupSection />}
         {tab === "imap" && <XaiImapSection />}
         {tab === "about" && <AboutSection />}
@@ -1210,150 +1208,6 @@ function ReasoningSection() {
         </div>
       </Card>
     </div>
-  );
-}
-
-// ── music ──
-
-interface MusicPrefs {
-  default_volume: number;
-  autoplay_next: boolean;
-  default_repeat: "off" | "all" | "one";
-  default_shuffle: boolean;
-}
-
-const MUSIC_DEFAULTS: MusicPrefs = {
-  default_volume: 0.8,
-  autoplay_next: true,
-  default_repeat: "off",
-  default_shuffle: false,
-};
-
-function MusicSection() {
-  const [prefs, setPrefs] = useState<MusicPrefs>(MUSIC_DEFAULTS);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("mirais.music.prefs");
-      if (raw) setPrefs({ ...MUSIC_DEFAULTS, ...(JSON.parse(raw) as Partial<MusicPrefs>) });
-    } catch { /* ignore */ }
-  }, []);
-
-  const save = () => {
-    window.localStorage.setItem("mirais.music.prefs", JSON.stringify(prefs));
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 2000);
-  };
-
-  return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <Card>
-        <div className="mb-4 flex items-center gap-2">
-          <Music size={14} className="text-accent" />
-          <h3 className="text-sm font-medium">Playback defaults</h3>
-        </div>
-        <p className="mb-4 text-xs text-text-muted">
-          Saved per browser. Player picks these up next time a track starts.
-        </p>
-        <div className="space-y-4">
-          <label className="block text-xs text-text-muted">
-            Default volume
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(prefs.default_volume * 100)}
-              onChange={(event) => setPrefs({ ...prefs, default_volume: Number(event.target.value) / 100 })}
-              className="mt-1 w-full accent-accent"
-            />
-            <span className="mt-1 block text-[10px] tabular-nums text-text-muted">{Math.round(prefs.default_volume * 100)}%</span>
-          </label>
-          <label className="flex items-center justify-between gap-3">
-            <span className="text-xs text-text-muted">Auto-play next track</span>
-            <Switch
-              checked={prefs.autoplay_next}
-              onChange={(value) => setPrefs({ ...prefs, autoplay_next: value })}
-              aria-label="Auto-play next track"
-            />
-          </label>
-          <label className="block text-xs text-text-muted">
-            Default repeat mode
-            <select
-              className="mt-1 w-full rounded-lg border border-border bg-bg-base px-3 py-2 text-sm"
-              value={prefs.default_repeat}
-              onChange={(event) => setPrefs({ ...prefs, default_repeat: event.target.value as MusicPrefs["default_repeat"] })}
-            >
-              <option value="off">Off</option>
-              <option value="all">All</option>
-              <option value="one">One</option>
-            </select>
-          </label>
-          <label className="flex items-center justify-between gap-3">
-            <span className="text-xs text-text-muted">Default shuffle</span>
-            <Switch
-              checked={prefs.default_shuffle}
-              onChange={(value) => setPrefs({ ...prefs, default_shuffle: value })}
-              aria-label="Default shuffle"
-            />
-          </label>
-        </div>
-        <div className="mt-4 flex justify-end">
-          <Button onClick={save}>{saved ? "Saved" : "Save"}</Button>
-        </div>
-      </Card>
-
-      <Card>
-        <div className="mb-4 flex items-center gap-2">
-          <Info size={14} className="text-accent" />
-          <h3 className="text-sm font-medium">About the library</h3>
-        </div>
-        <p className="text-xs text-text-muted">
-          Files are stored locally at <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">DATA_DIR/music</code>{" "}
-          and served via the public <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">/api/music/tracks/:id/audio</code>{" "}
-          route. The browser handles decoding, so no audio libraries are needed on the server. Use a network
-          boundary (reverse proxy, VPN, or loopback bind) if you need to keep the library private.
-        </p>
-        <p className="mt-3 text-xs text-text-muted">
-          Open <a className="text-accent underline" href="/dashboard/music">the library</a> to upload tracks or
-          create playlists.
-        </p>
-      </Card>
-
-      <InvidiousSection />
-    </div>
-  );
-}
-
-function InvidiousSection() {
-  const config = useQuery({ queryKey: ["music-youtube-config"], queryFn: youtube.config, refetchInterval: 30_000 });
-  const instances = config.data?.instances ?? [];
-  return (
-    <Card className="lg:col-span-2">
-      <div className="mb-4 flex items-center gap-2">
-        <Youtube size={14} className="text-accent" />
-        <h3 className="text-sm font-medium">Invidious instances</h3>
-      </div>
-      <p className="mb-4 text-xs text-text-muted">
-        Mirais uses Invidious for YouTube search and audio streaming. The default instance is read from the
-        server's <code className="rounded bg-bg-raised px-1 font-mono text-[11px]">INV_INSTANCES</code>{" "}
-        env var. Edit the env to add your own; Mirais round-robins and falls back when an instance fails.
-      </p>
-      <ul className="space-y-1.5">
-        {config.isLoading ? (
-          <Skeleton className="h-5 w-full" />
-        ) : instances.length === 0 ? (
-          <li className="text-xs text-text-muted">No instances configured. Set INV_INSTANCES on the server.</li>
-        ) : (
-          instances.map((instance) => (
-            <li key={instance} className="flex items-center justify-between rounded-md border border-border bg-bg-base px-3 py-1.5 text-xs">
-              <code className="font-mono">{instance}</code>
-              <span className="text-text-muted">audio + search</span>
-            </li>
-          ))
-        )}
-      </ul>
-    </Card>
   );
 }
 

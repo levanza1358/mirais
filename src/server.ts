@@ -11,12 +11,12 @@ import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, providerHealthRoutes, auditRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
 import { backupRoutes } from "./admin/backups";
-import { musicRoutes, youtubeRoutes } from "./admin/music";
 import { xaiAdminRoutes } from "./admin/xai-routes";
 import { v1Routes } from "./proxy/routes";
 import { sweepCooldowns } from "./proxy/executor";
 import { GatewayError, AdminError } from "./shared/errors";
 import { LogsRepo } from "./store/repos/logs";
+import { DailyUsageRepo } from "./store/repos/usage";
 import { SettingsRepo } from "./store/repos/settings";
 import { ProvidersRepo } from "./store/repos/providers";
 import { baseUrlFor } from "./proxy/router";
@@ -39,18 +39,34 @@ function classifyWarmupStatus(ok: boolean, status: number, detail?: string | nul
 
 setLogLevel(config.logLevel);
 
-const db: Database = await getDb(config.dbPath);
+const db: Database = await getDb(config.dbFile);
 await startCopilotSidecars(db);
 let autoWarmupRunning = false;
 let lastAutoWarmupAt = 0;
 
-// ── retention purge (daily) ──
+// ── retention purge (hourly) ──
+// Every `request_logs` row is operational telemetry and expires after a fixed
+// one-day window. Stats/usage survive the purge because `logs.insert()` mirrors
+// counters into `daily_usage`, which is retained for `log_retention_days`
+// (default 30). Operators can also wipe everything from the dashboard.
+const LOG_TTL_DAYS = 1;
+
 async function purgeOldLogs(): Promise<void> {
   try {
     const settings = new SettingsRepo(db);
-    const days = Number(await settings.get("log_retention_days") ?? 30);
-    const removed = await new LogsRepo(db).purgeOlderThan(days);
-    if (removed > 0) log.info("purged old request logs", { removed, retention_days: days });
+    const usageDays = Number(await settings.get("log_retention_days") ?? 30);
+    const logs = new LogsRepo(db);
+    const usage = new DailyUsageRepo(db);
+    const removed = await logs.purgeOlderThan(LOG_TTL_DAYS);
+    const removedUsage = await usage.purgeOlderThan(usageDays);
+    if (removed > 0 || removedUsage > 0) {
+      log.info("purged old logs", {
+        removed,
+        log_ttl_days: LOG_TTL_DAYS,
+        removed_usage: removedUsage,
+        usage_retention_days: usageDays,
+      });
+    }
   } catch (err) {
     log.warn("request log retention purge failed", { err: err instanceof Error ? err.message : String(err) });
   }
@@ -239,7 +255,9 @@ async function sweepExpiredCooldowns(): Promise<void> {
 }
 
 await purgeOldLogs();
-setInterval(() => { void purgeOldLogs(); }, 24 * 3600 * 1000).unref();
+// Hourly, not daily: the kind/body windows are one day, and a daily sweep could
+// let an entry live almost 48 hours before the next pass removed it.
+setInterval(() => { void purgeOldLogs(); }, 3600 * 1000).unref();
 await sweepExpiredCooldowns();
 setInterval(() => { void sweepExpiredCooldowns(); }, 60 * 1000).unref();
 void runAutoWarmups();
@@ -328,8 +346,6 @@ const app = new Elysia()
   .use(settingsRoutes(db))
   .use(autostartRoutes())
   .use(backupRoutes(db))
-  .use(musicRoutes(db))
-  .use(youtubeRoutes(db))
   .use(docsRoutes)
   .use(xaiAdminRoutes(db))
   .use(statsRoutes(db))
@@ -379,7 +395,7 @@ const dashboardPasswordEnabled = await passwordEnabled(db);
 log.info("mirais started", {
   url: `http://${config.host}:${config.port}`,
   dashboard: hasDashboard ? "serving built dashboard" : "not built",
-  db: config.dbPath,
+  db: config.dbFile,
   dashboard_auth: dashboardPasswordEnabled ? "password" : "disabled",
 });
 

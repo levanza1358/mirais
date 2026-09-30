@@ -1,8 +1,11 @@
 import { Elysia } from "elysia";
 import fs from "node:fs";
+import fsP from "node:fs/promises";
+import path from "node:path";
 import type { Database } from "../store/sql";
 import { SettingsRepo } from "../store/repos/settings";
-import { LogsRepo } from "../store/repos/logs";
+import { LogsRepo, LOG_KINDS, type LogKind } from "../store/repos/logs";
+import { DailyUsageRepo } from "../store/repos/usage";
 import { ProvidersRepo } from "../store/repos/providers";
 import { settingsUpdateSchema } from "../shared/schemas";
 import { AdminError } from "../shared/errors";
@@ -67,10 +70,6 @@ export function settingsRoutes(db: Database) {
       routing_policy: normalizeRoutingPolicy(await settings.getJson("routing_policy")),
       ui: await settings.getJson("ui"),
       xai_imap: await settings.getJson("xai_imap"),
-      invidious: {
-        instances: config.invidiousInstances,
-        timeout_ms: config.invidiousTimeoutMs,
-      },
       env: {
         port: config.port,
         host: config.host,
@@ -115,26 +114,27 @@ export function settingsRoutes(db: Database) {
 }
 
 export function statsRoutes(db: Database) {
-  const logs = new LogsRepo(db);
+  const usage = new DailyUsageRepo(db);
   const days = (raw: unknown) => {
     const n = Number(raw);
     return Number.isFinite(n) && n >= 1 && n <= 90 ? Math.floor(n) : 7;
   };
   return new Elysia({ prefix: "/api/stats" })
-    .get("/summary", ({ query }) => logs.statsSummary(days(query.days)))
-    .get("/timeseries", ({ query }) => logs.statsTimeseries(days(query.days)))
-    .get("/by-model", ({ query }) => logs.statsByModel(days(query.days)))
-    .get("/by-provider", ({ query }) => logs.statsByProvider(days(query.days)));
+    .get("/summary", ({ query }) => usage.statsSummary(days(query.days)))
+    .get("/timeseries", ({ query }) => usage.statsTimeseries(days(query.days)))
+    .get("/by-model", ({ query }) => usage.statsByModel(days(query.days)))
+    .get("/by-provider", ({ query }) => usage.statsByProvider(days(query.days)));
 }
 
 export function providerHealthRoutes(db: Database) {
-  const logs = new LogsRepo(db);
+  const usage = new DailyUsageRepo(db);
   return new Elysia({ prefix: "/api/provider-health" })
-    .get("/", ({ query }) => logs.providerHealth(Number(query.days) || 7));
+    .get("/", ({ query }) => usage.providerHealth(Number(query.days) || 7));
 }
 
 export function logRoutes(db: Database) {
   const logs = new LogsRepo(db);
+  const audit = new AuditRepo(db);
   const keys = new KeysRepo(db);
   const days = (raw: unknown) => {
     const n = Number(raw);
@@ -154,12 +154,61 @@ export function logRoutes(db: Database) {
         kind: query.kind,
       }),
     )
-    .get("/usage", ({ query }) => logs.usageAggregate(days(query.days)))
+    .get("/usage", ({ query }) => new DailyUsageRepo(db).usageAggregate(days(query.days)))
     .get("/usage-by-key", ({ query }) => {
       if (typeof query.key_id !== "string" || !query.key_id) throw new AdminError(400, "key_id is required");
       return logs.keyUsage(query.key_id);
     })
     .delete("/usage", async () => ({ ok: true, cleared: await logs.clearAll() }))
+    // Clear-the-logs button. An absent `kind` wipes every log view **plus**
+    // every audit row, the orphan payload tables, and the `daily_usage`
+    // rollup — "clear all logs without exception". A present `kind` is
+    // validated against the known kinds so a typo cannot silently delete
+    // nothing.
+    .delete("/all", async ({ query }) => {
+      const raw = query.kind;
+      if (raw === undefined || raw === "") {
+        const clearedRequests = await logs.clearAll();
+        const clearedAudit = await audit.clearAll();
+        const clearedUsage = await new DailyUsageRepo(db).clearAll();
+        const droppedTables = await logs.dropOrphanPayloadTables();
+        log.info("cleared all logs", { clearedRequests, clearedAudit, clearedUsage, droppedTables });
+        return { ok: true, kind: null, cleared: clearedRequests, audit_cleared: clearedAudit, usage_cleared: clearedUsage, tables_dropped: droppedTables };
+      }
+      if (typeof raw !== "string" || !(LOG_KINDS as readonly string[]).includes(raw)) {
+        throw new AdminError(400, `kind must be one of: ${LOG_KINDS.join(", ")}`);
+      }
+      const kind = raw as LogKind;
+      return { ok: true, kind, cleared: await logs.clearKind(kind) };
+    })
+    // Truncate the on-disk log files (`mirais.log`, `xai-farm.log.jsonl`,
+    // Returns the number of files truncated and the bytes freed.
+    .delete("/files", async () => {
+      const candidates = [
+          path.join(config.dataDir, "mirais.log"),
+          path.join(config.dataDir, "xai-farm.log.jsonl"),
+          path.join(config.dataDir, "xfarm-device-debug.json"),
+        ].map((p) => path.resolve(p));
+      const seen = new Set<string>();
+      const truncated: string[] = [];
+      let freed = 0;
+      for (const target of candidates) {
+        if (seen.has(target)) continue;
+        seen.add(target);
+        try {
+          const stat = await fsP.stat(target);
+          if (!stat.isFile()) continue;
+          await fsP.writeFile(target, "", "utf8");
+          truncated.push(target);
+          freed += stat.size;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            log.warn("log file truncate failed", { path: target, error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+      }
+      return { ok: true, truncated, freed_bytes: freed };
+    })
     .get("/:id/replay", async ({ params }) => {
       const replay = await logs.getReplayBody(params.id);
       if (!replay) throw new AdminError(409, "Replay is unavailable; enable TRACK_PAYLOADS=full and use a newly captured request");
@@ -234,9 +283,9 @@ export function healthRoutes(db: Database) {
         // when systemd's WorkingDirectory moves the relative ./data path).
         storage: {
           data_dir: config.dataDir,
-          db_path: config.dbPath,
-          db_exists: fsSyncExists(config.dbPath),
-          size_bytes: fsSyncSize(config.dbPath),
+          db_path: config.dbFile,
+          db_exists: fsSyncExists(config.dbFile),
+          size_bytes: fsSyncSize(config.dbFile),
         },
         // Runtime health. In-flight counts were already tracked for per-key
         // concurrency limits but never exposed, which made it impossible to

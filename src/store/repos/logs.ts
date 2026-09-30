@@ -1,6 +1,8 @@
 import type { Database } from "../sql";
+import { num, coerceAggregates } from "../sql";
 import { ulid, nowIso } from "../../utils/id";
 import type { RequestLog, AttemptRecord } from "../../shared/types";
+import { log } from "../../utils/logger";
 
 export interface LogInsert {
   keyId: string | null;
@@ -30,6 +32,10 @@ export interface LogInsert {
   kind?: string;
 }
 
+/** Log kinds sharing the `request_logs` table; `kind` selects which view shows a row. */
+export const LOG_KINDS = ["request", "warmup", "claim", "test"] as const;
+export type LogKind = (typeof LOG_KINDS)[number];
+
 function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -39,7 +45,7 @@ function utcDayStart(): string {
 }
 
 export class LogsRepo {
-  constructor(private db: Database) {}
+  constructor(private db: Database, private readonly dailyUsage?: import("./usage").DailyUsageRepo) {}
 
 async insert(entry: LogInsert): Promise<void> {
   await this.db
@@ -77,6 +83,32 @@ async insert(entry: LogInsert): Promise<void> {
         entry.accountLabel ?? null,
         entry.kind ?? "request",
       );
+
+    // Mirror real-traffic counters into `daily_usage` so stats survive the
+    // 1-day row purge. Best-effort — a rollup failure must never fail the
+    // user-facing request that already produced a log row.
+    if (this.dailyUsage && (entry.kind ?? "request") === "request") {
+      try {
+        await this.dailyUsage.record(
+          entry.provider,
+          entry.model,
+          entry.accountLabel ?? null,
+          nowIso(),
+          {
+            inputTokens: entry.inputTokens ?? 0,
+            outputTokens: entry.outputTokens ?? 0,
+            cachedTokens: entry.cachedTokens ?? 0,
+            cacheWriteTokens: entry.cacheWriteTokens ?? 0,
+            reasoningTokens: entry.reasoningTokens ?? 0,
+            tokensSaved: entry.tokensSaved,
+            latencyMs: entry.latencyMs ?? 0,
+            errored: entry.status !== "success",
+          },
+        );
+      } catch (err) {
+        log.warn("daily_usage rollup failed", { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
   }
 
   async list(filters: {
@@ -115,48 +147,22 @@ async insert(entry: LogInsert): Promise<void> {
     return { items, total };
   }
 
-  /** Aggregated usage per (provider, model) for the Usage Log page — real
-   * traffic only (warmup excluded). */
-  usageAggregate(days: number): Promise<Array<{
-    provider: string | null;
-    model: string | null;
-    requests: number;
-    input_tokens: number;
-    output_tokens: number;
-    cached_tokens: number;
-    cache_write_tokens: number;
-    reasoning_tokens: number;
-    avg_latency_ms: number;
-    errors: number;
-    last_ts: string;
-  }>> {
-    return this.db
-      .query(
-        `SELECT provider, model,
-                COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                COALESCE(SUM(cached_tokens), 0) as cached_tokens,
-                COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens,
-                COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
-                COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
-                SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) as errors,
-                MAX(ts) as last_ts
-         FROM request_logs
-         WHERE ts >= ? AND kind = 'request'
-         GROUP BY provider, model
-         ORDER BY requests DESC`,
-      )
-      .all(daysAgo(days));
-  }
-
   async keyUsage(keyId: string): Promise<{ requests_today: number; tokens_today: number; tokens_total: number; requests_minute: number; requests_total: number; input_tokens_total: number; output_tokens_total: number; top_models: Array<{ model: string; requests: number; tokens: number }> }> {
     const total = await this.db.query("SELECT COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ?").get<{ tokens: number }>(keyId);
     const today = await this.db.query("SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ? AND ts >= ?").get<{ requests: number; tokens: number }>(keyId, utcDayStart());
     const minute = await this.db.query("SELECT COUNT(*) AS requests FROM request_logs WHERE key_id = ? AND ts >= ?").get<{ requests: number }>(keyId, daysAgo(1 / 1440));
     const totals = await this.db.query("SELECT COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens FROM request_logs WHERE key_id = ?").get<{ requests: number; input_tokens: number; output_tokens: number }>(keyId);
     const topModels = await this.db.query("SELECT COALESCE(model, requested_model) AS model, COUNT(*) AS requests, COALESCE(SUM(input_tokens) + SUM(output_tokens), 0) AS tokens FROM request_logs WHERE key_id = ? GROUP BY COALESCE(model, requested_model) ORDER BY tokens DESC LIMIT 5").all<{ model: string; requests: number; tokens: number }>(keyId);
-    return { requests_today: today?.requests ?? 0, tokens_today: today?.tokens ?? 0, tokens_total: total?.tokens ?? 0, requests_minute: minute?.requests ?? 0, requests_total: totals?.requests ?? 0, input_tokens_total: totals?.input_tokens ?? 0, output_tokens_total: totals?.output_tokens ?? 0, top_models: topModels };
+    return {
+      requests_today: num(today?.requests),
+      tokens_today: num(today?.tokens),
+      tokens_total: num(total?.tokens),
+      requests_minute: num(minute?.requests),
+      requests_total: num(totals?.requests),
+      input_tokens_total: num(totals?.input_tokens),
+      output_tokens_total: num(totals?.output_tokens),
+      top_models: topModels.map((row) => coerceAggregates(row, ["requests", "tokens"])),
+    };
   }
 
   getById(id: string): Promise<RequestLog | null> {
@@ -177,152 +183,88 @@ async insert(entry: LogInsert): Promise<void> {
   }
 
   async purgeOlderThan(days: number): Promise<number> {
-    const res = await this.db
-      .query("DELETE FROM request_logs WHERE ts < ?")
-      .run(daysAgo(days));
-    return res.changes;
-  }
-
-  async clearAll(): Promise<number> {
-    const res = await this.db.query("DELETE FROM request_logs").run();
-    return res.changes;
-  }
-
-  // ── stats queries ──
-
-  async statsSummary(days: number) {
-    const since = daysAgo(days);
-    const totals = await this.db
-      .query(
-        `SELECT COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                COALESCE(SUM(tokens_saved), 0) as tokens_saved,
-                AVG(latency_ms) as avg_latency
-        FROM request_logs WHERE ts >= ? AND kind = 'request'`,
-      )
-      .get<{
-        requests: number;
-        input_tokens: number;
-        output_tokens: number;
-        tokens_saved: number;
-        avg_latency: number | null;
-      }>(since);
-
-    const successRow = await this.db
-      .query("SELECT COUNT(*) as c FROM request_logs WHERE ts >= ? AND kind = 'request' AND status = 'success'")
-      .get<{ c: number }>(since);
-
-    return {
-      range_days: days,
-      requests: totals?.requests ?? 0,
-      input_tokens: totals?.input_tokens ?? 0,
-      output_tokens: totals?.output_tokens ?? 0,
-      tokens_saved: totals?.tokens_saved ?? 0,
-      avg_latency_ms: Math.round(totals?.avg_latency ?? 0),
-      success_rate: totals && totals.requests > 0 ? (successRow?.c ?? 0) / totals.requests : 1,
-    };
-  }
-
-  statsTimeseries(days: number) {
-    return this.db
-      .query(
-        `SELECT LEFT(ts, 10) as day,
-                COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                COALESCE(SUM(tokens_saved), 0) as tokens_saved
-         FROM request_logs
-         WHERE ts >= ? AND kind = 'request'
-         GROUP BY LEFT(ts, 10) ORDER BY day ASC`,
-      )
-      .all(daysAgo(days));
-  }
-
-  statsByModel(days: number) {
-    return this.db
-      .query(
-        `SELECT COALESCE(model, requested_model) as model,
-                COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-          COALESCE(SUM(output_tokens), 0) as output_tokens
-         FROM request_logs WHERE ts >= ? AND kind = 'request'
-         GROUP BY COALESCE(model, requested_model) ORDER BY requests DESC LIMIT 20`,
-      )
-      .all(daysAgo(days));
-  }
-
-  statsByProvider(days: number) {
-    return this.db
-      .query(
-        `SELECT provider,
-                COUNT(*) as requests,
-                COALESCE(SUM(input_tokens), 0) as input_tokens,
-                COALESCE(SUM(output_tokens), 0) as output_tokens,
-                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) as success_rate
-         FROM request_logs WHERE ts >= ? AND kind = 'request' AND provider IS NOT NULL
-         GROUP BY provider ORDER BY requests DESC`,
-      )
-      .all(daysAgo(days));
-  }
-
-  providerHealth(days = 7) {
-    return this.db.query(
-      `SELECT provider,
-              COUNT(*) AS requests,
-              SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS errors,
-              SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS error_rate,
-              ROUND(COALESCE(AVG(latency_ms), 0)) AS avg_latency_ms,
-              MAX(ts) AS last_request_at
-       FROM request_logs
-      WHERE kind = 'request' AND provider IS NOT NULL AND ts >= ?
-       GROUP BY provider ORDER BY requests DESC`,
-    ).all(daysAgo(days));
+    // Count first because Bun's SQLite adapter does not return affectedRows
+    // for DELETE (see `clearKind()` for the same workaround).
+    const before = (await this.db
+      .query("SELECT COUNT(*) AS c FROM request_logs WHERE ts < ?")
+      .get<{ c: number }>(daysAgo(days)))?.c ?? 0;
+    if (before === 0) return 0;
+    await this.db.query("DELETE FROM request_logs WHERE ts < ?").run(daysAgo(days));
+    return before;
   }
 
   /**
-   * Per-account usage for one provider, keyed by account label (recorded in
-   * attempts_detail). Returns today + all-time request/token totals.
+   * Null out captured request/response bodies past their retention window.
+   * Kept as a no-op safety net: with the 1-day row purge now in effect the
+   * sweep almost never finds a stale body to clear, but if it does we still
+   * drop the body and keep the counters intact.
    */
-  async usageByAccount(providerName: string): Promise<Array<{
-    account: string;
-    requests_today: number;
-    tokens_today: number;
-    requests_total: number;
-    tokens_total: number;
-  }>> {
-    const rows = await this.db
+  async purgePayloadBodiesOlderThan(days: number): Promise<number> {
+    const before = (await this.db
       .query(
-        `SELECT attempts_detail, ts, input_tokens, output_tokens
-         FROM request_logs
-         WHERE provider = ? AND attempts_detail IS NOT NULL AND kind = 'request'`,
+        `SELECT COUNT(*) AS c FROM request_logs
+         WHERE ts < ? AND (request_body IS NOT NULL OR response_body IS NOT NULL)`,
       )
-      .all<{
-        attempts_detail: string;
-        ts: string;
-        input_tokens: number | null;
-        output_tokens: number | null;
-      }>(providerName);
-
-    const today = new Date().toISOString().slice(0, 10);
-    const acc = new Map<string, { requests_today: number; tokens_today: number; requests_total: number; tokens_total: number }>();
-    for (const row of rows) {
-      let label: string | undefined;
-      try {
-        const attempts = JSON.parse(row.attempts_detail) as Array<{ accountLabel?: string; outcome?: string }>;
-        label = attempts.find((a) => a.outcome === "success")?.accountLabel ?? attempts[0]?.accountLabel;
-      } catch { continue; }
-      if (!label) continue;
-      const entry = acc.get(label) ?? { requests_today: 0, tokens_today: 0, requests_total: 0, tokens_total: 0 };
-      const tokens = (row.input_tokens ?? 0) + (row.output_tokens ?? 0);
-      entry.requests_total += 1;
-      entry.tokens_total += tokens;
-      if (row.ts.slice(0, 10) === today) {
-        entry.requests_today += 1;
-        entry.tokens_today += tokens;
-      }
-      acc.set(label, entry);
-    }
-    return [...acc.entries()].map(([account, v]) => ({ account, ...v }));
+      .get<{ c: number }>(daysAgo(days)))?.c ?? 0;
+    if (before === 0) return 0;
+    await this.db
+      .query(
+        `UPDATE request_logs
+            SET request_body = NULL, response_body = NULL
+          WHERE ts < ? AND (request_body IS NOT NULL OR response_body IS NOT NULL)`,
+      )
+      .run(daysAgo(days));
+    return before;
   }
+
+  /** Delete every log row, or only the rows of one `kind`. */
+  async clearKind(kind?: LogKind): Promise<number> {
+    // Bun's `SQL` adapter returns `[]` (no `affectedRows`) for SQLite writes,
+    // so the generic `Database.run()` path reports zero changes even when the
+    // DELETE succeeded. Count first to give callers an accurate number.
+    const before = (await this.db
+      .query(kind ? "SELECT COUNT(*) AS c FROM request_logs WHERE kind = ?" : "SELECT COUNT(*) AS c FROM request_logs")
+      .get<{ c: number }>(...(kind ? [kind] : [])))?.c ?? 0;
+    if (before === 0) return 0;
+    if (kind) {
+      await this.db.query("DELETE FROM request_logs WHERE kind = ?").run(kind);
+    } else {
+      await this.db.query("DELETE FROM request_logs").run();
+    }
+    return before;
+  }
+
+  async clearAll(): Promise<number> {
+    return this.clearKind();
+  }
+
+  /**
+   * Drop the orphan payload tables that the abandoned `fix/logs-hardening`
+   * branch created. They are not referenced by any code on `main` and consume
+   * ~1.3 GB of disk. Safe to run repeatedly: `DROP TABLE IF EXISTS` is a
+   * no-op when the table is already gone. Returns the number of tables
+   * actually dropped.
+   */
+  async dropOrphanPayloadTables(): Promise<number> {
+    let dropped = 0;
+    for (const name of ["request_log_payloads", "request_log_payload_cleanup"]) {
+      try {
+        // MySQL exposes the catalog through information_schema; SQLite has no
+        // catalog so it consults sqlite_master. The check follows the dialect
+        // of the active connection.
+        const existsQuery = this.db.dialect === "mysql"
+          ? `SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`
+          : `SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table' AND name = ?`;
+        const exists = (await this.db.query(existsQuery).get<{ c: number }>(name))?.c ?? 0;
+        if (exists === 0) continue;
+        await this.db.query(`DROP TABLE IF EXISTS \`${name}\``).run();
+        dropped += 1;
+      } catch (err) {
+        log.warn("orphan payload table drop failed", { name, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return dropped;
+  }
+
+  // ── stats queries live in `DailyUsageRepo` ──
 }

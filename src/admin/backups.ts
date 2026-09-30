@@ -20,7 +20,7 @@ export interface BackupEntry {
 }
 
 function backupsDir(): string {
-  const dir = path.join(path.dirname(config.dbPath), "backups");
+  const dir = path.join(config.dataDir, "backups");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

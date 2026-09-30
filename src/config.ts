@@ -4,7 +4,6 @@ import fs from "node:fs";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(1463),
-  MYSQL_PORT: z.coerce.number().int().min(1).max(65535).default(14631),
   HOST: z.string().default("127.0.0.1"),
   DATA_DIR: z.string().default("./data"),
   TOKEN_SAVER: z.enum(["on", "off"]).default("on"),
@@ -27,25 +26,8 @@ const envSchema = z.object({
   // the dashboard), every /api/* route except /api/auth/* and /api/health
   // requires a session cookie.
   DASHBOARD_PASSWORD: z.string().min(8).optional(),
-  SESSION_TTL_HOURS: z.coerce.number().positive().max(24 * 365).default(12),
-  // Comma-separated list of Invidious instance URLs used for YouTube search
-  // and audio streaming. Empty disables the YouTube import flow.
-  INV_INSTANCES: z.string().default(""),
-  INV_TIMEOUT_MS: z.coerce.number().positive().default(4000),
+SESSION_TTL_HOURS: z.coerce.number().positive().max(24 * 365).default(12),
 });
-
-function parseInvInstances(raw: string): string[] {
-  const trimmed = raw.trim();
-  if (!trimmed) return [];
-  // Accept JSON arrays (`["https://inv1","https://inv2"]`) or comma lists.
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (Array.isArray(parsed)) return parsed.map((value) => String(value).trim()).filter(Boolean);
-  } catch {
-    /* fall through to comma split */
-  }
-  return trimmed.split(",").map((value) => value.trim()).filter(Boolean);
-}
 
 const parsed = envSchema.parse(process.env);
 
@@ -70,16 +52,12 @@ if (process.platform !== "win32" && dataDir === "/data") {
 }
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(path.join(dataDir, "backups"), { recursive: true });
-fs.mkdirSync(path.join(dataDir, "music"), { recursive: true });
 
 export const config = {
   port: parsed.PORT,
   host: parsed.HOST,
   dataDir,
-  dbPath: dataDir,
-  musicDir: path.join(dataDir, "music"),
-  mysqlDir: path.join(installDir, ".mysql"),
-  mysqlPort: parsed.MYSQL_PORT,
+  dbFile: path.join(dataDir, "mirais.db"),
   tokenSaverDefault: parsed.TOKEN_SAVER === "on",
   trackPayloads: parsed.TRACK_PAYLOADS,
   requestBodyLimit: parsed.REQUEST_BODY_LIMIT_MB * 1024 * 1024,
@@ -90,8 +68,6 @@ export const config = {
   authRequired: parsed.MIRAIS_AUTH_REQUIRED === "on",
   dashboardPassword: parsed.DASHBOARD_PASSWORD,
   sessionTtlHours: parsed.SESSION_TTL_HOURS,
-  invidiousInstances: parseInvInstances(parsed.INV_INSTANCES),
-  invidiousTimeoutMs: parsed.INV_TIMEOUT_MS,
   startedAt: Date.now(),
 } as const;
 

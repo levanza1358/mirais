@@ -21,9 +21,6 @@ const Settings = lazy(() => import("./pages/Settings"));
 const Audit = lazy(() => import("./pages/Audit"));
 const Capabilities = lazy(() => import("./pages/Capabilities"));
 const ReasoningDocs = lazy(() => import("./pages/ReasoningDocs"));
-const Music = lazy(() => import("./pages/Music"));
-const MusicPlaylistDetail = lazy(() => import("./pages/MusicPlaylistDetail"));
-const MusicNowPlaying = lazy(() => import("./pages/MusicNowPlaying"));
 
 const ACCENT_STORAGE_KEY = "mirais.ui.accent";
 const ACCENT_DEFAULT = "#7c5cff";
@@ -110,9 +107,6 @@ export default function App() {
                     <Route path="audit" element={<Audit />} />
                     <Route path="capabilities" element={<Capabilities />} />
                     <Route path="reasoning" element={<ReasoningDocs />} />
-                    <Route path="music" element={<Music />} />
-                    <Route path="music/now-playing" element={<MusicNowPlaying />} />
-                    <Route path="music/playlists/:id" element={<MusicPlaylistDetail />} />
                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
                   </Routes>
                 </Suspense>
