@@ -11,6 +11,7 @@ import { copilotWarmupError, providerRoutes } from "./admin/providers";
 import { aliasRoutes, comboRoutes, keyRoutes } from "./admin/routes";
 import { settingsRoutes, statsRoutes, providerHealthRoutes, auditRoutes, logRoutes, healthRoutes, autostartRoutes } from "./admin/settings";
 import { backupRoutes } from "./admin/backups";
+import { chatRoutes } from "./admin/chats";
 import { xaiAdminRoutes } from "./admin/xai-routes";
 import { v1Routes } from "./proxy/routes";
 import { sweepCooldowns } from "./proxy/executor";
@@ -352,6 +353,7 @@ const app = new Elysia()
   .use(settingsRoutes(db))
   .use(autostartRoutes())
   .use(backupRoutes(db))
+  .use(chatRoutes(db))
   .use(docsRoutes)
   .use(xaiAdminRoutes(db))
   .use(statsRoutes(db))

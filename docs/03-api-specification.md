@@ -231,6 +231,22 @@ All log views (`request`, `warmup`, `claim`, `test`) live in one `request_logs` 
 | GET | `/api/settings/export` | Full config export (JSON, secrets redacted) |
 | POST | `/api/settings/import` | Import config (merge) |
 
+### Playground chat sessions
+
+The dashboard's `/dashboard/chat` page persists multi-turn conversations here. Sessions survive restart, browser switch, and accidental localStorage wipes; the dashboard caps storage at 100 sessions × 50 messages (~2.5 MB worst case).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/chats` | List sessions: `{ id, title, model, system, params, message_count, pinned, position, created_at, updated_at }`. Sorted pinned → explicit `position` → `updated_at`. |
+| GET | `/api/chats/:id` | Full session: `ChatSessionSummary` + `messages` ordered by `position`. |
+| POST | `/api/chats` | Create session. Body: `{ title, model, system?, params? }`. Server trims to the 100 most recent after insert. |
+| PATCH | `/api/chats/:id` | Update `title`, `system`, or `params`. Touches `updated_at`. |
+| DELETE | `/api/chats/:id` | Delete session (CASCADE messages). |
+| PUT | `/api/chats/:id/messages` | Replace the full message list (atomic). Body: `{ messages: [{ role, content, in_tokens?, out_tokens?, cost? }, …] }` (1–50). |
+| PUT | `/api/chats/order` | Reorder sessions. Body: `{ ids: string[] }` in desired order. Assigns `position` 0..n-1. |
+| POST | `/api/chats/:id/pin` | Pin session to top. |
+| DELETE | `/api/chats/:id/pin` | Unpin. |
+
 ### Backups
 
 | Method | Path | Notes |

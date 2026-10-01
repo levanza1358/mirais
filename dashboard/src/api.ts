@@ -664,6 +664,63 @@ export const logs = {
     req<{ ok: boolean; truncated: string[]; freed_bytes: number }>(`/api/logs/files`, { method: "DELETE" }),
 };
 
+// ── chat playground ──
+
+export interface ChatParams {
+  temperature?: number;
+  max_tokens?: number;
+  top_p?: number;
+  stop?: string[];
+  json_mode?: boolean;
+  reasoning?: boolean;
+  reasoning_effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  model: string;
+  system: string | null;
+  params: ChatParams | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+  pinned: boolean;
+  position: number | null;
+}
+
+export interface ChatMessage {
+  id: number;
+  session_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  position: number;
+  in_tokens: number | null;
+  out_tokens: number | null;
+  cost: number | null;
+  created_at: string;
+}
+
+export interface ChatSession extends ChatSessionSummary {
+  messages: ChatMessage[];
+}
+
+export const chats = {
+  list: () => req<{ items: ChatSessionSummary[] }>("/api/chats"),
+  get: (id: string) => req<ChatSession>(`/api/chats/${id}`),
+  create: (input: { title: string; model: string; system?: string | null; params?: ChatParams }) =>
+    req<ChatSession>("/api/chats", { method: "POST", body: JSON.stringify(input) }),
+  update: (id: string, patch: { title?: string; system?: string | null; params?: ChatParams | null }) =>
+    req<ChatSession>(`/api/chats/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  delete: (id: string) => req<{ ok: boolean; deleted: number }>(`/api/chats/${id}`, { method: "DELETE" }),
+  replaceMessages: (id: string, messages: Array<Omit<ChatMessage, "id" | "session_id" | "position" | "created_at">>) =>
+    req<ChatSession>(`/api/chats/${id}/messages`, { method: "PUT", body: JSON.stringify({ messages }) }),
+  reorder: (ids: string[]) =>
+    req<{ ok: boolean; moved: number }>("/api/chats/order", { method: "PUT", body: JSON.stringify({ ids }) }),
+  setPinned: (id: string, pinned: boolean) =>
+    req<{ ok: boolean; pinned: boolean }>(`/api/chats/${id}/pin`, { method: pinned ? "POST" : "DELETE" }),
+};
+
 export const settings = {
   get: () => req<Settings>("/api/settings"),
   patch: (patch: Partial<Settings> & Record<string, unknown>) => req<{ ok: boolean }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),

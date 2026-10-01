@@ -18,6 +18,19 @@ const ATTEMPT_WINDOW_MS = 5 * 60 * 1000;
 const attempts = new Map<string, { count: number; resetAt: number }>();
 
 /**
+ * Drop entries whose backoff window has already expired. Without this the map
+ * would grow unbounded across unique IPs over time. Cheap O(n) sweep on the
+ * path that already touches it (login attempts) is enough — login is rare
+ * and a 5-minute window keeps the working set under control.
+ */
+function sweepExpiredAttempts(): void {
+  const now = Date.now();
+  for (const [ip, entry] of attempts) {
+    if (entry.resetAt <= now) attempts.delete(ip);
+  }
+}
+
+/**
  * Paths that stay reachable without a dashboard session. The gateway proxy
  * (`/v1/*`) is never covered here: it authenticates with gateway keys, so a
  * dashboard password never affects API clients.
@@ -104,6 +117,7 @@ function throttle(ip: string): void {
 }
 
 function recordFailure(ip: string): void {
+  sweepExpiredAttempts();
   const entry = attempts.get(ip);
   if (!entry || entry.resetAt <= Date.now()) attempts.set(ip, { count: 1, resetAt: Date.now() + ATTEMPT_WINDOW_MS });
   else entry.count += 1;

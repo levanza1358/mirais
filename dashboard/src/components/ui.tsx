@@ -119,6 +119,40 @@ export function Switch({ checked, onChange, disabled, "aria-label": ariaLabel }:
   return <ShadcnSwitch checked={checked} onCheckedChange={onChange} disabled={disabled} aria-label={ariaLabel} />;
 }
 
+/**
+ * Lightweight range slider with a numeric readout. Used by the chat
+ * playground for temperature / top_p / max_tokens so we don't pull in a
+ * dedicated slider library for two inputs.
+ */
+export function Slider({ value, min, max, step = 1, onChange, label }: {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (v: number) => void;
+  label?: string;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-xs text-text-muted">
+      {label && (
+        <span className="flex items-center justify-between">
+          <span>{label}</span>
+          <span className="font-mono tabular-nums text-[10px] text-text-primary">{value}</span>
+        </span>
+      )}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full accent-accent"
+      />
+    </label>
+  );
+}
+
 // ── Badge ──
 export function Badge({ tone = "muted", title, children }: { tone?: "muted" | "success" | "warning" | "danger" | "accent"; title?: string; children: ReactNode }) {
   if (tone === "muted") return <ShadcnBadge variant="secondary" title={title}>{children}</ShadcnBadge>;

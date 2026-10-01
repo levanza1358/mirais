@@ -407,3 +407,46 @@ export const passwordChangeSchema = z.object({
   current: z.string(),
   next: z.string().min(6).max(128),
 });
+
+// ── Playground chat sessions ──
+
+export const chatMessageRoleSchema = z.enum(["user", "assistant", "system"]);
+
+export const chatParamsSchema = z.object({
+  temperature: z.number().min(0).max(2).optional(),
+  max_tokens: z.number().int().min(1).max(32_000).optional(),
+  top_p: z.number().min(0).max(1).optional(),
+  stop: z.array(z.string().min(1).max(64)).max(8).optional(),
+  json_mode: z.boolean().optional(),
+  reasoning: z.boolean().optional(),
+  reasoning_effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
+}).strict();
+
+export const chatSessionCreateSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  model: z.string().trim().min(1).max(256),
+  system: z.string().max(8192).nullable().optional(),
+  params: chatParamsSchema.optional(),
+});
+
+export const chatSessionUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  system: z.string().max(8192).nullable().optional(),
+  params: chatParamsSchema.nullable().optional(),
+});
+
+export const chatSessionMessageSchema = z.object({
+  role: chatMessageRoleSchema,
+  content: z.string().max(64_000),
+  in_tokens: z.number().int().min(0).nullable().optional(),
+  out_tokens: z.number().int().min(0).nullable().optional(),
+  cost: z.number().min(0).nullable().optional(),
+});
+
+export const chatMessagesReplaceSchema = z.object({
+  messages: z.array(chatSessionMessageSchema).min(1).max(50),
+});
+
+export const chatSessionReorderSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(500),
+});
