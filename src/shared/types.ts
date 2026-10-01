@@ -27,6 +27,7 @@ export type MessageContent = string | Array<TextContent | ImageContent | ToolRes
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: MessageContent;
+  reasoning_content?: string;
   name?: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
@@ -192,6 +193,7 @@ export type ProviderType =
   | "codebuddy-global"
   | "codebuddy-cn"
   | "github-copilot"
+  | "antigravity"
   | "custom";
 
 export interface Provider {

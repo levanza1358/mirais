@@ -205,7 +205,7 @@ export const anthropicMessagesSchema = z.object({
 export const providerCreateSchema = z.object({
   name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/, "lowercase letters, digits, dash, underscore"),
   displayName: z.string().trim().min(1).max(256).nullable().optional(),
-  type: z.enum(["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
+  type: z.enum(["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "antigravity", "custom"]),
   baseUrl: upstreamBaseUrlSchema.optional().nullable(),
   enabled: z.boolean().optional(),
   priority: z.number().int().optional(),
@@ -269,7 +269,7 @@ export const accountBackupSchema = z.object({
   exported_at: z.string().datetime(),
   providers: z.array(z.object({
     name: z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-_]*$/),
-    type: z.enum(["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "custom"]),
+    type: z.enum(["openai", "codex", "anthropic", "deepseek", "xai", "glm", "blackbox", "codebuddy-global", "codebuddy-cn", "github-copilot", "antigravity", "custom"]),
     base_url: upstreamBaseUrlSchema.nullable(),
     enabled: z.boolean(),
     priority: z.number().int(),

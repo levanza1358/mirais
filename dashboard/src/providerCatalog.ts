@@ -120,6 +120,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://copilot.tencent.com/v2",
   },
   {
+    type: "antigravity",
+    name: "antigravity",
+    displayName: "Antigravity",
+    description: "Google account subscription models via Antigravity Cloud Code",
+    textIcon: "AG",
+    color: "#4285F4",
+    credentialUrl: "https://antigravity.google/",
+  },
+  {
     type: "custom",
     name: "tokenrouter",
     displayName: "TokenRouter",

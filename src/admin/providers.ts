@@ -21,6 +21,7 @@ import { SseParser } from "../proxy/translator/stream";
 import { CODEBUDDY_CN_UNUSABLE_CREDITS, CODEBUDDY_MODELS, codeBuddyErrorDetail, isCodeBuddyProviderType, readCodeBuddyPreviewFromSse, requestCodeBuddyChat } from "./codebuddy-provider";
 import { copilotEntitlementError, copilotLoginForAccount, copilotResolvedLabel, waitCopilotSidecar, checkCopilotQuota } from "./copilot";
 import { AuditRepo } from "../store/repos/audit";
+import { ANTIGRAVITY_MODELS, antigravityModelCatalog, callAntigravity } from "../proxy/antigravity";
 
 function isRateLimitDetail(detail: string | undefined): boolean {
   if (!detail) return false;
@@ -255,6 +256,21 @@ export function providerRoutes(db: Database) {
           latency_ms: Date.now() - started,
           account: acc.label,
           detail: codexQuotaDetail(usage),
+        };
+      } else if (provider.type === "antigravity") {
+        const startedWarmup = Date.now();
+        const probe = await callAntigravity(repo, {
+          model: ANTIGRAVITY_MODELS[0]!.id,
+          messages: [{ role: "user", content: "Reply with exactly: warmup ok" }],
+          max_tokens: 8,
+        }, acc, ANTIGRAVITY_MODELS[0]!.id);
+        result = {
+          account_id: acc.id,
+          ok: probe.choices.length > 0,
+          status: probe.choices.length > 0 ? 200 : 502,
+          latency_ms: Date.now() - startedWarmup,
+          account: acc.label,
+          detail: probe.choices.length > 0 ? "Antigravity Cloud Code warmup ok" : "Antigravity returned no choices",
         };
       } else {
         if (provider.type === "github-copilot") await waitCopilotSidecar(acc.id);
@@ -1044,6 +1060,15 @@ export function providerRoutes(db: Database) {
         const kept = syncedModels.map((model) => model.id);
         log.info("codebuddy models synced", { provider: p.name, count: kept.length, mode });
         return { synced: kept.length, pruned, models: kept, mode };
+      }
+
+      if (p.type === "antigravity") {
+        const mode = (await settings.getJson<ModelSyncMode>("model_sync_mode") ?? "curated") as ModelSyncMode;
+        const models = antigravityModelCatalog()
+          .filter((model) => keepModel(model.id, mode))
+          .map((model) => ({ id: model.id, contextLength: model.contextLength, maxOutputTokens: model.maxOutputTokens, capabilities: model.capabilities }));
+        const pruned = await repo.replaceSyncedModels(p.id, models, prune);
+        return { synced: models.length, pruned, models: models.map((model) => model.id), mode };
       }
 
       if (p.type === "xai" && account.auth_kind === "oauth") {

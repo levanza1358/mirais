@@ -13,6 +13,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   blackbox: "https://enterprise.blackbox.ai",
   "codebuddy-global": "https://www.codebuddy.ai/v2",
   "codebuddy-cn": "https://copilot.tencent.com/v2",
+  antigravity: "https://daily-cloudcode-pa.googleapis.com",
 };
 
 export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {

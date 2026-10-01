@@ -13,6 +13,7 @@ import { assertSafeUpstreamUrl, fetchNoCrossHostRedirect as upstreamFetch } from
 import type { ProvidersRepo } from "../store/repos/providers";
 import { config } from "../config";
 import { log } from "../utils/logger";
+import { callAntigravity, streamAntigravity } from "./antigravity";
 
 /**
  * Strip universal fields from the canonical request and translate the
@@ -355,6 +356,23 @@ export async function executeRequest(
           latencyMs: Date.now() - started,
           reason: attemptNo === 0 ? "primary candidate" : "fallback candidate",
         });
+        return { kind: "json", response, candidate, accountLabel: account.label, attempts, latencyMs: Date.now() - started };
+      }
+
+      if (candidate.provider.type === "antigravity") {
+        if (!providersRepo) throw new GatewayError(500, "server_error", "Antigravity requires a providers repo in the executor");
+        if (req.stream) {
+          const result = await streamAntigravity(providersRepo, effectiveReq, account, candidate.modelId);
+          await result.ready;
+          markSuccess(cdKey);
+          await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+          attempts.push({ provider: candidate.provider.name, model: candidate.modelId, accountId: account.id, accountLabel: account.label, outcome: "success", latencyMs: Date.now() - started, reason: attemptNo === 0 ? "primary candidate" : "fallback candidate" });
+          return { kind: "stream", stream: result.stream, candidate, accountLabel: account.label, attempts, usagePromise: result.usagePromise };
+        }
+        const response = await callAntigravity(providersRepo, effectiveReq, account, candidate.modelId);
+        markSuccess(cdKey);
+        await clearAccountRateLimit(providersRepo, account.id, candidate.modelId);
+        attempts.push({ provider: candidate.provider.name, model: candidate.modelId, accountId: account.id, accountLabel: account.label, outcome: "success", latencyMs: Date.now() - started, reason: attemptNo === 0 ? "primary candidate" : "fallback candidate" });
         return { kind: "json", response, candidate, accountLabel: account.label, attempts, latencyMs: Date.now() - started };
       }
 

@@ -39,6 +39,7 @@ flowchart LR
     UP --> P5[(DeepSeek / GLM / Groq / xAI…)]
     UP --> P6[(Custom OpenAI-compatible)]
     UP --> P7[(GitHub Copilot sidecar per account)]
+    UP --> P8[(Antigravity Cloud Code)]
 
     subgraph Admin[Dashboard — React SPA served by same server]
         UI[Login + Pages:<br/>Overview/Providers/Models/<br/>Combos/API Keys/Logs/Settings]
@@ -142,18 +143,26 @@ OAuth accounts under the `openai` provider and imported accounts under `codex` c
 - **Model catalog** — synced from `GET {codex}/models?client_version=1.0.0` (the same version-gated catalog the Codex CLI uses), with a static fallback list.
 - **Paid-plan routing** — warmup and quota checks persist the Codex usage `plan_type` on each OAuth account. Models marked as requiring Plus/Pro are eligible only for an account with a matching persisted paid tier; Free and unknown tiers are excluded (fail closed) and are never attempted as fallback.
 
-## 4.3 GitHub Copilot Upstream
+## 4.3 Antigravity (Google Cloud Code) Upstream
+
+The `antigravity` provider uses the public installed-app OAuth client embedded in the Antigravity CLI. Browser login uses Google PKCE with `http://localhost:1455/auth/callback`; refresh uses `https://oauth2.googleapis.com/token`. Access tokens are kept in the existing account OAuth fields and refreshed before expiry.
+
+Requests target `https://daily-cloudcode-pa.googleapis.com/v1internal`. Before inference, Mirais calls `:loadCodeAssist` with `{ "metadata": { "ideType": "ANTIGRAVITY" } }` to resolve the account's Cloud AI Companion project. Chat requests use `:generateContent`; streaming requests use `:streamGenerateContent?alt=sse`. The adapter sends the Antigravity lane markers (`userAgent: "antigravity"`, `requestType: "agent"`), translates canonical OpenAI messages to Cloud Code `contents`, and translates Cloud Code candidates/usage/SSE frames back to OpenAI Chat Completions. Quota (`429`/`RESOURCE_EXHAUSTED`) and authentication failures remain eligible for normal account failover.
+
+The initial catalog includes `gemini-3-pro-high`, `claude-sonnet-4-5`, and `claude-opus-4-5-thinking`. The upstream host and wire format are based on the public Antigravity proxy implementation and its documented Cloud Code protocol; the provider must retain the Antigravity `User-Agent` lane marker rather than using the Gemini CLI marker.
+
+## 4.4 GitHub Copilot Upstream
 
 GitHub Copilot has no public OpenAI-compatible inference endpoint. Mirais includes an isolated local Node sidecar adapter per `github-copilot` account (`scripts/copilot-sidecar/`), using GitHub's official Copilot SDK and CLI. Dashboard login opens GitHub's official browser flow; Mirais never receives the GitHub password or MFA data. Each account gets its own `COPILOT_HOME`, sidecar loopback port, and `base_url`. After login, Mirais synchronizes models from the sidecar. When the SDK account listing exposes only `auto`, the adapter uses the SDK's built-in Copilot catalog so users can select explicit model IDs; GitHub validates access when the request runs. The sidecar exposes `/v1/models`, `/v1/chat/completions`, and `/v1/quota`, including OpenAI SSE translation and the SDK's live account quota snapshots. Warmup and routing use the premium-interaction snapshot when that entitlement exists, otherwise chat, then completions. An effective quota at 0% marks only that account `rate_limited`, allowing failover to another healthy account. The dashboard displays the same effective quota and reset time. Normal account priority, round-robin, cooldown, streaming, and failover apply without sharing one Copilot entitlement across accounts.
 
-## 4.4 Model Metadata & Output Limits
+## 4.5 Model Metadata & Output Limits
 
 Each model's **context length**, **max output tokens**, and **capabilities** are stored per model (migration `0002`). They are never hardcoded per account — they follow the model's own spec:
 
 - At **sync**, upstream-provided metadata wins; when the upstream returns none (e.g. BlackBox's `/models` only returns `{ id, object, created }`), [src/proxy/modelMeta.ts](../src/proxy/modelMeta.ts) fills the gap from a catalog keyed by **model-family name pattern** (GPT-5, Claude, Gemini, DeepSeek, Llama, Mistral, Qwen, Grok, GLM, Kimi, Nemotron, …). Image/video-generation models (veo, sora, stable-diffusion, …) have no chat context and stay `null`.
 - At **request time**, the executor **clamps `max_tokens`** to the selected provider model's stored output limit (`clampMaxTokens`), falling back to the static model catalog when upstream metadata is unavailable. The clamp runs before OpenAI, Anthropic, CodeBuddy, and Codex dialect conversion, preventing upstream "max_tokens too large" errors.
 
-## 4.5 Provider Prompt Caching
+## 4.6 Provider Prompt Caching
 
 For sufficiently large stable prefixes, Mirais adds advisory provider-native cache hints: Anthropic `cache_control` breakpoints and an OpenAI `prompt_cache_key` derived from the session ID or stable prompt prefix. Providers that ignore these fields behave unchanged. Every upstream dialect routes its `usage` object through `normalizeUsage()`, so cache reads and writes are normalized as `cached_tokens` and `cache_write_tokens` no matter which path served the request (Chat Completions, Responses, Codex, xAI, or Anthropic), then stored with request logs and surfaced on the Usage page. Absent fields stay `null`, keeping "provider does not report caching" distinguishable from "nothing was cached".
 
