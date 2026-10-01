@@ -344,7 +344,7 @@ export function xaiHeaders(
     "content-type": "application/json",
     Authorization: `Bearer ${accessToken}`,
     "User-Agent": "xai-grok-cli",
-    "x-grok-client-version": "0.2.103",
+    "x-grok-client-version": "1.0.13",
     "x-grok-client-identifier": "grok-shell",
     ...(email ? { "x-email": email } : {}),
     ...(context ? {

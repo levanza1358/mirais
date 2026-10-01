@@ -883,7 +883,7 @@ export function providerRoutes(db: Database) {
                   "content-type": "application/json",
                   Authorization: `Bearer ${account.api_key}`,
                   "User-Agent": "xai-grok-cli",
-                  "x-grok-client-version": "0.2.103",
+                  "x-grok-client-version": "1.0.13",
                   "x-grok-client-identifier": "grok-shell",
                 }
                 : {

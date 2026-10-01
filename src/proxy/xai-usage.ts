@@ -75,8 +75,8 @@ function makeQuota(used: number, total: number, resetAt: string | null, unlimite
 function buildXaiCliHeaders(accessToken: string): Record<string, string> {
   return {
     Authorization: `Bearer ${accessToken}`,
-    "User-Agent": "grok-shell/0.2.103 (linux; x86_64)",
-    "x-grok-client-version": "0.2.103",
+    "User-Agent": "grok-shell/1.0.13 (linux; x86_64)",
+    "x-grok-client-version": "1.0.13",
     "x-grok-client-identifier": "grok-shell",
     accept: "application/json",
   };
