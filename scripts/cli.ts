@@ -73,7 +73,24 @@ async function ensureDashboardBuild(): Promise<void> {
   await shell("bun", ["run", "build"], installRoot);
 }
 
+async function ensureRuntimeDependencies(): Promise<void> {
+  const required = [
+    path.join(installRoot, "node_modules", "elysia", "package.json"),
+    path.join(installRoot, "node_modules", "@sinclair", "typebox", "package.json"),
+  ];
+  if (required.every((target) => fs.existsSync(target))) return;
+  console.log("Runtime dependencies missing — installing backend dependencies...");
+  await shell("bun", ["install"], installRoot);
+}
+
 async function start(): Promise<void> {
+  try {
+    await ensureRuntimeDependencies();
+  } catch (err) {
+    console.error(`dependency installation failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+    return;
+  }
   try {
     await ensureDashboardBuild();
   } catch (err) {
