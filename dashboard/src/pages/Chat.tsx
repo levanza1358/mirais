@@ -122,6 +122,9 @@ export default function Chat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<number | string | null>(null);
   const [editingText, setEditingText] = useState("");
+  // Only auto-load the most recent session on the first mount, not on every
+  // refetch (which `invalidateQueries` triggers right after a stream).
+  const initialLoadedRef = useRef(false);
 
   const models = useMemo(
     () => [
@@ -142,15 +145,16 @@ export default function Chat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [session.messages]);
 
-  // Pick the first persisted session when list arrives (and nothing is loaded yet).
+  // Pick the first persisted session on the very first list arrival. We
+  // intentionally skip subsequent refetches — invalidation triggered after a
+  // send would otherwise reset `session` and the UI would look like it
+  // "snapped back" to the empty state for one frame.
   useEffect(() => {
-    if (session.id) return;
+    if (initialLoadedRef.current) return;
     if (!summaryList.length) return;
-    const first = summaryList[0];
-    if (!first) return;
-    void openSession(first);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [summaryList, session.id]);
+    initialLoadedRef.current = true;
+    void openSession(summaryList[0]!);
+  }, [summaryList]);
 
   const firstKey = (keyList.data ?? [])[0];
   const gatewayKey = firstKey ? (firstKey.key ?? storedKeyFor(firstKey.key_prefix)) : null;
@@ -360,17 +364,33 @@ export default function Chat() {
       abortRef.current = null;
     }
 
-    // Persist once streaming settles so we don't write on every token.
+    // Persist the messages we just streamed + the ones the user typed. We
+    // PUT the full list so the server has authoritative state before we
+    // re-read it. Without this the next `chatApi.get` below can race against
+    // the persist and the UI snaps back to the older (pre-stream) messages.
     try {
-      const finalSession = await chatApi.get(sessionId).catch(() => null);
-      if (!finalSession) return;
-      const normalized = finalSession.messages.map((m) => ({
-        id: m.id, role: m.role, content: m.content,
-        inTokens: m.in_tokens, outTokens: m.out_tokens, cost: m.cost,
-      }));
-      setSession((s) => ({ ...s, messages: normalized, title: finalSession.title }));
+      const finalMessages = await new Promise<UiMessage[]>((resolve) => {
+        setSession((s) => {
+          resolve(s.messages);
+          return s;
+        });
+      });
+      await chatApi.replaceMessages(sessionId, finalMessages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        in_tokens: m.inTokens ?? null,
+        out_tokens: m.outTokens ?? null,
+        cost: m.cost ?? null,
+      })));
       qc.invalidateQueries({ queryKey: ["chats"] });
-    } catch { /* ignore — server may have failed silently */ }
+
+      // Refresh title (auto-derived from first message) without touching
+      // messages — by now the server agrees with our local state.
+      const finalSession = await chatApi.get(sessionId).catch(() => null);
+      if (finalSession) setSession((s) => ({ ...s, title: finalSession.title }));
+    } catch (err) {
+      console.warn("post-session sync failed", { err: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   async function regenerate(assistantIndex: number) {
