@@ -33,7 +33,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
   };
 
   const startOauth = useMutation({
-    mutationFn: () => providers.oauthStart(p.id),
+    mutationFn: () => p.type === "antigravity" ? providers.antigravityOauthStart(p.id) : providers.oauthStart(p.id),
     onSuccess: (r) => {
       setOauthState(r.state);
       setOauthUrl(r.url);
@@ -232,7 +232,7 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
       {mode === "pick" ? (
         <div className="flex flex-col gap-2">
           <p className="mb-2 text-xs text-text-muted">{p.type === "github-copilot" ? <>Add one local Copilot sidecar for each entitled GitHub account. The sidecar must remain private to this machine or network.</> : <>How do you want to add an account to <strong className="text-text-primary">{p.name}</strong>?</>}</p>
-          {["openai", "codebuddy-global", "codebuddy-cn"].includes(p.type) && (
+          { ["openai", "codebuddy-global", "codebuddy-cn", "antigravity"].includes(p.type) && (
             <Button variant="primary" onClick={() => setMode("oauth")}>
               <ExternalLink size={14} /> Login with browser
             </Button>

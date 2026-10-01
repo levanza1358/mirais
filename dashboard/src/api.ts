@@ -398,6 +398,8 @@ export const providers = {
     req<{ ok: boolean }>(`/api/copilot/bulk/latest/${encodeURIComponent(providerId)}`, { method: "DELETE" }),
   oauthStart: (providerId: string) =>
     req<{ url: string; state: string }>("/api/oauth/openai/start", { method: "POST", body: JSON.stringify({ providerId }) }),
+  antigravityOauthStart: (providerId: string) =>
+    req<{ url: string; state: string }>("/api/oauth/antigravity/start", { method: "POST", body: JSON.stringify({ providerId }) }),
   oauthRedirectUrl: (url: string) => `/api/oauth/openai/redirect?url=${encodeURIComponent(url)}`,
   oauthStatus: (state: string) =>
     req<{ done: boolean; ok?: boolean; message?: string; duplicate?: boolean; login?: string | null }>(`/api/oauth/openai/status?state=${encodeURIComponent(state)}`),

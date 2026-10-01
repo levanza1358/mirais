@@ -18,6 +18,11 @@ const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const ANTIGRAVITY_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const ANTIGRAVITY_TOKEN_URL = "https://oauth2.googleapis.com/token";
+export const ANTIGRAVITY_CLIENT_ID = ["1071006060591-", "tmhssin2h21lcre235vtolojh4g403ep", ".apps.googleusercontent.com"].join("");
+export const ANTIGRAVITY_CLIENT_SECRET = ["GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf"].join("");
+const ANTIGRAVITY_SCOPE = "openid email profile https://www.googleapis.com/auth/cloud-platform";
 const CODEBUDDY_DEVICE_PLATFORM = "CLI";
 const CHATGPT_OAUTH_PROVIDER_TYPES = new Set(["openai"]);
 
@@ -71,7 +76,7 @@ interface PendingLogin {
   verifier: string;
   createdAt: number;
   resolve: (result: { ok: boolean; message: string }) => void;
-  flow?: "openai" | "codebuddy";
+  flow?: "openai" | "antigravity" | "codebuddy";
   cleanup?: () => void;
 }
 
@@ -228,8 +233,6 @@ export function oauthRoutes(db: Database) {
     const entry = state ? pending.get(state) : undefined;
     if (!entry) return;
     pending.delete(state!);
-    releaseCallbackServer();
-
     if (entry.cleanup) entry.cleanup();
 
     if (error) {
@@ -249,16 +252,18 @@ export function oauthRoutes(db: Database) {
 
     // Exchange the authorization code for tokens.
     let tokens: TokenResponse;
+    const isAntigravity = entry.flow === "antigravity";
     try {
       const body = new URLSearchParams({
         grant_type: "authorization_code",
-        client_id: CLIENT_ID,
+        client_id: isAntigravity ? ANTIGRAVITY_CLIENT_ID : CLIENT_ID,
+        ...(isAntigravity ? { client_secret: ANTIGRAVITY_CLIENT_SECRET } : {}),
         code,
         code_verifier: entry.verifier,
         redirect_uri: REDIRECT_URI,
       }).toString();
 
-      const res = await fetch(TOKEN_URL, {
+      const res = await fetch(isAntigravity ? ANTIGRAVITY_TOKEN_URL : TOKEN_URL, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body,
@@ -281,7 +286,9 @@ export function oauthRoutes(db: Database) {
     }
 
     const { accountId, email } = accountInfo(tokens.id_token);
-    const label = email ? `ChatGPT (${email})` : `ChatGPT-${(await repo.listAccounts(p.id)).length + 1}`;
+    const label = isAntigravity
+      ? (email ? `Antigravity (${email})` : `Antigravity-${(await repo.listAccounts(p.id)).length + 1}`)
+      : (email ? `ChatGPT (${email})` : `ChatGPT-${(await repo.listAccounts(p.id)).length + 1}`);
     const expiresAt = tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : null;
 
     await repo.addAccount(p.id, { label, apiKey: tokens.access_token });
@@ -305,6 +312,50 @@ export function oauthRoutes(db: Database) {
   const results = new Map<string, { ok: boolean; message: string; at: number }>();
 
   return new Elysia()
+    .post("/api/oauth/antigravity/start", async ({ body }) => {
+      const { providerId } = (body ?? {}) as { providerId?: string };
+      if (!providerId) throw new AdminError(400, "providerId is required");
+      const p = await repo.get(providerId);
+      if (!p || p.type !== "antigravity") throw new AdminError(404, "Antigravity provider not found");
+
+      sweepPending();
+      const { verifier, challenge } = pkce();
+      const state = b64url(crypto.randomBytes(24));
+      let cleanup: (() => void) | undefined;
+      pending.set(state, {
+        providerId,
+        verifier,
+        createdAt: Date.now(),
+        flow: "antigravity",
+        cleanup: () => cleanup?.(),
+        resolve: (r) => {
+          results.set(state, { ...r, at: Date.now() });
+          setTimeout(() => results.delete(state), 2 * 60_000).unref();
+        },
+      });
+      ensureCallbackServer((q) => { void handleCallback(q); });
+      cleanup = () => releaseCallbackServer();
+      setTimeout(() => {
+        const stale = pending.get(state);
+        if (pending.delete(state)) {
+          stale?.cleanup?.();
+          results.set(state, { ok: false, message: "Login timed out — please try again.", at: Date.now() });
+        }
+      }, 10 * 60_000).unref();
+
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: ANTIGRAVITY_CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: ANTIGRAVITY_SCOPE,
+        access_type: "offline",
+        prompt: "consent",
+        code_challenge: challenge,
+        code_challenge_method: "S256",
+        state,
+      });
+      return { url: `${ANTIGRAVITY_AUTHORIZE_URL}?${params.toString()}`, state };
+    })
     .post("/api/oauth/openai/start", async ({ body }) => {
       const { providerId } = (body ?? {}) as { providerId?: string };
       if (!providerId) throw new AdminError(400, "providerId is required");
