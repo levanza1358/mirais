@@ -22,6 +22,7 @@
 		"tools": "bun run scripts/cli.ts tools"
 	},
 	"dependencies": {
+		"@sinclair/typebox": "^0.34.52",
 		"elysia": "^1.2.10",
 		"zod": "^3.24.1"
 	},
