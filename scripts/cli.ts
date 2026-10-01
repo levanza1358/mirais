@@ -209,7 +209,12 @@ async function updateApp(): Promise<void> {
 
 async function fix(): Promise<void> {
   console.log("Mirais fix — updating source, dependencies, dashboard, and service");
+  await stop();
   await shell("git", ["pull", "--ff-only", "origin", "main"], installRoot);
+  console.log("Clearing installed package trees and Bun cache");
+  fs.rmSync(path.join(installRoot, "node_modules"), { recursive: true, force: true });
+  fs.rmSync(path.join(installRoot, "dashboard", "node_modules"), { recursive: true, force: true });
+  await quietShell("bun", ["pm", "cache", "rm"], installRoot);
   await shell("bun", ["install"], installRoot);
   await shell("bun", ["install"], path.join(installRoot, "dashboard"));
   await shell("bun", ["run", "build"], installRoot);
