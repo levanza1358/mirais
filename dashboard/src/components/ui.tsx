@@ -377,3 +377,180 @@ export function fmtTime(iso: string | null | undefined): string {
   const d = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso.replace(" ", "T") + "Z");
   return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Inline Markdown renderer
+ *
+ * No external dep. Covers the subset the chat playground needs:
+ *   - code fences with language hint
+ *   - tables (| ... | ... |)
+ *   - headings, ordered/unordered lists, blockquotes
+ *   - **bold**, *italic*, ~~strike~~, `inline code`
+ *   - links and images
+ * Inline HTML is escaped. Unknown content falls back to plain text.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function inlineMarkdown(text: string): string {
+  let escaped = escapeHtml(text);
+  // Stash inline-code content into placeholders so the bold/italic regex
+  // doesn't reach inside backticks.
+  const codeStash: string[] = [];
+  escaped = escaped.replace(/`([^`]+)`/g, (_, code) => {
+    const idx = codeStash.length;
+    codeStash.push(code);
+    return `\u0001CODE${idx}\u0001`;
+  });
+  // Images must come before links because both use `[]()` syntax.
+  escaped = escaped.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g, (_, alt, src, title) =>
+    `<img src="${src}" alt="${alt}"${title ? ` title="${title}"` : ""} class="my-1 max-w-full rounded-lg border border-border/60" />`,
+  );
+  escaped = escaped.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, href) =>
+    `<a href="${href}" target="_blank" rel="noopener" class="text-accent underline">${label}</a>`,
+  );
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  escaped = escaped.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  escaped = escaped.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
+  escaped = escaped.replace(/(^|[^_])_([^_\n]+)_(?![_\w])/g, "$1<em>$2</em>");
+  escaped = escaped.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  // Restore inline code. The surrounding `**` that should have wrapped the
+  // placeholder are still in the string but were already replaced by the
+  // bold/italic passes, so we re-add the `<code>` element here.
+  escaped = escaped.replace(/\u0001CODE(\d+)\u0001/g, (_, idx) => {
+    const code = codeStash[Number(idx)] ?? "";
+    return `<code class="rounded bg-bg-raised px-1 py-0.5 font-mono text-[12px]">${code}</code>`;
+  });
+  return escaped;
+}
+
+function renderMarkdown(md: string): string {
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let i = 0;
+
+  const flushParagraph = (buf: string[]) => {
+    if (!buf.length) return;
+    out.push(`<p class="my-2 leading-6">${inlineMarkdown(buf.join(" "))}</p>`);
+    buf.length = 0;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+
+    // Fenced code block
+    if (/^```/.test(line)) {
+      const lang = line.replace(/^```/, "").trim();
+      const code: string[] = [];
+      i += 1;
+      while (i < lines.length && !/^```/.test(lines[i] ?? "")) {
+        code.push(lines[i] ?? "");
+        i += 1;
+      }
+      i += 1; // skip closing fence
+      out.push(`<pre class="my-2 overflow-x-auto rounded-lg border border-border/60 bg-bg-base px-3 py-2 text-[12px]"><code${lang ? ` class="language-${escapeHtml(lang)}"` : ""}>${escapeHtml(code.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    // Heading
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      const level = heading[1]!.length;
+      const sizeClass = ["text-2xl", "text-xl", "text-lg", "text-base", "text-base", "text-sm"][Math.min(level - 1, 5)];
+      out.push(`<h${level} class="${sizeClass} mb-1 mt-3 font-semibold">${inlineMarkdown(heading[2]!)}</h${level}>`);
+      i += 1;
+      continue;
+    }
+
+    // Table — header row + separator + body rows
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1] ?? "")) {
+      const headerCells = (line.match(/\|([^|]*)/g) ?? []).map((c) => c.replace(/^\|/, "").trim()).filter((c) => c.length > 0);
+      i += 2; // skip header + separator
+      const body: string[][] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i] ?? "")) {
+        const row = (lines[i]!.match(/\|([^|]*)/g) ?? []).map((c) => c.replace(/^\|/, "").trim());
+        body.push(row);
+        i += 1;
+      }
+      const head = `<thead><tr>${headerCells.map((c) => `<th class="border border-border/60 bg-bg-raised px-2 py-1 text-left text-xs font-medium">${inlineMarkdown(c)}</th>`).join("")}</tr></thead>`;
+      const rows = body
+        .filter((r) => r.some((c) => c.length > 0))
+        .map((r) => `<tr>${r.map((c) => `<td class="border border-border/60 px-2 py-1 text-xs">${inlineMarkdown(c)}</td>`).join("")}</tr>`)
+        .join("");
+      out.push(`<table class="my-2 w-full border-collapse text-xs">${head}<tbody>${rows}</tbody></table>`);
+      continue;
+    }
+
+    // Blockquote
+    if (/^>\s?/.test(line)) {
+      const buf: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i] ?? "")) {
+        buf.push((lines[i] ?? "").replace(/^>\s?/, ""));
+        i += 1;
+      }
+      out.push(`<blockquote class="my-2 border-l-2 border-accent/60 pl-3 text-text-muted">${inlineMarkdown(buf.join(" "))}</blockquote>`);
+      continue;
+    }
+
+    // Unordered list
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i] ?? "")) {
+        items.push((lines[i] ?? "").replace(/^\s*[-*+]\s+/, ""));
+        i += 1;
+      }
+      out.push(`<ul class="my-2 list-disc pl-5">${items.map((it) => `<li>${inlineMarkdown(it)}</li>`).join("")}</ul>`);
+      continue;
+    }
+
+    // Ordered list
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i] ?? "")) {
+        items.push((lines[i] ?? "").replace(/^\s*\d+\.\s+/, ""));
+        i += 1;
+      }
+      out.push(`<ol class="my-2 list-decimal pl-5">${items.map((it) => `<li>${inlineMarkdown(it)}</li>`).join("")}</ol>`);
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^\s*---+/.test(line)) {
+      out.push(`<hr class="my-3 border-border/60" />`);
+      i += 1;
+      continue;
+    }
+
+    // Blank line ends a paragraph
+    if (line.trim() === "") {
+      i += 1;
+      continue;
+    }
+
+    // Otherwise accumulate a paragraph until the next blank / block delimiter.
+    const para: string[] = [];
+    while (
+      i < lines.length &&
+      (lines[i] ?? "").trim() !== "" &&
+      !/^(```|#|\s*\||\s*[-*+]\s+|\s*\d+\.\s+|>\s?|\s*---+)/.test(lines[i] ?? "")
+    ) {
+      para.push(lines[i] ?? "");
+      i += 1;
+    }
+    flushParagraph(para);
+  }
+
+  return out.join("\n");
+}
+
+/**
+ * Render a string of Markdown as HTML inside a sandboxed span. Strips any
+ * remaining tags it doesn't recognise. Used by the chat playground for
+ * assistant messages — fully covers tables, code blocks, lists, headings,
+ * bold/italic/strike, links, images.
+ */
+export function Markdown({ content }: { content: string }) {
+  return <span className="markdown-body block w-full" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
+}

@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Copy,
   FileText,
+  Image as ImageIcon,
   MessageSquare,
   Pencil,
   Pin,
@@ -16,10 +17,11 @@ import {
   Settings2,
   Square,
   Trash2,
+  X,
 } from "lucide-react";
 import { chats as chatApi, combos, keys, providers, type ChatParams, type ChatSessionSummary } from "../api";
 import { storedKeyFor } from "../keyStore";
-import { Button, Card, EmptyState, Skeleton, Slider, toast } from "../components/ui";
+import { Button, Card, EmptyState, Markdown, Skeleton, Slider, toast } from "../components/ui";
 
 type Role = "user" | "assistant" | "system";
 
@@ -122,6 +124,11 @@ export default function Chat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<number | string | null>(null);
   const [editingText, setEditingText] = useState("");
+  // Local-only attachment list. Images are converted to a data URL and
+  // sent as vision content parts on the next `send()` — they are NOT
+  // persisted server-side (model receives them inline only).
+  const [attachments, setAttachments] = useState<Array<{ id: string; dataUrl: string; mimeType: string }>>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Only auto-load the most recent session on the first mount, not on every
   // refetch (which `invalidateQueries` triggers right after a stream).
   const initialLoadedRef = useRef(false);
@@ -136,6 +143,26 @@ export default function Chat() {
     ],
     [providerList.data, comboList.data],
   );
+
+  /** Decode a `provider_models.capabilities` JSON string into a Set. */
+  function capabilitiesFor(modelId: string): Set<string> {
+    if (!providerList.data) return new Set();
+    for (const p of providerList.data) {
+      const m = (p.models ?? []).find((x) => x.model_id === modelId && p.name);
+      if (m && modelId === `${p.name}/${m.model_id}`) {
+        const caps: string[] = (() => {
+          try { return m.capabilities ? JSON.parse(m.capabilities) : []; } catch { return []; }
+        })();
+        return new Set(caps);
+      }
+    }
+    return new Set();
+  }
+
+  const currentCaps = useMemo(() => capabilitiesFor(model), [model, providerList.data]);
+  const modelSupportsVision = currentCaps.has("vision");
+  const modelSupportsJson = currentCaps.has("json");
+  const modelSupportsTools = currentCaps.has("tools");
 
   useEffect(() => {
     if (!model && models.length) setModel(models[0]);
@@ -193,7 +220,38 @@ export default function Chat() {
       updatedAt: Date.now(),
     });
     setInput("");
-    setEditingId(null);
+    setAttachments([]);
+  }
+
+  function addAttachments(files: FileList | File[]) {
+    const arr = Array.from(files).slice(0, 4);
+    if (files.length > arr.length) toast(`Attached first 4 of ${files.length} images`);
+    const reads = arr.map((file) =>
+      new Promise<{ id: string; dataUrl: string; mimeType: string }>((resolve, reject) => {
+        if (file.size > 4 * 1024 * 1024) {
+          reject(new Error(`${file.name} > 4 MB`));
+          return;
+        }
+        if (!file.type.startsWith("image/")) {
+          reject(new Error(`${file.name} is not an image`));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          dataUrl: String(reader.result),
+          mimeType: file.type,
+        });
+        reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+        reader.readAsDataURL(file);
+      }),
+    );
+    Promise.allSettled(reads).then((results) => {
+      const ok = results.filter((r): r is PromiseFulfilledResult<{ id: string; dataUrl: string; mimeType: string }> => r.status === "fulfilled").map((r) => r.value);
+      const failed = results.filter((r) => r.status === "rejected").map((r) => (r as PromiseRejectedResult).reason.message as string);
+      if (ok.length) setAttachments((prev) => [...prev, ...ok]);
+      failed.forEach((m) => toast(m, "error"));
+    });
   }
 
   function deleteSession(id: string): void {
@@ -285,18 +343,37 @@ export default function Chat() {
 
     setSession((s) => ({ ...s, messages: [...capped, { id: newLocalId(), role: "assistant", content: "" }], updatedAt: Date.now() }));
     setInput("");
+    setAttachments([]);  // images are sent inline once; never round-trip
     setStreaming(true);
 
     const ac = new AbortController();
     abortRef.current = ac;
     try {
+      // Attach images only to the new user message (last one). The rest stay
+      // plain text. If the model doesn't accept vision, the upstream will
+      // return a 4xx that the catch block below surfaces as a toast.
+      const baseMessages = capped.filter((m) => m.role !== "system");
+      const wireMessages = baseMessages.map((m, i) => {
+        const isLast = i === baseMessages.length - 1 && m.role === "user";
+        if (isLast && attachments.length > 0) {
+          return {
+            role: m.role,
+            content: [
+              { type: "text", text: m.content },
+              ...attachments.map((a) => ({ type: "image_url", image_url: { url: a.dataUrl } })),
+            ],
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       const res = await fetch("/v1/chat/completions", {
         method: "POST",
         signal: ac.signal,
         headers: { "content-type": "application/json", authorization: `Bearer ${gatewayKey}` },
         body: JSON.stringify({
           model,
-          messages: capped.filter((m) => m.role !== "system").map((m) => ({ role: m.role, content: m.content })),
+          messages: wireMessages,
           stream: true,
           temperature: params.temperature ?? DEFAULT_PARAMS.temperature,
           max_tokens: params.max_tokens ?? DEFAULT_PARAMS.max_tokens,
@@ -469,6 +546,23 @@ export default function Chat() {
         placeholder="Ask Mirais anything…"
         className="max-h-60 w-full resize-none bg-transparent px-5 pt-5 text-base text-text-primary placeholder:text-text-muted/60 focus:outline-none"
       />
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 px-5 pb-2">
+          {attachments.map((a) => (
+            <div key={a.id} className="group relative h-16 w-16 overflow-hidden rounded-md border border-border/60 bg-bg-base">
+              <img src={a.dataUrl} alt="attachment" className="h-full w-full object-cover" />
+              <button
+                type="button"
+                onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                title="Remove"
+                className="absolute right-0 top-0 rounded-bl-md bg-bg-raised/90 p-0.5 text-text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-2 px-3 pb-3">
         <button
           type="button"
@@ -478,6 +572,28 @@ export default function Chat() {
         >
           <Plus size={16} />
         </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            const files = e.target.files;
+            if (files && files.length) addAttachments(files);
+            e.currentTarget.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!modelSupportsVision}
+          title={modelSupportsVision ? "Attach image" : `${model || "Model"} doesn't support vision`}
+          aria-label="Attach image"
+          className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${modelSupportsVision ? "border-border text-text-muted hover:text-text-primary" : "cursor-not-allowed border-border/40 text-text-muted/40"}`}
+        >
+          <ImageIcon size={14} />
+        </button>
         <select
           value={model}
           onChange={(e) => setModel(e.target.value)}
@@ -485,6 +601,9 @@ export default function Chat() {
         >
           {models.length ? models.map((m) => <option key={m} value={m}>{m}</option>) : <option value="">No models</option>}
         </select>
+        {model && (
+          <CapabilityHint caps={currentCaps} />
+        )}
         <button
           type="button"
           onClick={() => setParamsOpen((v) => !v)}
@@ -497,7 +616,9 @@ export default function Chat() {
         <button
           type="button"
           onClick={() => setParams((p) => ({ ...p, reasoning: !(p.reasoning ?? DEFAULT_PARAMS.reasoning) }))}
+          disabled={!currentCaps.size || (params.reasoning === false)}
           aria-pressed={params.reasoning ?? DEFAULT_PARAMS.reasoning}
+          title="Toggle reasoning"
           className={`flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${params.reasoning ?? DEFAULT_PARAMS.reasoning ? "border-accent/40 bg-accent/15 text-accent" : "border-border text-text-muted"}`}
         >
           <Brain size={14} /> Reasoning
@@ -859,7 +980,11 @@ function MessageBubble({ message, index, isLast, streaming, editing, editingText
         ) : message.content || (streaming && isLast) ? (
           <>
             {message.content ? (
-              message.content
+              message.role === "assistant" ? (
+                <Markdown content={message.content} />
+              ) : (
+                message.content
+              )
             ) : (
               <StreamingIndicator />
             )}
@@ -901,6 +1026,36 @@ function StreamingIndicator() {
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted" style={{ animationDelay: "360ms" }} />
       </div>
       <Skeleton className="h-3 w-32" />
+    </div>
+  );
+}
+
+/**
+ * Inline pill row that lists the currently-selected model's capabilities
+ * (vision, json, tools). Acts as the playground's "this model knows how
+ * to do X" hint — the chat is, by design, a pure chat (no agent loop or
+ * tool execution), but the operator still benefits from seeing what each
+ * model is good at so the right one is used.
+ */
+function CapabilityHint({ caps }: { caps: Set<string> }) {
+  const order = [
+    { key: "vision", label: "Vision" },
+    { key: "json", label: "JSON" },
+    { key: "tools", label: "Tools" },
+    { key: "reasoning", label: "Reasoning" },
+  ] as const;
+  const present = order.filter((o) => caps.has(o.key));
+  if (!present.length) return null;
+  return (
+    <div className="flex items-center gap-1" title={`Capabilities: ${present.map((p) => p.label).join(", ")}`}>
+      {present.map((p) => (
+        <span
+          key={p.key}
+          className="rounded-full border border-border/60 bg-bg-base px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-muted"
+        >
+          {p.label}
+        </span>
+      ))}
     </div>
   );
 }
