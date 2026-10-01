@@ -172,7 +172,7 @@ export function AccountsCard({ provider }: { provider: Provider }) {
   const filteredAccounts = statusTab === "unknown"
     ? accounts.filter((account) => !account.last_warmup_status)
     : accounts.filter((account) => account.last_warmup_status === statusTab);
-  const codexAccounts = accounts.filter((account) => account.auth_kind === "oauth" && (provider.type === "openai" || provider.type === "codex"));
+  const codexAccounts = accounts.filter((account) => account.auth_kind === "oauth" && (provider.type === "openai" || provider.type === "codex") && (account.account_kind === "oauth-cli" || account.account_kind == null));
   const codexQuotaQueries = useQueries({
     queries: codexAccounts.map((account) => ({
       queryKey: ["codex-quota", account.id],

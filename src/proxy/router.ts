@@ -8,7 +8,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   codex: "https://chatgpt.com/backend-api/codex",
   anthropic: "https://api.anthropic.com",
   deepseek: "https://api.deepseek.com/v1",
-  xai: "https://cli-chat-proxy.grok.com/v1",
+  xai: "https://cli-chat-proxy.grok.com/v1", // OAuth accounts (login via Grok CLI) go through xAI's CLI proxy. For API-key accounts, override the per-account `base_url` to `https://api.x.ai/v1` — that's the public OpenAI-compatible endpoint and works with a plain bearer token.
   glm: "https://open.bigmodel.cn/api/paas/v4",
   blackbox: "https://enterprise.blackbox.ai",
   "codebuddy-global": "https://www.codebuddy.ai/v2",

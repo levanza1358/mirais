@@ -62,11 +62,11 @@ export class ProvidersRepo {
     return this.db.query("SELECT * FROM provider_accounts WHERE id = ?").get<ProviderAccount>(accId);
   }
 
-  async addAccount(providerId: string, input: { label: string; apiKey?: string; baseUrl?: string | null; priority?: number; authKind?: string; refreshToken?: string | null; accountId?: string | null }): Promise<ProviderAccount> {
+  async addAccount(providerId: string, input: { label: string; apiKey?: string; baseUrl?: string | null; priority?: number; authKind?: string; accountKind?: "oauth-browser" | "oauth-cli" | "api-key" | null; refreshToken?: string | null; accountId?: string | null }): Promise<ProviderAccount> {
     const id = ulid();
     await this.db
-      .query("INSERT INTO provider_accounts (id, provider_id, label, api_key, base_url, priority, auth_kind, refresh_token, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(id, providerId, input.label, input.apiKey ?? "", input.baseUrl ?? null, input.priority ?? 100, input.authKind ?? "api_key", input.refreshToken ?? null, input.accountId ?? null, nowIso(), nowIso());
+      .query("INSERT INTO provider_accounts (id, provider_id, label, api_key, base_url, priority, auth_kind, account_kind, refresh_token, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, providerId, input.label, input.apiKey ?? "", input.baseUrl ?? null, input.priority ?? 100, input.authKind ?? "api_key", input.accountKind ?? null, input.refreshToken ?? null, input.accountId ?? null, nowIso(), nowIso());
     const account = await this.getAccount(id);
     if (!account) throw new Error("Created provider account could not be loaded");
     return account;
@@ -152,13 +152,14 @@ export class ProvidersRepo {
   }
 
   /** Store OAuth token metadata for an account (ChatGPT login). */
-  async updateAccountOAuth(accId: string, patch: { authKind?: string; refreshToken?: string | null; idToken?: string | null; accountId?: string | null; expiresAt?: number | null }): Promise<void> {
-    const cur = await this.getAccount(accId) as (ProviderAccount & { auth_kind?: string; refresh_token?: string | null; id_token?: string | null; account_id?: string | null; expires_at?: number | null }) | null;
+  async updateAccountOAuth(accId: string, patch: { authKind?: string; accountKind?: "oauth-browser" | "oauth-cli" | "api-key" | null; refreshToken?: string | null; idToken?: string | null; accountId?: string | null; expiresAt?: number | null }): Promise<void> {
+    const cur = await this.getAccount(accId) as (ProviderAccount & { auth_kind?: string; account_kind?: string | null; refresh_token?: string | null; id_token?: string | null; account_id?: string | null; expires_at?: number | null }) | null;
     if (!cur) return;
     await this.db
-      .query("UPDATE provider_accounts SET auth_kind=?, refresh_token=?, id_token=?, account_id=?, expires_at=?, reauth_required=0, reauth_reason=NULL, updated_at=? WHERE id=?")
+      .query("UPDATE provider_accounts SET auth_kind=?, account_kind=?, refresh_token=?, id_token=?, account_id=?, expires_at=?, reauth_required=0, reauth_reason=NULL, updated_at=? WHERE id=?")
       .run(
         patch.authKind ?? cur.auth_kind ?? "api_key",
+        (patch.accountKind !== undefined ? patch.accountKind : (cur.account_kind ?? null)) ?? null,
         (patch.refreshToken !== undefined ? patch.refreshToken : cur.refresh_token) ?? null,
         (patch.idToken !== undefined ? patch.idToken : cur.id_token) ?? null,
         (patch.accountId !== undefined ? patch.accountId : cur.account_id) ?? null,

@@ -15,7 +15,6 @@ import {
   PanelLeftOpen,
   ChevronDown,
   Menu,
-  MessageSquare,
   X,
 } from "lucide-react";
 import { health } from "../api";
@@ -33,7 +32,6 @@ const GROUPS: NavGroup[] = [
     label: "Dashboard",
     items: [
       { to: "/dashboard", label: "Overview", icon: LayoutDashboard, end: true },
-      { to: "/dashboard/chat", label: "Chat", icon: MessageSquare },
     ],
   },
   {
@@ -67,7 +65,6 @@ const GROUPS: NavGroup[] = [
 
 const MOBILE_NAV: Array<{ to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }> = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { to: "/dashboard/providers", label: "Providers", icon: Boxes },
   { to: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];

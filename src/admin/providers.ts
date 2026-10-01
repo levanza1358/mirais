@@ -12,7 +12,7 @@ import { baseUrlFor, upstreamFormat } from "../proxy/router";
 import { codexHeaders, codexPlanAllowsModel, codexPlanRequirement, codexQuotaDetail, codexRequestBody, codexUrl, ensureFreshToken, fetchCodeBuddyUsage, fetchCodexModels, fetchCodexUsage, isCodexAccount, isCodexQuotaExhausted, resetCodexBankedUsage, attemptCodeBuddyCheckin } from "../proxy/codex";
 import { ensureFreshXaiToken, xaiHeaders } from "../proxy/xai";
 import { fetchXaiUsage } from "../proxy/xai-usage";
-import { checkCodexProviderQuota, fetchCodexProviderModels, testCodexProviderModel } from "./codex-provider";
+import { checkCodexProviderQuota, consumeCodexProviderResetCredit, fetchCodexProviderModels, fetchCodexProviderResetCredits, testCodexProviderModel } from "./codex-provider";
 import { fetchXaiModels, testXaiModel } from "./xai-provider";
 import { resolveModelMeta } from "../proxy/modelMeta";
 import { keepModel, type ModelSyncMode } from "../proxy/modelFilter";
@@ -358,7 +358,13 @@ export function providerRoutes(db: Database) {
     .post("/:id/codex-import", async ({ params, body }) => {
       const provider = await repo.get(params.id);
       if (!provider) throw new AdminError(404, "Provider not found");
-      if (provider.type !== "codex") throw new AdminError(400, "Codex import requires a codex provider");
+      // After the OpenAI/Codex soft-merge the import path is allowed on
+      // both type "codex" and type "openai" — the resulting accounts are
+      // tagged `account_kind = "oauth-cli"` so the runtime knows they
+      // belong on the ChatGPT/Codex backend instead of api.openai.com.
+      if (provider.type !== "codex" && provider.type !== "openai") {
+        throw new AdminError(400, "Codex import requires an OpenAI or Codex provider");
+      }
       const parsed = codexImportBatchSchema.safeParse(body);
       if (!parsed.success) throw new AdminError(400, parsed.error.issues[0]?.message ?? "Invalid Codex account payload");
       const single = !Array.isArray(parsed.data) && !("accounts" in parsed.data);
@@ -379,6 +385,7 @@ export function providerRoutes(db: Database) {
         await repo.updateAccount(account.id, { enabled: data.isActive !== false });
         await repo.updateAccountOAuth(account.id, {
           authKind: "oauth",
+          accountKind: "oauth-cli",
           refreshToken: data.refreshToken,
           expiresAt: data.expiresAt ? Date.parse(data.expiresAt) : null,
         });
@@ -408,7 +415,7 @@ export function providerRoutes(db: Database) {
       if (provider.type === "github-copilot" && !parsed.data.baseUrl) throw new AdminError(400, "GitHub Copilot accounts require a sidecar base URL");
       if (provider.type === "codex") throw new AdminError(400, "Codex accounts require Codex JSON import");
       if (provider.type !== "github-copilot" && !parsed.data.apiKey) throw new AdminError(400, "API key is required");
-      const a = await repo.addAccount(params.id, parsed.data);
+      const a = await repo.addAccount(params.id, { ...parsed.data, accountKind: "api-key" });
       await audit.record("created", "provider_account", a.id, { providerId: params.id, label: a.label });
       log.info("account added", { provider: params.id, label: a.label });
       return { ...a, api_key: mask(a.api_key) };
@@ -434,7 +441,7 @@ export function providerRoutes(db: Database) {
         seen.add(apiKey);
         if (item.accountId) existingIds.add(item.accountId);
         const label = item.label?.trim() || `${prefix}-${existingAccounts.length + added + 1}`;
-        await repo.addAccount(p.id, { label, apiKey, authKind: item.refreshToken ? "oauth" : "api_key", refreshToken: item.refreshToken ?? null, accountId: item.accountId ?? null });
+        await repo.addAccount(p.id, { label, apiKey, authKind: item.refreshToken ? "oauth" : "api_key", accountKind: item.refreshToken ? "oauth-cli" : "api-key", refreshToken: item.refreshToken ?? null, accountId: item.accountId ?? null });
         added += 1;
       }
       log.info("accounts bulk added", { provider: p.name, added, skipped });
@@ -677,6 +684,62 @@ export function providerRoutes(db: Database) {
       if (!provider || !isCodexAccount(provider.type, account)) throw new AdminError(400, "Quota reset is only available for Codex OAuth accounts");
       const accessToken = await ensureFreshToken(repo, account);
       return resetCodexBankedUsage(account, accessToken);
+    })
+    // Reset-credit inventory for the dedicated Codex endpoint. Mirrors the
+    // Codex CLI's "Codex Reset Credits" panel — counts each available credit
+    // and lists its status / expiry. The Codex backend may return an empty
+    // inventory for free accounts; that's a normal state, not an error.
+    .get("/accounts/:accId/codex-quota/reset-credits", async ({ params }) => {
+      const account = await repo.getAccount(params.accId);
+      if (!account) throw new AdminError(404, "Account not found");
+      const provider = await repo.get(account.provider_id);
+      if (!provider || !isCodexAccount(provider.type, account)) {
+        throw new AdminError(400, "Reset credits are only available for Codex OAuth accounts");
+      }
+      try {
+        const bundle = await fetchCodexProviderResetCredits(repo, account);
+        return bundle;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new AdminError(502, `Reset credits fetch failed: ${message}`);
+      }
+    })
+    // Spend one reset credit on behalf of the operator. Body is optional —
+    // when omitted we mint a server-side UUID so the Codex backend's
+    // idempotency check still accepts the request.
+    .post("/accounts/:accId/codex-quota/reset-credits/consume", async ({ params, body }) => {
+      const account = await repo.getAccount(params.accId);
+      if (!account) throw new AdminError(404, "Account not found");
+      const provider = await repo.get(account.provider_id);
+      if (!provider || !isCodexAccount(provider.type, account)) {
+        throw new AdminError(400, "Reset credits are only available for Codex OAuth accounts");
+      }
+      // Parse optional { redeem_request_id: string } body without rejecting
+      // missing keys — clients can rely on the server-side fallback.
+      let redeemRequestId: string | undefined;
+      if (body && typeof body === "object") {
+        const raw = (body as Record<string, unknown>).redeem_request_id;
+        if (typeof raw === "string" && raw.length > 0) redeemRequestId = raw;
+      }
+      try {
+        const result = await consumeCodexProviderResetCredit(repo, account, redeemRequestId);
+        if (result.noCredit) {
+          throw new AdminError(409, "No Codex reset credits available");
+        }
+        if (!result.ok) {
+          throw new AdminError(result.status === 401 ? 401 : 502, result.message ?? `Reset credit consume returned HTTP ${result.status}`);
+        }
+        return {
+          ok: true,
+          code: result.code,
+          windows_reset: result.windows_reset,
+          message: result.message,
+        };
+      } catch (err) {
+        if (err instanceof AdminError) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new AdminError(502, `Reset credit consume failed: ${message}`);
+      }
     })
     .get("/accounts/:accId/copilot-quota", async ({ params }) => {
       const account = await repo.getAccount(params.accId);

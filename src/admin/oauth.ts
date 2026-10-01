@@ -218,7 +218,7 @@ export function oauthRoutes(db: Database) {
       } catch {
         // keep polling
       }
-    }, 2000);
+    }, 2000).unref();
   }
 
   async function handleCallback(q: URLSearchParams): Promise<void> {
@@ -290,6 +290,7 @@ export function oauthRoutes(db: Database) {
     if (created) {
       await repo.updateAccountOAuth(created.id, {
         authKind: "oauth",
+        accountKind: "oauth-browser",
         refreshToken: tokens.refresh_token ?? null,
         idToken: tokens.id_token ?? null,
         accountId,

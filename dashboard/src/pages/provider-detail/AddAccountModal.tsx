@@ -231,25 +231,26 @@ export function AddAccountModal({ provider: p, accountCount, reconnectAccount, o
     <Modal open onClose={close} title={reconnectAccount ? `Reconnect ${reconnectAccount.label}` : "Add account"}>
       {mode === "pick" ? (
         <div className="flex flex-col gap-2">
-          <p className="mb-2 text-xs text-text-muted">{p.type === "github-copilot" ? <>Add one local Copilot sidecar for each entitled GitHub account. The sidecar must remain private to this machine or network.</> : <>How do you want to add API keys to <strong className="text-text-primary">{p.name}</strong>?</>}</p>
+          <p className="mb-2 text-xs text-text-muted">{p.type === "github-copilot" ? <>Add one local Copilot sidecar for each entitled GitHub account. The sidecar must remain private to this machine or network.</> : <>How do you want to add an account to <strong className="text-text-primary">{p.name}</strong>?</>}</p>
           {["openai", "codebuddy-global", "codebuddy-cn"].includes(p.type) && (
             <Button variant="primary" onClick={() => setMode("oauth")}>
               <ExternalLink size={14} /> Login with browser
             </Button>
           )}
-          {p.type === "codex" && (
+          {/* Codex CLI JSON import is allowed on both type "codex" and
+              type "openai" after the soft-merge. The backend tags these
+              accounts with `account_kind = "oauth-cli"` so the runtime
+              picks the chatgpt.com/backend-api/wham endpoint. */}
+          {["codex", "openai"].includes(p.type) && (
             <Button variant="outline" onClick={() => setMode("codex-import")}>
               <Plus size={14} /> Paste Codex JSON
             </Button>
           )}
-          {p.type !== "codex" && <Button variant="outline" onClick={() => { const nextLabel = p.type === "github-copilot" ? "" : `${p.name}-${accountCount + 1}`; setLabel(nextLabel); if (p.type === "github-copilot") { setStartingCopilot(true); startCopilot.mutate(nextLabel); } else setMode("single"); }} loading={startingCopilot}>
+          {p.type !== "github-copilot" && <Button variant="outline" onClick={() => { const nextLabel = p.type === "github-copilot" ? "" : `${p.name}-${accountCount + 1}`; setLabel(nextLabel); if (p.type === "github-copilot") { setStartingCopilot(true); startCopilot.mutate(nextLabel); } else setMode("single"); }} loading={startingCopilot}>
             <Plus size={14} /> {p.type === "github-copilot" ? "Login with GitHub" : "Single API key"}
           </Button>}
-          {p.type !== "github-copilot" && p.type !== "codex" && <Button variant="outline" onClick={() => setMode("bulk")}>
-            <ListChecks size={14} /> Bulk API keys
-          </Button>}
-          {p.type === "github-copilot" && <Button variant="outline" onClick={() => setMode("bulk")}>
-            <ListChecks size={14} /> Bulk Google login
+          {p.type !== "github-copilot" && <Button variant="outline" onClick={() => setMode("bulk")}>
+            <ListChecks size={14} /> {p.type === "github-copilot" ? "Bulk Google login" : "Bulk API keys"}
           </Button>}
           <Button variant="ghost" onClick={close}>Cancel</Button>
         </div>

@@ -99,6 +99,26 @@ export const chatCompletionsSchema = z.object({
   }).optional(),
 }).passthrough();
 
+// ── OpenAI Embeddings ──
+
+/** Single-string input is the common case; arrays let callers embed in batch. */
+const embeddingInputSchema = z.union([
+  z.string().min(1).max(65_536),
+  z.array(z.string().min(1).max(65_536)).min(1).max(2048),
+  z.array(z.number().int().min(-2_147_483_648).max(2_147_483_647)).min(1).max(2048),
+  z.array(z.array(z.number().int().min(-2_147_483_648).max(2_147_483_647)).min(1).max(2048)).min(1).max(2048),
+]);
+
+export const embeddingsCreateSchema = z.object({
+  model: z.string().min(1).max(256),
+  input: embeddingInputSchema,
+  encoding_format: z.enum(["float", "base64"]).optional(),
+  /** Provider-specific — text-embedding-3-* supports reducing dimensions. */
+  dimensions: z.number().int().min(1).max(4096).optional(),
+  /** Optional end-user id forwarded to upstream (OpenAI recommends a stable opaque string). */
+  user: z.string().min(1).max(256).optional(),
+}).passthrough();
+
 const responsesContentPartSchema = z.discriminatedUnion("type", [
   z.object({ type: z.enum(["input_text", "output_text"]), text: z.string() }),
   z.object({ type: z.literal("input_image"), image_url: z.string().url() }),
@@ -232,6 +252,8 @@ const accountBackupAccountSchema = z.object({
   enabled: z.boolean(),
   priority: z.number().int(),
   auth_kind: z.string().min(1).max(64),
+  /** "oauth-browser" / "oauth-cli" / "api-key" — added in schema 0043. */
+  account_kind: z.enum(["oauth-browser", "oauth-cli", "api-key"]).nullable().optional(),
   refresh_token: z.string().max(65_536).nullable(),
   id_token: z.string().max(65_536).nullable(),
   account_id: z.string().max(1024).nullable(),
@@ -406,47 +428,4 @@ export const settingsUpdateSchema = z.object({
 export const passwordChangeSchema = z.object({
   current: z.string(),
   next: z.string().min(6).max(128),
-});
-
-// ── Playground chat sessions ──
-
-export const chatMessageRoleSchema = z.enum(["user", "assistant", "system"]);
-
-export const chatParamsSchema = z.object({
-  temperature: z.number().min(0).max(2).optional(),
-  max_tokens: z.number().int().min(1).max(32_000).optional(),
-  top_p: z.number().min(0).max(1).optional(),
-  stop: z.array(z.string().min(1).max(64)).max(8).optional(),
-  json_mode: z.boolean().optional(),
-  reasoning: z.boolean().optional(),
-  reasoning_effort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
-}).strict();
-
-export const chatSessionCreateSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  model: z.string().trim().min(1).max(256),
-  system: z.string().max(8192).nullable().optional(),
-  params: chatParamsSchema.optional(),
-});
-
-export const chatSessionUpdateSchema = z.object({
-  title: z.string().trim().min(1).max(200).optional(),
-  system: z.string().max(8192).nullable().optional(),
-  params: chatParamsSchema.nullable().optional(),
-});
-
-export const chatSessionMessageSchema = z.object({
-  role: chatMessageRoleSchema,
-  content: z.string().max(64_000),
-  in_tokens: z.number().int().min(0).nullable().optional(),
-  out_tokens: z.number().int().min(0).nullable().optional(),
-  cost: z.number().min(0).nullable().optional(),
-});
-
-export const chatMessagesReplaceSchema = z.object({
-  messages: z.array(chatSessionMessageSchema).min(1).max(50),
-});
-
-export const chatSessionReorderSchema = z.object({
-  ids: z.array(z.string().min(1)).min(1).max(500),
 });

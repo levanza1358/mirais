@@ -30,20 +30,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     type: "openai",
     name: "openai",
     displayName: "OpenAI",
-    description: "GPT models via the OpenAI API",
+    // The same card now hosts API-key, browser-PKCE, and Codex CLI imports —
+    // each takes a different path in the AddAccountModal. The backend tags
+    // every account with `account_kind` so the runtime picks the right
+    // upstream endpoint (api.openai.com vs chatgpt.com/backend-api/wham).
+    description: "GPT models via API key, browser login, or Codex CLI token",
     textIcon: "OA",
     iconSrc: openaiIcon,
     color: "#FFFFFF",
     credentialUrl: "https://platform.openai.com/api-keys",
-  },
-  {
-    type: "codex",
-    name: "codex",
-    displayName: "OpenAI Codex",
-    description: "Codex models via imported OAuth tokens",
-    textIcon: "CX",
-    iconSrc: openaiIcon,
-    color: "#A78BFA",
   },
   {
     type: "anthropic",

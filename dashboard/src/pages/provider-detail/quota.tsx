@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Loader2, RefreshCw } from "lucide-react";
-import { type CodexQuota, type CodexQuotaWindow, type CopilotQuota, type ProviderAccount, providers } from "../../api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Clock, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
+import { type CodexQuota, type CodexQuotaWindow, type CodexResetCredit, type CopilotQuota, type ProviderAccount, providers } from "../../api";
 import { Badge, Button, ConfirmModal, Modal, fmtNum, toast } from "../../components/ui";
 
 export function windowLabel(windowData: CodexQuotaWindow | null, fallback: string): string {
@@ -176,18 +176,116 @@ function CodeBuddyQuotaCard({ data, hideResidualBalance = false }: {
   );
 }
 
+/** Render the per-credit reset inventory returned by the Codex backend.
+ *  Sorts expired credits to the bottom and colour-codes status so the operator
+ *  can see at a glance how many reset credits are still spendable. */
+function ResetCreditInventory({
+  loading,
+  error,
+  credits,
+  availableCount,
+}: {
+  loading: boolean;
+  error: Error | null;
+  credits: CodexResetCredit[];
+  availableCount: number;
+}) {
+  if (loading) {
+    return (
+      <div className="mt-2 flex items-center gap-2 text-[11px] text-text-muted">
+        <Loader2 size={11} className="animate-spin" /> Loading credit details…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <p className="mt-2 text-[11px] text-danger">{error.message || "Failed to load reset credit details."}</p>
+    );
+  }
+  if (credits.length === 0) {
+    return (
+      <p className="mt-2 text-[11px] text-text-muted">
+        {availableCount > 0
+          ? `${availableCount} credit${availableCount === 1 ? "" : "s"} available — expiry not reported by upstream.`
+          : "No reset credits available right now. Check back after the next weekly cycle."}
+      </p>
+    );
+  }
+  const now = Date.now();
+  const sorted = [...credits].sort((a, b) => {
+    // Available credits first (status === "available" and not expired), then
+    // expired/redeemed/unknown at the bottom.
+    const aActive = a.status === "available" && (!a.expires_at || new Date(a.expires_at).getTime() > now);
+    const bActive = b.status === "available" && (!b.expires_at || new Date(b.expires_at).getTime() > now);
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    const aExp = a.expires_at ? new Date(a.expires_at).getTime() : Number.POSITIVE_INFINITY;
+    const bExp = b.expires_at ? new Date(b.expires_at).getTime() : Number.POSITIVE_INFINITY;
+    return aExp - bExp;
+  });
+  return (
+    <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-border/40 bg-bg-base/40 text-[11px]">
+      <table className="w-full text-left">
+        <thead className="sticky top-0 bg-bg-base/95 text-text-muted">
+          <tr>
+            <th className="px-2 py-1 font-medium">Status</th>
+            <th className="px-2 py-1 font-medium">Granted</th>
+            <th className="px-2 py-1 font-medium">Expires</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((credit, index) => {
+            const exp = credit.expires_at ? new Date(credit.expires_at) : null;
+            const expired = exp ? exp.getTime() < now : false;
+            const tone = credit.status !== "available" || expired
+              ? "text-text-muted line-through"
+              : "text-text-primary";
+            return (
+              <tr key={`${credit.granted_at ?? "g"}-${credit.expires_at ?? "e"}-${index}`} className="border-t border-border/30">
+                <td className={`px-2 py-1 ${tone}`}>
+                  <Badge tone={expired ? "muted" : credit.status === "available" ? "accent" : "muted"}>{credit.status}</Badge>
+                  {expired && <span className="ml-1 text-[10px] text-warning">expired</span>}
+                </td>
+                <td className={`px-2 py-1 ${tone}`}>
+                  {credit.granted_at ? new Date(credit.granted_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                </td>
+                <td className={`px-2 py-1 ${tone} flex items-center gap-1`}>
+                  <Clock size={10} />
+                  {exp ? exp.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function CodexQuotaModal({ account, providerType, onClose }: { account: ProviderAccount; providerType: string; onClose: () => void }) {
+  const queryClient = useQueryClient();
   const [confirmReset, setConfirmReset] = useState(false);
+  const [showCredits, setShowCredits] = useState(false);
   const q = useQuery({
     queryKey: ["codex-quota", account.id],
     queryFn: () => providers.codexQuota(account.id),
     retry: 1,
   });
+  // Per-credit inventory from the dedicated Codex reset-credits endpoint.
+  // Lazy-loads when the operator clicks "View credits" so we don't fire an
+  // extra upstream roundtrip every time the modal opens.
+  const creditsQuery = useQuery({
+    queryKey: ["codex-reset-credits", account.id],
+    queryFn: () => providers.codexResetCredits(account.id),
+    enabled: showCredits,
+    retry: 1,
+    staleTime: 30_000,
+  });
   const reset = useMutation({
     mutationFn: () => providers.codexQuotaReset(account.id),
     onSuccess: (result) => {
-      toast(result.message || "Banked reset requested");
+      toast(result.message || "Reset credit consumed");
       void q.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["codex-reset-credits", account.id] });
     },
     onError: (error: Error) => toast(error.message, "error"),
   });
@@ -213,17 +311,45 @@ export function CodexQuotaModal({ account, providerType, onClose }: { account: P
               </div>
               {d.secondary ? <QuotaBar title={windowLabel(d.secondary, "5-hour limit")} windowData={d.secondary} /> : <p className="text-[11px] text-text-muted">No 5-hour window for this plan.</p>}
               <QuotaBar title={windowLabel(d.primary, "Weekly limit")} windowData={d.primary} />
-              <div className="rounded-lg bg-bg-base/50 px-3 py-2 text-xs text-text-muted">
-                <div className="flex items-center justify-between gap-3">
-                  <span>Banked reset quota</span>
-                  <span className="font-medium text-text-primary">{bankedLabel}</span>
-                </div>
-              </div>
               {d.credits && (d.credits.has_credits || d.credits.unlimited) && (
                 <div className="rounded-lg bg-bg-base/50 px-3 py-2 text-xs text-text-muted">
                   {d.credits.unlimited ? "Unlimited credits" : `Credit balance: ${d.credits.balance ?? "—"}`}
                 </div>
               )}
+              {/* Reset-credit inventory: the upstream backend exposes per-credit
+                  status + expiry through the dedicated endpoint. We surface the
+                  count inline and lazy-load the detail table when the operator
+                  asks for it, so opening the modal doesn't cost an extra call. */}
+              <div className="rounded-lg bg-bg-base/50 px-3 py-2 text-xs text-text-muted">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles size={12} className="text-accent" />
+                    Reset credits
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="font-medium text-text-primary">{bankedLabel}</span>
+                    {canReset && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setShowCredits((current) => !current)}
+                        disabled={creditsQuery.isFetching}
+                        className="h-6 px-2 text-[11px]"
+                      >
+                        {creditsQuery.isFetching ? <Loader2 size={11} className="animate-spin" /> : showCredits ? "Hide" : "View"}
+                      </Button>
+                    )}
+                  </span>
+                </div>
+                {showCredits && (
+                  <ResetCreditInventory
+                    loading={creditsQuery.isLoading}
+                    error={creditsQuery.error as Error | null}
+                    credits={creditsQuery.data?.credits ?? []}
+                    availableCount={creditsQuery.data?.available_count ?? bankedRemaining}
+                  />
+                )}
+              </div>
             </>
           )}
           <div className="flex justify-end">
@@ -231,7 +357,8 @@ export function CodexQuotaModal({ account, providerType, onClose }: { account: P
               {canReset && (
                 <Button size="sm" variant="outline" onClick={() => setConfirmReset(true)} disabled={reset.isPending || bankedRemaining <= 0}>
                   {reset.isPending && <Loader2 size={13} className="animate-spin" />}
-                  Banked reset ({bankedLabel})
+                  <Sparkles size={13} />
+                  Use 1 reset credit ({bankedLabel})
                 </Button>
               )}
               <Button size="sm" variant="outline" onClick={() => q.refetch()} disabled={q.isFetching}>
@@ -248,8 +375,9 @@ export function CodexQuotaModal({ account, providerType, onClose }: { account: P
           setConfirmReset(false);
           reset.mutate();
         }}
-        title="Reset OpenAI quota"
-        message={`Do you want to reset quota for ${account.label}? Remaining banked reset quota: ${bankedLabel}.`}
+        title="Spend a Codex reset credit"
+        message={`Spend 1 reset credit to refill the 5-hour / weekly windows for ${account.label}? Available right now: ${bankedLabel}. This cannot be undone.`}
+        danger
         loading={reset.isPending}
       />
     </Modal>

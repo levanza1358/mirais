@@ -79,9 +79,12 @@ describe("model admin routes", () => {
     expect(await repo.listAccounts(provider.id)).toHaveLength(2);
   });
 
-  test("rejects Codex import on non-Codex providers", async () => {
+  test("rejects Codex import on non-OpenAI providers", async () => {
     const repo = new ProvidersRepo(db);
-    const provider = await repo.create({ name: "openai", type: "openai" });
+    // After the OpenAI/Codex soft-merge, both type "openai" and type "codex"
+    // accept codex-import. Other types (anthropic, deepseek, etc.) still
+    // refuse — that's what this test pins down.
+    const provider = await repo.create({ name: "anthropic", type: "anthropic" });
     const app = adminApp(providerRoutes(db));
     const response = await app.handle(new Request(`http://test/api/providers/${provider.id}/codex-import`, {
       method: "POST",
@@ -89,7 +92,7 @@ describe("model admin routes", () => {
       body: JSON.stringify({ accessToken: "a", refreshToken: "r" }),
     }));
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Codex import requires a codex provider" });
+    expect(await response.json()).toEqual({ error: "Codex import requires an OpenAI or Codex provider" });
   });
 
   test("lists provider models and validates updates", async () => {

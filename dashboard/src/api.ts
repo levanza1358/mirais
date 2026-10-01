@@ -58,6 +58,15 @@ export interface ProviderAccount {
   created_at: string;
   updated_at: string;
   auth_kind?: string;
+  /**
+   * How the account was created. Drives which upstream endpoint it talks to:
+   * "oauth-browser" → api.openai.com PKCE flow → api.openai.com/v1
+   * "oauth-cli"     → Codex CLI JSON import → chatgpt.com/backend-api/wham
+   * "api-key"       → plain Bearer key
+   * `null` for accounts created before the OpenAI/Codex soft-merge; the
+   * runtime resolves these from the access-token JWT.
+   */
+  account_kind?: "oauth-browser" | "oauth-cli" | "api-key" | null;
   account_id?: string | null;
   refresh_token?: string | null;
   expires_at?: string | null;
@@ -352,6 +361,16 @@ export const providers = {
       `/api/providers/${id}/quota`),
   codexQuota: (accId: string) => req<CodexQuota>(`/api/providers/accounts/${accId}/codex-quota`),
   codexQuotaReset: (accId: string) => req<{ ok: boolean; message: string }>(`/api/providers/accounts/${accId}/codex-quota/reset`, { method: "POST" }),
+  /** Per-credit reset inventory. `available_count` mirrors the integer in
+   *  the usage snapshot; `credits[]` lists each credit's status + expiry. */
+  codexResetCredits: (accId: string) =>
+    req<{ available_count: number; credits: CodexResetCredit[] }>(`/api/providers/accounts/${accId}/codex-quota/reset-credits`),
+  /** Spend one credit. Body is optional — server mints a redeem id if omitted. */
+  codexConsumeResetCredit: (accId: string, body?: { redeem_request_id?: string }) =>
+    req<{ ok: boolean; code: string | null; windows_reset: number; message: string | null }>(
+      `/api/providers/accounts/${accId}/codex-quota/reset-credits/consume`,
+      { method: "POST", body: JSON.stringify(body ?? {}) },
+    ),
   copilotQuota: (accId: string) => req<CopilotQuota>(`/api/providers/accounts/${accId}/copilot-quota`),
   copilotStart: (providerId: string, label: string) =>
     req<{ accountId: string; url: string }>("/api/copilot/start", { method: "POST", body: JSON.stringify({ providerId, label }) }),
@@ -528,8 +547,21 @@ export interface CodexQuota {
   limit_reached: boolean;
   primary: CodexQuotaWindow | null;
   secondary: CodexQuotaWindow | null;
+  /**
+   * Count of reset credits currently available. Mirrors the upstream
+   * `rate_limit_reset_credits.available_count` integer. The Codex CLI calls
+   * these "reset credits" — spending one immediately refills the rate-limit
+   * windows for this account.
+   */
   banked_resets: { remaining: number | null; total: number | null } | null;
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
+}
+
+/** Per-credit detail returned by the dedicated reset-credits endpoint. */
+export interface CodexResetCredit {
+  status: string;
+  granted_at: string | null;
+  expires_at: string | null;
 }
 
 export interface CopilotQuotaSnapshot {
@@ -662,63 +694,6 @@ export const logs = {
    * `xfarm-device-debug.json`, bundled MySQL log) and report bytes freed. */
   clearFiles: () =>
     req<{ ok: boolean; truncated: string[]; freed_bytes: number }>(`/api/logs/files`, { method: "DELETE" }),
-};
-
-// ── chat playground ──
-
-export interface ChatParams {
-  temperature?: number;
-  max_tokens?: number;
-  top_p?: number;
-  stop?: string[];
-  json_mode?: boolean;
-  reasoning?: boolean;
-  reasoning_effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-}
-
-export interface ChatSessionSummary {
-  id: string;
-  title: string;
-  model: string;
-  system: string | null;
-  params: ChatParams | null;
-  message_count: number;
-  created_at: string;
-  updated_at: string;
-  pinned: boolean;
-  position: number | null;
-}
-
-export interface ChatMessage {
-  id: number;
-  session_id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  position: number;
-  in_tokens: number | null;
-  out_tokens: number | null;
-  cost: number | null;
-  created_at: string;
-}
-
-export interface ChatSession extends ChatSessionSummary {
-  messages: ChatMessage[];
-}
-
-export const chats = {
-  list: () => req<{ items: ChatSessionSummary[] }>("/api/chats"),
-  get: (id: string) => req<ChatSession>(`/api/chats/${id}`),
-  create: (input: { title: string; model: string; system?: string | null; params?: ChatParams }) =>
-    req<ChatSession>("/api/chats", { method: "POST", body: JSON.stringify(input) }),
-  update: (id: string, patch: { title?: string; system?: string | null; params?: ChatParams | null }) =>
-    req<ChatSession>(`/api/chats/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  delete: (id: string) => req<{ ok: boolean; deleted: number }>(`/api/chats/${id}`, { method: "DELETE" }),
-  replaceMessages: (id: string, messages: Array<Omit<ChatMessage, "id" | "session_id" | "position" | "created_at">>) =>
-    req<ChatSession>(`/api/chats/${id}/messages`, { method: "PUT", body: JSON.stringify({ messages }) }),
-  reorder: (ids: string[]) =>
-    req<{ ok: boolean; moved: number }>("/api/chats/order", { method: "PUT", body: JSON.stringify({ ids }) }),
-  setPinned: (id: string, pinned: boolean) =>
-    req<{ ok: boolean; pinned: boolean }>(`/api/chats/${id}/pin`, { method: pinned ? "POST" : "DELETE" }),
 };
 
 export const settings = {

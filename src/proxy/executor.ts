@@ -1,4 +1,4 @@
-import type { CanonicalRequest, CanonicalResponse, AttemptRecord, RouteCandidate, Usage, RoutingPolicy, ProviderAccount } from "../shared/types";
+import type { CanonicalRequest, CanonicalResponse, EmbeddingRequest, EmbeddingResponse, AttemptRecord, RouteCandidate, Usage, RoutingPolicy, ProviderAccount } from "../shared/types";
 import { GatewayError, isRetriableStatus } from "../shared/errors";
 import { baseUrlFor, upstreamFormat } from "./router";
 import { openaiToAnthropicRequest } from "./translator/anthropic-to-openai";
@@ -73,6 +73,12 @@ export function markCooldown(key: string, retryAfterMs?: number): void {
 
 export function markSuccess(key: string): void {
   cooldowns.delete(key);
+}
+
+/** Clear all in-memory cooldowns. Test-only — exposed to keep retry/failover
+ *  scenarios hermetic between cases. Do not call from runtime code. */
+export function clearAllCooldowns(): void {
+  cooldowns.clear();
 }
 
 /**
@@ -531,6 +537,167 @@ export async function executeRequest(
   }
 
   throw lastError ?? new GatewayError(503, "server_error", "All upstream attempts failed");
+}
+
+// ── Embeddings (OpenAI-compatible `POST /v1/embeddings`) ──
+//
+// Embeddings go through a narrower pipeline than chat: no reasoning, no
+// token-saver, no streaming, no function-calls. The body is forwarded
+// verbatim to `{base}/v1/embeddings`; we only rewrite the `model` field so
+// aliases (`combo:foo`) resolve to the upstream model id. The response is
+// returned as-is — OpenAI's shape is identical to ours, so the only work is
+// tagging which provider/model served the request for `request_logs`.
+
+export interface EmbeddingResult {
+  response: EmbeddingResponse;
+  candidate: RouteCandidate;
+  accountLabel: string;
+  attempts: AttemptRecord[];
+  latencyMs: number;
+  /** True when the upstream ignored the requested `encoding_format` and returned float. */
+  encodingMismatch: boolean;
+}
+
+export async function executeEmbedding(
+  req: EmbeddingRequest,
+  candidates: RouteCandidate[],
+  ctx: ExecutorContext = {},
+  providersRepo?: ProvidersRepo,
+): Promise<EmbeddingResult> {
+  if (!candidates.length) {
+    throw new GatewayError(404, "not_found_error", `Model '${req.model}' did not resolve to any embedding-capable provider.`);
+  }
+  // Refuse non-OpenAI-compatible providers up front. Today `openai` and
+  // `custom` are the only routes that expose `/v1/embeddings` — others
+  // (Anthropic, xAI, GitHub Copilot, codebuddy, deepseek, glm, blackbox,
+  // codex OAuth) would silently swallow the request. Failing fast keeps the
+  // operator informed.
+  const validCandidates = candidates.filter((c) => {
+    if (c.provider.type === "openai" || c.provider.type === "custom") return true;
+    if (c.provider.type === "codex") {
+      // Codex OAuth tokens also work for embeddings via chatgpt.com/backend-api/wham/embeddings
+      return c.accounts.some((a) => a.auth_kind === "oauth");
+    }
+    return false;
+  });
+  if (!validCandidates.length) {
+    throw new GatewayError(400, "invalid_request_error", `Model '${req.model}' is configured for a provider that does not support embeddings. Use an OpenAI-compatible provider.`);
+  }
+
+  const plan = await buildAccountPlan(validCandidates, providersRepo);
+  if (!plan.length) {
+    throw new GatewayError(503, "server_error", "All embedding candidates are cooling down. Try again shortly.");
+  }
+
+  // Embeddings are cheap + idempotent. Per-account cooldowns are still honoured
+  // but we skip the "healthy-only" filter — a single embedding call should
+  // never be blocked by an unrelated warmup status.
+  const attempts: AttemptRecord[] = [];
+  let lastError: GatewayError | null = null;
+  const cdKeyFor = (c: RouteCandidate, accountId: string) => cooldownKey(c, accountId);
+
+  for (const { candidate, account } of plan) {
+    const started = Date.now();
+    const base = baseUrlFor(candidate.provider, account);
+    const cdKey = cdKeyFor(candidate, account.id);
+    const timeout = AbortSignal.timeout(config.upstreamTimeoutMs);
+    const combined = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout;
+    const url = candidate.provider.type === "codex"
+      ? `https://chatgpt.com/backend-api/wham/embeddings`
+      : `${base}/embeddings`;
+
+    const body: Record<string, unknown> = {
+      model: candidate.modelId,
+      input: req.input,
+      ...(req.encoding_format ? { encoding_format: req.encoding_format } : {}),
+      ...(req.dimensions ? { dimensions: req.dimensions } : {}),
+      ...(req.user ? { user: req.user } : {}),
+    };
+
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      ...(account.api_key ? { Authorization: `Bearer ${account.api_key}` } : {}),
+    };
+
+    try {
+      const res = await upstreamFetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: combined,
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new GatewayError(
+          res.status === 401 ? 401 : res.status === 429 ? 429 : res.status >= 500 ? 502 : 502,
+          res.status === 401 ? "authentication_error" : res.status === 429 ? "rate_limit_error" : "server_error",
+          `Upstream embeddings failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 200)}` : ""}`,
+        );
+      }
+      const data = (await res.json()) as EmbeddingResponse;
+      // The OpenAI spec says `data[i].embedding` is either number[] (float) or
+      // base64-encoded string. Anything else is an upstream misbehaviour —
+      // surface it as a GatewayError so the executor fails over.
+      for (const item of data.data) {
+        if (typeof item.embedding !== "string" && !Array.isArray(item.embedding)) {
+          throw new GatewayError(502, "server_error", "Upstream returned an embedding in an unsupported encoding");
+        }
+      }
+      const requestedEncoding = req.encoding_format ?? "float";
+      const encodingMismatch = typeof data.data[0]?.embedding === "string" && requestedEncoding === "float"
+        || Array.isArray(data.data[0]?.embedding) && requestedEncoding === "base64";
+
+      markSuccess(cdKey);
+      attempts.push({
+        provider: candidate.provider.name,
+        model: candidate.modelId,
+        accountId: account.id,
+        accountLabel: account.label,
+        outcome: "success",
+        latencyMs: Date.now() - started,
+      });
+      return {
+        response: data,
+        candidate,
+        accountLabel: account.label,
+        attempts,
+        latencyMs: Date.now() - started,
+        encodingMismatch,
+      };
+    } catch (err) {
+      const latencyMs = Date.now() - started;
+      const gErr = toGatewayError(err);
+      attempts.push({
+        provider: candidate.provider.name,
+        model: candidate.modelId,
+        accountId: account.id,
+        accountLabel: account.label,
+        outcome: "error",
+        httpStatus: gErr.status,
+        error: gErr.message,
+        latencyMs,
+      });
+      const retriable = gErr instanceof GatewayError ? isRetriableStatus(gErr.status) || gErr.type === "authentication_error" : true;
+      if (retriable) {
+        if (gErr.status === 429) {
+          markCooldown(cdKey, gErr.status === 429 ? (retryAfterMsFrom(gErr) ?? 60_000) : undefined);
+          if (providersRepo) {
+            await providersRepo.setModelCooldown(account.id, candidate.modelId, Date.now() + 60_000, gErr.message.slice(0, 300));
+          }
+        }
+        lastError = gErr;
+        log.warn("embedding attempt failed, failing over", {
+          provider: candidate.provider.name,
+          model: candidate.modelId,
+          status: gErr.status,
+        });
+        continue;
+      }
+      throw gErr;
+    }
+  }
+
+  throw lastError ?? new GatewayError(503, "server_error", "All embedding candidates failed");
 }
 
 function retryAfterMsFrom(err: GatewayError): number | undefined {

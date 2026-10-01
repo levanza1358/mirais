@@ -144,6 +144,39 @@ export interface CanonicalResponse {
   usage?: Usage;
 }
 
+// ── Embeddings (OpenAI-compatible) ──
+
+/** Per-spec input union for `POST /v1/embeddings`. */
+export type EmbeddingInput =
+  | string
+  | string[]
+  | number[]
+  | number[][];
+
+export interface EmbeddingRequest {
+  model: string;
+  input: EmbeddingInput;
+  encoding_format?: "float" | "base64";
+  /** Optional dimension reduction — supported by text-embedding-3-* */
+  dimensions?: number;
+  /** Optional end-user id forwarded to upstream. */
+  user?: string;
+}
+
+export interface EmbeddingDataItem {
+  object: "embedding";
+  index: number;
+  /** Float array, or base64-encoded Float32 string when `encoding_format === "base64"`. */
+  embedding: number[] | string;
+}
+
+export interface EmbeddingResponse {
+  object: "list";
+  data: EmbeddingDataItem[];
+  model: string;
+  usage: { prompt_tokens: number; total_tokens: number };
+}
+
 // ── Domain entities ──
 
 export type ProviderType =
@@ -185,6 +218,14 @@ export interface ProviderAccount {
   updated_at: string;
   /** 'api_key' (default) or 'oauth' (ChatGPT login — api_key holds the access token). */
   auth_kind?: string;
+  /**
+   * How the OAuth account was created. "oauth-browser" is the dashboard PKCE
+   * flow against api.openai.com; "oauth-cli" is a Codex CLI token pasted in
+   * via "Paste Codex JSON" (it targets chatgpt.com/backend-api/wham). The
+   * runtime uses this to pick the right upstream endpoint. NULL on rows
+   * created before 0043 — the resolver falls back to JWT-decode heuristics.
+   */
+  account_kind?: "oauth-browser" | "oauth-cli" | "api-key" | null;
   refresh_token?: string | null;
   id_token?: string | null;
   /** ChatGPT account id, sent as the chatgpt-account-id header on Codex backend calls. */
@@ -303,7 +344,9 @@ export interface RequestLog {
   reasoning_tokens: number | null;
   request_body: string | null;
   response_body: string | null;
-  /** 'request' (real traffic) or 'warmup' (test/ping). */
+  /** 'request' (real traffic), 'warmup' (test/ping), 'embedding' (vector call),
+   *  'fusion' (parallel combo candidates), 'fusion-judge' (verdict call),
+   *  or 'semantic-cache-hit' (response served from the vector cache). */
   kind?: string;
 }
 

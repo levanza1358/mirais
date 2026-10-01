@@ -387,6 +387,11 @@ switch (cmd) {
     else await doctor(process.argv.includes("--json"));
     break;
   case "fix": await fix(); break;
+  case "tools": {
+    const { runTools } = await import("./cli-tools/index");
+    process.exitCode = await runTools(process.argv.slice(3));
+    break;
+  }
   default:
     console.log("Usage: mirais <start|stop|restart|status|doctor [--fix|--json]|fix|update|autostart on|off|status|expose on|off|uninstall --yes>");
     process.exitCode = cmd ? 1 : 0;

@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, useEffect, useRef, useState } from "react";
+﻿import { Children, isValidElement, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button as ShadcnButton } from "@/components/ui/button";
 import { Input as ShadcnInput } from "@/components/ui/input";
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Switch as ShadcnSwitch } from "@/components/ui/switch";
 
-// ── Button (legacy API → shadcn) ──
+// â”€â”€ Button (legacy API â†’ shadcn) â”€â”€
 export function Button({
   variant = "primary",
   size = "md",
@@ -46,12 +46,12 @@ export function Button({
   );
 }
 
-// ── Input ──
+// â”€â”€ Input â”€â”€
 export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <ShadcnInput className={className} {...props} />;
 }
 
-// ── Select (legacy <option> API → Radix) ──
+// â”€â”€ Select (legacy <option> API â†’ Radix) â”€â”€
 type SelectChangeEvent = { target: { value: string }; currentTarget: { value: string } };
 export function Select({
   className = "",
@@ -114,46 +114,12 @@ export function Select({
   );
 }
 
-// ── Switch ──
+// â”€â”€ Switch â”€â”€
 export function Switch({ checked, onChange, disabled, "aria-label": ariaLabel }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; "aria-label"?: string }) {
   return <ShadcnSwitch checked={checked} onCheckedChange={onChange} disabled={disabled} aria-label={ariaLabel} />;
 }
 
-/**
- * Lightweight range slider with a numeric readout. Used by the chat
- * playground for temperature / top_p / max_tokens so we don't pull in a
- * dedicated slider library for two inputs.
- */
-export function Slider({ value, min, max, step = 1, onChange, label }: {
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  onChange: (v: number) => void;
-  label?: string;
-}) {
-  return (
-    <label className="flex flex-col gap-1 text-xs text-text-muted">
-      {label && (
-        <span className="flex items-center justify-between">
-          <span>{label}</span>
-          <span className="font-mono tabular-nums text-[10px] text-text-primary">{value}</span>
-        </span>
-      )}
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="w-full accent-accent"
-      />
-    </label>
-  );
-}
-
-// ── Badge ──
+// â”€â”€ Badge â”€â”€
 export function Badge({ tone = "muted", title, children }: { tone?: "muted" | "success" | "warning" | "danger" | "accent"; title?: string; children: ReactNode }) {
   if (tone === "muted") return <ShadcnBadge variant="secondary" title={title}>{children}</ShadcnBadge>;
   if (tone === "danger") return <ShadcnBadge variant="destructive" title={title}>{children}</ShadcnBadge>;
@@ -165,12 +131,12 @@ export function Badge({ tone = "muted", title, children }: { tone?: "muted" | "s
   return <ShadcnBadge className={tones[tone]} title={title}>{children}</ShadcnBadge>;
 }
 
-// ── Card ──
+// â”€â”€ Card â”€â”€
 export function Card({ className = "", children }: { className?: string; children: ReactNode }) {
   return <ShadcnCard className={`gap-4 p-5 ${className}`}>{children}</ShadcnCard>;
 }
 
-// ── Modal (legacy open/onClose API → Radix Dialog) ──
+// â”€â”€ Modal (legacy open/onClose API â†’ Radix Dialog) â”€â”€
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     if (!open) return;
@@ -191,7 +157,7 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   );
 }
 
-// ── ConfirmModal ──
+// â”€â”€ ConfirmModal â”€â”€
 export function ConfirmModal({
   open,
   onClose,
@@ -220,7 +186,7 @@ export function ConfirmModal({
   );
 }
 
-// ── EmptyState ──
+// â”€â”€ EmptyState â”€â”€
 export function EmptyState({ icon, title, hint, action }: { icon?: ReactNode; title: string; hint?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -232,12 +198,12 @@ export function EmptyState({ icon, title, hint, action }: { icon?: ReactNode; ti
   );
 }
 
-// ── Skeleton ──
+// â”€â”€ Skeleton â”€â”€
 export function Skeleton({ className = "" }: { className?: string }) {
   return <ShadcnSkeleton className={className} />;
 }
 
-// ── CopyButton ──
+// â”€â”€ CopyButton â”€â”€
 export function CopyButton({ text, className = "", disabled = false }: { text: string; className?: string; disabled?: boolean }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -253,12 +219,12 @@ export function CopyButton({ text, className = "", disabled = false }: { text: s
         timer.current = setTimeout(() => setCopied(false), 1500);
       }}
     >
-      {copied ? "✓ copied" : "copy"}
+      {copied ? "âœ“ copied" : "copy"}
     </button>
   );
 }
 
-// ── Toast (mobile-style) ──
+// â”€â”€ Toast (mobile-style) â”€â”€
 type ToastTone = "success" | "error";
 type ToastOptions = { title?: string };
 type ToastFn = (msg: string, tone?: ToastTone, options?: ToastOptions) => void;
@@ -284,7 +250,7 @@ export function toast(msg: string, tone?: ToastTone, options?: ToastOptions) {
   if (toastHandler) toastHandler(msg, tone, options);
   else toastQueue.push([msg, tone, options]);
 }
-/** Show or update a sticky progress notification (0–100). */
+/** Show or update a sticky progress notification (0â€“100). */
 export function uploadProgress(id: string, progress: number, label?: string) {
   progressHandler?.(id, Math.max(0, Math.min(100, Math.round(progress))), label);
 }
@@ -302,7 +268,7 @@ export function ToastHost() {
       setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== id)), 3500);
     });
     setProgressHandler(
-      (id, pct, label) => setProgress((p) => ({ ...p, [id]: { progress: pct, label: label ?? p[id]?.label ?? "Uploading…" } })),
+      (id, pct, label) => setProgress((p) => ({ ...p, [id]: { progress: pct, label: label ?? p[id]?.label ?? "Uploadingâ€¦" } })),
       (id) => setProgress((p) => { const { [id]: _drop, ...rest } = p; return rest; }),
     );
   }, []);
@@ -355,10 +321,10 @@ export function ToastHost() {
   );
 }
 
-// ── formatters ──
+// â”€â”€ formatters â”€â”€
 export function fmtNum(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
-  // Tiers up to T so a huge count never renders as a 12-digit "…M".
+  if (n === null || n === undefined || !Number.isFinite(n)) return "â€”";
+  // Tiers up to T so a huge count never renders as a 12-digit "â€¦M".
   if (n >= 1_000_000_000_000) return `${(n / 1_000_000_000_000).toFixed(1)}T`;
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -367,190 +333,13 @@ export function fmtNum(n: number | null | undefined): string {
 }
 
 export function fmtMs(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "—";
+  if (n === null || n === undefined) return "â€”";
   if (n >= 1000) return `${(n / 1000).toFixed(1)}s`;
   return `${Math.round(n)}ms`;
 }
 
 export function fmtTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "â€”";
   const d = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso.replace(" ", "T") + "Z");
   return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-/* ────────────────────────────────────────────────────────────────────────
- * Inline Markdown renderer
- *
- * No external dep. Covers the subset the chat playground needs:
- *   - code fences with language hint
- *   - tables (| ... | ... |)
- *   - headings, ordered/unordered lists, blockquotes
- *   - **bold**, *italic*, ~~strike~~, `inline code`
- *   - links and images
- * Inline HTML is escaped. Unknown content falls back to plain text.
- * ──────────────────────────────────────────────────────────────────────── */
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-
-function inlineMarkdown(text: string): string {
-  let escaped = escapeHtml(text);
-  // Stash inline-code content into placeholders so the bold/italic regex
-  // doesn't reach inside backticks.
-  const codeStash: string[] = [];
-  escaped = escaped.replace(/`([^`]+)`/g, (_, code) => {
-    const idx = codeStash.length;
-    codeStash.push(code);
-    return `\u0001CODE${idx}\u0001`;
-  });
-  // Images must come before links because both use `[]()` syntax.
-  escaped = escaped.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g, (_, alt, src, title) =>
-    `<img src="${src}" alt="${alt}"${title ? ` title="${title}"` : ""} class="my-1 max-w-full rounded-lg border border-border/60" />`,
-  );
-  escaped = escaped.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, href) =>
-    `<a href="${href}" target="_blank" rel="noopener" class="text-accent underline">${label}</a>`,
-  );
-  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  escaped = escaped.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-  escaped = escaped.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
-  escaped = escaped.replace(/(^|[^_])_([^_\n]+)_(?![_\w])/g, "$1<em>$2</em>");
-  escaped = escaped.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  // Restore inline code. The surrounding `**` that should have wrapped the
-  // placeholder are still in the string but were already replaced by the
-  // bold/italic passes, so we re-add the `<code>` element here.
-  escaped = escaped.replace(/\u0001CODE(\d+)\u0001/g, (_, idx) => {
-    const code = codeStash[Number(idx)] ?? "";
-    return `<code class="rounded bg-bg-raised px-1 py-0.5 font-mono text-[12px]">${code}</code>`;
-  });
-  return escaped;
-}
-
-function renderMarkdown(md: string): string {
-  const lines = md.replace(/\r\n/g, "\n").split("\n");
-  const out: string[] = [];
-  let i = 0;
-
-  const flushParagraph = (buf: string[]) => {
-    if (!buf.length) return;
-    out.push(`<p class="my-2 leading-6">${inlineMarkdown(buf.join(" "))}</p>`);
-    buf.length = 0;
-  };
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-
-    // Fenced code block
-    if (/^```/.test(line)) {
-      const lang = line.replace(/^```/, "").trim();
-      const code: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^```/.test(lines[i] ?? "")) {
-        code.push(lines[i] ?? "");
-        i += 1;
-      }
-      i += 1; // skip closing fence
-      out.push(`<pre class="my-2 overflow-x-auto rounded-lg border border-border/60 bg-bg-base px-3 py-2 text-[12px]"><code${lang ? ` class="language-${escapeHtml(lang)}"` : ""}>${escapeHtml(code.join("\n"))}</code></pre>`);
-      continue;
-    }
-
-    // Heading
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-    if (heading) {
-      const level = heading[1]!.length;
-      const sizeClass = ["text-2xl", "text-xl", "text-lg", "text-base", "text-base", "text-sm"][Math.min(level - 1, 5)];
-      out.push(`<h${level} class="${sizeClass} mb-1 mt-3 font-semibold">${inlineMarkdown(heading[2]!)}</h${level}>`);
-      i += 1;
-      continue;
-    }
-
-    // Table — header row + separator + body rows
-    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1] ?? "")) {
-      const headerCells = (line.match(/\|([^|]*)/g) ?? []).map((c) => c.replace(/^\|/, "").trim()).filter((c) => c.length > 0);
-      i += 2; // skip header + separator
-      const body: string[][] = [];
-      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i] ?? "")) {
-        const row = (lines[i]!.match(/\|([^|]*)/g) ?? []).map((c) => c.replace(/^\|/, "").trim());
-        body.push(row);
-        i += 1;
-      }
-      const head = `<thead><tr>${headerCells.map((c) => `<th class="border border-border/60 bg-bg-raised px-2 py-1 text-left text-xs font-medium">${inlineMarkdown(c)}</th>`).join("")}</tr></thead>`;
-      const rows = body
-        .filter((r) => r.some((c) => c.length > 0))
-        .map((r) => `<tr>${r.map((c) => `<td class="border border-border/60 px-2 py-1 text-xs">${inlineMarkdown(c)}</td>`).join("")}</tr>`)
-        .join("");
-      out.push(`<table class="my-2 w-full border-collapse text-xs">${head}<tbody>${rows}</tbody></table>`);
-      continue;
-    }
-
-    // Blockquote
-    if (/^>\s?/.test(line)) {
-      const buf: string[] = [];
-      while (i < lines.length && /^>\s?/.test(lines[i] ?? "")) {
-        buf.push((lines[i] ?? "").replace(/^>\s?/, ""));
-        i += 1;
-      }
-      out.push(`<blockquote class="my-2 border-l-2 border-accent/60 pl-3 text-text-muted">${inlineMarkdown(buf.join(" "))}</blockquote>`);
-      continue;
-    }
-
-    // Unordered list
-    if (/^\s*[-*+]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i] ?? "")) {
-        items.push((lines[i] ?? "").replace(/^\s*[-*+]\s+/, ""));
-        i += 1;
-      }
-      out.push(`<ul class="my-2 list-disc pl-5">${items.map((it) => `<li>${inlineMarkdown(it)}</li>`).join("")}</ul>`);
-      continue;
-    }
-
-    // Ordered list
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i] ?? "")) {
-        items.push((lines[i] ?? "").replace(/^\s*\d+\.\s+/, ""));
-        i += 1;
-      }
-      out.push(`<ol class="my-2 list-decimal pl-5">${items.map((it) => `<li>${inlineMarkdown(it)}</li>`).join("")}</ol>`);
-      continue;
-    }
-
-    // Horizontal rule
-    if (/^\s*---+/.test(line)) {
-      out.push(`<hr class="my-3 border-border/60" />`);
-      i += 1;
-      continue;
-    }
-
-    // Blank line ends a paragraph
-    if (line.trim() === "") {
-      i += 1;
-      continue;
-    }
-
-    // Otherwise accumulate a paragraph until the next blank / block delimiter.
-    const para: string[] = [];
-    while (
-      i < lines.length &&
-      (lines[i] ?? "").trim() !== "" &&
-      !/^(```|#|\s*\||\s*[-*+]\s+|\s*\d+\.\s+|>\s?|\s*---+)/.test(lines[i] ?? "")
-    ) {
-      para.push(lines[i] ?? "");
-      i += 1;
-    }
-    flushParagraph(para);
-  }
-
-  return out.join("\n");
-}
-
-/**
- * Render a string of Markdown as HTML inside a sandboxed span. Strips any
- * remaining tags it doesn't recognise. Used by the chat playground for
- * assistant messages — fully covers tables, code blocks, lists, headings,
- * bold/italic/strike, links, images.
- */
-export function Markdown({ content }: { content: string }) {
-  return <span className="markdown-body block w-full" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
 }

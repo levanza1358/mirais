@@ -23,6 +23,7 @@ export async function exportAccountBackup(repo: ProvidersRepo): Promise<AccountB
         enabled: Boolean(account.enabled),
         priority: account.priority,
         auth_kind: account.auth_kind ?? "api_key",
+        account_kind: account.account_kind ?? null,
         refresh_token: account.refresh_token ?? null,
         id_token: account.id_token ?? null,
         account_id: account.account_id ?? null,
@@ -74,6 +75,7 @@ export async function importAccountBackup(repo: ProvidersRepo, backup: AccountBa
         apiKey: sourceAccount.api_key,
         baseUrl: sourceAccount.base_url,
         priority: sourceAccount.priority,
+        accountKind: sourceAccount.account_kind ?? null,
       });
       await repo.updateAccount(account.id, {
         enabled: sourceAccount.enabled,

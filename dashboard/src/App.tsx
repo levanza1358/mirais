@@ -8,7 +8,6 @@ import { ToastHost } from "./components/ui";
 import Landing from "./pages/Landing";
 
 const Overview = lazy(() => import("./pages/Overview"));
-const Chat = lazy(() => import("./pages/Chat"));
 const Providers = lazy(() => import("./pages/Providers"));
 const ProviderDetail = lazy(() => import("./pages/ProviderDetail"));
 const Combos = lazy(() => import("./pages/Combos"));
@@ -94,7 +93,6 @@ export default function App() {
                 <Suspense fallback={<Splash />}>
                   <Routes>
                     <Route index element={<Overview />} />
-                    <Route path="chat" element={<Chat />} />
                     <Route path="providers" element={<Providers />} />
                     <Route path="providers/:id" element={<ProviderDetail />} />
                     <Route path="combos" element={<Combos />} />

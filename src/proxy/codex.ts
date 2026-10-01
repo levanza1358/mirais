@@ -34,9 +34,55 @@ export function isOAuthAccount(account: ProviderAccount): boolean {
   return account.auth_kind === "oauth";
 }
 
-/** Codex transport for ChatGPT/Codex providers plus legacy OpenAI OAuth accounts. */
+/**
+ * Decide whether an account should be routed through the ChatGPT/Codex
+ * backend (chatgpt.com/backend-api/wham) instead of the public OpenAI API
+ * (api.openai.com/v1).
+ *
+ * Resolution order:
+ *   1. Explicit `account_kind` column — written by the OAuth flow
+ *      ("oauth-browser" → false, "oauth-cli" → true) or by Codex JSON
+ *      import ("oauth-cli" → true). Authoritative when present.
+ *   2. JWT fallback — for rows pre-dating migration 0043 (account_kind NULL).
+ *      We decode the access token payload and look for Codex-specific
+ *      claims: an `https://api.openai.com/auth` namespace, or the absence
+ *      of a "profile" / "model.read" scope that browser PKCE tokens carry.
+ *   3. Provider type — kept as a last-resort hint so that:
+ *      - type "codex" with an API-key account still routes via Codex backend
+ *      - type "openai" with no other signal defaults to public API
+ */
 export function isCodexAccount(providerType: string, account: ProviderAccount): boolean {
-  return isOAuthAccount(account) && (providerType === "codex" || providerType === "openai");
+  if (!isOAuthAccount(account)) {
+    // Plain API-key accounts only use the Codex backend if the provider
+    // itself is typed "codex" (rare — the Codex CLI JSON path always uses
+    // oauth, so this only affects hand-rolled rows).
+    return providerType === "codex";
+  }
+
+  const kind = account.account_kind;
+  if (kind === "oauth-cli") return true;
+  if (kind === "oauth-browser") return false;
+  if (kind === "api-key") return providerType === "codex";
+
+  // account_kind is NULL — fall back to JWT inspection. Codex CLI access
+  // tokens are JWTs whose payload contains an `https://api.openai.com/auth`
+  // object (the Codex backend namespace) or an `https://chatgpt.com/`
+  // audience. Browser PKCE tokens don't carry that namespace.
+  if (typeof account.api_key === "string" && account.api_key.split(".").length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(account.api_key.split(".")[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+      if (payload["https://api.openai.com/auth"] || payload["https://chatgpt.com/"]) return true;
+      const aud = payload.aud;
+      if (typeof aud === "string" && aud.includes("chatgpt")) return true;
+    } catch {
+      /* malformed JWT — fall through */
+    }
+  }
+
+  // Last resort: provider type. Pre-merge chatgpt rows were retyped to
+  // "openai" by 0031, but their OAuth tokens still hit Codex — so legacy
+  // OAuth accounts on type "openai" default to Codex.
+  return providerType === "codex" || providerType === "openai";
 }
 
 function isCodeBuddyToken(account: ProviderAccount): boolean {
@@ -239,8 +285,49 @@ export interface CodexUsageSnapshot {
   primary: CodexUsageWindow | null;
   /** Secondary rate-limit window (the shorter 5-hour window when present). */
   secondary: CodexUsageWindow | null;
+  /**
+   * Number of "reset credit" tokens the account owns right now.
+   *
+   * Mirrors the upstream `rate_limit_reset_credits.available_count` integer.
+   * Spending one of these tokens via `consumeCodexResetCredit` immediately
+   * refills the rate-limit windows for this account.
+   *
+   * The legacy `banked_resets` field has been folded into this — the Codex
+   * backend dropped that name months ago and now only exposes
+   * `rate_limit_reset_credits.available_count`. We keep `banked_resets`
+   * in the snapshot as a backward-compat shim that mirrors the same number
+   * for callers that still read the old field name.
+   */
   banked_resets: { remaining: number | null; total: number | null } | null;
   credits: { has_credits: boolean; unlimited: boolean; balance: number | null } | null;
+}
+
+/**
+ * Per-credit detail returned by the dedicated reset-credits endpoint. The
+ * usage snapshot only carries the integer count; the status + expiry of
+ * each individual credit lives here.
+ */
+export interface CodexResetCredit {
+  status: string;
+  granted_at: string | null;
+  expires_at: string | null;
+}
+
+export interface CodexResetCreditBundle {
+  available_count: number;
+  credits: CodexResetCredit[];
+}
+
+/** Outcome of attempting to spend a single reset credit. */
+export interface CodexResetCreditConsumeResult {
+  ok: boolean;
+  /** True when the server returned HTTP 200 with `code === "no_credit"`. */
+  noCredit: boolean;
+  status: number;
+  code: string | null;
+  /** How many windows the upstream actually refilled (0 when the request failed). */
+  windows_reset: number;
+  message: string | null;
 }
 
 type CodexPlanRequirement = "plus" | "pro" | null;
@@ -310,7 +397,28 @@ export async function fetchCodexUsage(account: ProviderAccount, accessToken: str
   if (!res.ok) throw new GatewayError(res.status === 401 ? 401 : 502, "server_error", `Usage fetch failed: HTTP ${res.status}`);
   const j = (await res.json()) as Record<string, unknown>;
   const rl = (j.rate_limit ?? {}) as Record<string, unknown>;
-  const banked = (j.banked_resets ?? j.banked_reset ?? null) as Record<string, unknown> | null;
+
+  // The Codex backend reports reset-credit inventory under
+  // `rate_limit_reset_credits.available_count`. The previous `banked_resets`
+  // field was removed from upstream — keep parsing it as a fallback for
+  // older accounts that hit a cached reverse proxy, but the new field wins
+  // when present.
+  const rlr = (j.rate_limit_reset_credits ?? null) as Record<string, unknown> | null;
+  const legacyBanked = (j.banked_resets ?? j.banked_reset ?? null) as Record<string, unknown> | null;
+  let remaining: number | null = null;
+  let total: number | null = null;
+  if (rlr) {
+    if (typeof rlr.available_count === "number") remaining = rlr.available_count;
+    if (typeof rlr.total === "number") total = rlr.total;
+  }
+  if (legacyBanked && remaining === null) {
+    if (typeof legacyBanked.remaining === "number") remaining = legacyBanked.remaining;
+    if (typeof legacyBanked.available === "number") remaining = legacyBanked.available;
+    if (typeof legacyBanked.left === "number") remaining = legacyBanked.left;
+    if (typeof legacyBanked.total === "number") total = legacyBanked.total;
+    if (typeof legacyBanked.limit === "number") total = legacyBanked.limit;
+  }
+
   const credits = (j.credits ?? null) as Record<string, unknown> | null;
   return {
     plan_type: typeof j.plan_type === "string" ? j.plan_type : null,
@@ -318,12 +426,7 @@ export async function fetchCodexUsage(account: ProviderAccount, accessToken: str
     limit_reached: rl.limit_reached === true,
     primary: parseUsageWindow(rl.primary_window),
     secondary: parseUsageWindow(rl.secondary_window),
-    banked_resets: banked
-      ? {
-          remaining: typeof banked.remaining === "number" ? banked.remaining : typeof banked.available === "number" ? banked.available : typeof banked.left === "number" ? banked.left : null,
-          total: typeof banked.total === "number" ? banked.total : typeof banked.limit === "number" ? banked.limit : null,
-        }
-      : null,
+    banked_resets: remaining !== null || total !== null ? { remaining, total } : null,
     credits: credits
       ? {
           has_credits: credits.has_credits === true,
@@ -334,31 +437,152 @@ export async function fetchCodexUsage(account: ProviderAccount, accessToken: str
   };
 }
 
-export async function resetCodexBankedUsage(account: ProviderAccount, accessToken: string): Promise<CodexResetResult> {
+// ── reset-credit endpoints ──
+//
+// The Codex backend exposes two endpoints that mirror the "reset credit"
+// feature in the official Codex CLI:
+//
+//   GET  /backend-api/wham/rate-limit-reset-credits
+//        → { available_count, credits: [{ status, granted_at, expires_at }] }
+//
+//   POST /backend-api/wham/rate-limit-reset-credits/consume
+//        → { code, windows_reset, message, ... }  (irreversible)
+//
+// We hit both via the `OpenAI-Beta: codex-1` header that the Codex CLI itself
+// sends — the backend rejects calls without it as of late 2025.
+
+/** Standard header set used by both reset-credit endpoints. */
+function resetCreditHeaders(account: ProviderAccount, accessToken: string, withBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json",
+    "OpenAI-Beta": "codex-1",
     originator: "codex_cli_rs",
-    "content-type": "application/json",
   };
   if (account.account_id) headers["chatgpt-account-id"] = account.account_id;
-  const res = await fetch(`${WHAM_BASE}/banked-reset`, {
-    method: "POST",
-    headers,
-    body: "{}",
+  if (withBody) headers["content-type"] = "application/json";
+  return headers;
+}
+
+/** Parse a credit entry from the dedicated reset-credits endpoint. */
+function parseResetCredit(raw: Record<string, unknown>): CodexResetCredit {
+  const granted = raw.granted_at ?? raw.grantedAt;
+  const expires = raw.expires_at ?? raw.expiresAt;
+  const toIso = (v: unknown): string | null => {
+    if (typeof v !== "string") return null;
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+  };
+  return {
+    status: typeof raw.status === "string" && raw.status ? raw.status : "unknown",
+    granted_at: toIso(granted),
+    expires_at: toIso(expires),
+  };
+}
+
+/**
+ * Fetch the reset-credit inventory (count + per-credit status / expiry) for
+ * an OAuth Codex account. Returns a bundle with `available_count = 0` and an
+ * empty `credits` array if the upstream doesn't know about reset credits
+ * yet — that's a normal state for free accounts.
+ */
+export async function fetchCodexResetCredits(account: ProviderAccount, accessToken: string): Promise<CodexResetCreditBundle> {
+  const res = await fetch(`${WHAM_BASE}/rate-limit-reset-credits`, {
+    method: "GET",
+    headers: resetCreditHeaders(account, accessToken, false),
     signal: AbortSignal.timeout(15_000),
   });
-  const raw = await res.text();
-  let message = raw || (res.ok ? "Banked reset requested" : `HTTP ${res.status}`);
+  let data: Record<string, unknown> | null = null;
   try {
-    const j = JSON.parse(raw) as { message?: string; detail?: string; error?: { message?: string } };
-    message = j.message ?? j.detail ?? j.error?.message ?? message;
+    data = (await res.json()) as Record<string, unknown>;
   } catch {
-    // keep text fallback
+    /* non-JSON body — fall through with empty result */
   }
   if (!res.ok) {
-    throw new GatewayError(res.status === 401 ? 401 : 502, res.status === 401 ? "authentication_error" : "server_error", `Banked reset failed: ${message}`);
+    // Free / non-Plus accounts don't have reset credits; treat 4xx as "empty"
+    // so the dashboard can still show "0" rather than a connection error.
+    if (res.status >= 400 && res.status < 500) {
+      return { available_count: 0, credits: [] };
+    }
+    const message = typeof data?.message === "string"
+      ? data.message
+      : typeof data?.error === "string"
+        ? data.error
+        : `Reset credits API unavailable (HTTP ${res.status})`;
+    throw new GatewayError(res.status === 401 ? 401 : 502, res.status === 401 ? "authentication_error" : "server_error", message);
   }
-  return { ok: true, message };
+  const rawCredits = Array.isArray(data?.credits) ? data.credits as Array<Record<string, unknown>> : [];
+  const available = typeof data?.available_count === "number"
+    ? data.available_count
+    : typeof data?.availableCount === "number"
+      ? data.availableCount
+      : 0;
+  return {
+    available_count: Math.max(0, available),
+    credits: rawCredits.map(parseResetCredit),
+  };
+}
+
+/**
+ * Spend a single reset credit to immediately refill the account's rate-limit
+ * windows. The Codex backend requires a server-generated `redeem_request_id`
+ * (UUID) for idempotency — callers must generate one and pass it in.
+ */
+export async function consumeCodexResetCredit(
+  account: ProviderAccount,
+  accessToken: string,
+  redeemRequestId: string,
+): Promise<CodexResetCreditConsumeResult> {
+  const res = await fetch(`${WHAM_BASE}/rate-limit-reset-credits/consume`, {
+    method: "POST",
+    headers: resetCreditHeaders(account, accessToken, true),
+    body: JSON.stringify({ redeem_request_id: redeemRequestId }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  let data: Record<string, unknown> | null = null;
+  try {
+    data = (await res.json()) as Record<string, unknown>;
+  } catch {
+    /* non-JSON body — keep null */
+  }
+  const code = typeof data?.code === "string" ? data.code : null;
+  const windowsReset = typeof data?.windows_reset === "number" ? data.windows_reset : 0;
+  const message = typeof data?.message === "string" ? data.message : null;
+  return {
+    ok: res.ok && (code === "reset" || windowsReset > 0),
+    noCredit: res.ok && code === "no_credit",
+    status: res.status,
+    code,
+    windows_reset: windowsReset,
+    message,
+  };
+}
+
+export interface CodexResetResult {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Backward-compat shim. Older UI callers ask the server to "reset banked
+ * usage" with no payload. Forward the call to `consumeCodexResetCredit` with
+ * a fresh UUID so the Codex backend's idempotency check accepts it.
+ */
+export async function resetCodexBankedUsage(account: ProviderAccount, accessToken: string): Promise<CodexResetResult> {
+  const redeemRequestId = ulid();
+  const result = await consumeCodexResetCredit(account, accessToken, redeemRequestId);
+  if (result.ok) {
+    return { ok: true, message: result.message ?? `Reset applied (${result.windows_reset} window${result.windows_reset === 1 ? "" : "s"} refilled)` };
+  }
+  if (result.noCredit) {
+    return { ok: false, message: "No Codex reset credits available" };
+  }
+  const detail = result.message ?? `HTTP ${result.status}`;
+  throw new GatewayError(
+    result.status === 401 ? 401 : 502,
+    result.status === 401 ? "authentication_error" : "server_error",
+    `Banked reset failed: ${detail}`,
+  );
 }
 
 // Fallback model list, used only when the live catalog fetch fails. The

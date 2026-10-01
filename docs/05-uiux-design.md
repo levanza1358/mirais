@@ -74,13 +74,6 @@ Centered card on a subtle aurora-gradient background: logo mark, "Mirais" wordma
 - **Connect your app card:** copyable gateway Base URL (`http://localhost:1463/v1`) + the single default API key, always visible with a copy button (optional eye toggle to mask). If no key exists, one `default` key is auto-created. The server stores the key plaintext (recoverable, single-user local install); the plaintext is also mirrored in the browser's `localStorage` so it stays copyable across sessions. Keys created on the API keys page are remembered the same way and forgotten on delete.
 - **Runtime health card:** polls `/api/health` every 10 seconds and shows in-flight requests, active cooldowns, RSS, heap usage, and array-buffer memory.
 
-### 3.2.1 Chat (`/chat`)
-**Purpose:** talk to any routed model without leaving the dashboard.
-- Empty state: time-aware greeting ("Good morning/afternoon/evening! Leave the rest to me."), centered composer card, and three clickable preset prompt cards.
-- Composer: auto-growing textarea (Enter sends, Shift+Enter newline), `+` to start a new chat, model selector (enabled `provider/model` pairs), reasoning-effort selector (`minimal…xhigh`), circular send button that becomes Stop while streaming.
-- Sends `POST /v1/chat/completions` with `stream: true` using the first gateway key (from the server or `localStorage`); deltas are appended live.
-- History sidebar (`lg` and up): "New chat" button plus a list of saved conversations, each titled from its first user message; hovering reveals a delete button. Conversations are kept in `localStorage` (`mirais.chats`, newest 50) and written when streaming settles. The composer's `+` starts a fresh chat and the trash icon deletes the current one.
-
 ### 3.3 Providers (`/providers`)
 Card grid of **provider presets** (1-col → 4-col on xl), driven by a static catalog (`dashboard/src/providerCatalog.ts`): OpenAI / ChatGPT, OpenAI Codex, Anthropic, BlackBoxAI, GitHub Copilot, DeepSeek, xAI, GLM, and Custom. Each card:
 ```

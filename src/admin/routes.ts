@@ -8,6 +8,7 @@ import { AdminError } from "../shared/errors";
 import { log } from "../utils/logger";
 import { ProvidersRepo } from "../store/repos/providers";
 import { SettingsRepo } from "../store/repos/settings";
+import { COMBO_PRESETS, resolveComboPreset } from "../proxy/comboPresets";
 import { normalizeRoutingPolicy, Router } from "../proxy/router";
 import { executeRequest } from "../proxy/executor";
 import type { CanonicalRequest, RoutingPolicy } from "../shared/types";
@@ -115,6 +116,68 @@ export function comboRoutes(db: Database) {
       await repo.remove(params.id);
       await audit.record("deleted", "combo", params.id);
       return { ok: true };
+    })
+    .get("/presets", () => ({
+      presets: COMBO_PRESETS.map((preset) => ({
+        id: preset.id,
+        label: preset.label,
+        description: preset.description,
+        strategy: preset.strategy,
+        target_count: preset.targets.length,
+        targets: preset.targets.map((target) => ({
+          kind: target.kind,
+          ...(target.kind === "literal" ? { model: target.model } : { tag: target.tag, fallback: target.fallback ?? [] }),
+        })),
+      })),
+    }))
+    .post("/presets/preview", async ({ body }) => {
+      const presetId = typeof body === "object" && body !== null && "preset_id" in body
+        ? String((body as Record<string, unknown>).preset_id)
+        : "";
+      const overrides = typeof body === "object" && body !== null && "overrides" in body
+        ? ((body as Record<string, unknown>).overrides as Record<string, string>)
+        : {};
+      const preset = COMBO_PRESETS.find((p) => p.id === presetId);
+      if (!preset) throw new AdminError(404, `Unknown combo preset: ${presetId}`);
+      const providerList = await providers.list();
+      const models = await providers.listAllModels();
+      const accounts: Awaited<ReturnType<ProvidersRepo["listAccounts"]>> = [];
+      for (const p of providerList) accounts.push(...await providers.listAccounts(p.id));
+      const { resolved, unresolved } = resolveComboPreset(preset, providerList, models, accounts, overrides);
+      return {
+        name: preset.id,
+        strategy: preset.strategy,
+        targets: resolved,
+        unresolved,
+        description: preset.description,
+      };
+    })
+    .post("/presets/apply", async ({ body }) => {
+      const presetId = typeof body === "object" && body !== null && "preset_id" in body
+        ? String((body as Record<string, unknown>).preset_id)
+        : "";
+      const overrides = typeof body === "object" && body !== null && "overrides" in body
+        ? ((body as Record<string, unknown>).overrides as Record<string, string>)
+        : {};
+      const preset = COMBO_PRESETS.find((p) => p.id === presetId);
+      if (!preset) throw new AdminError(404, `Unknown combo preset: ${presetId}`);
+      const providerList = await providers.list();
+      const models = await providers.listAllModels();
+      const accounts: Awaited<ReturnType<ProvidersRepo["listAccounts"]>> = [];
+      for (const p of providerList) accounts.push(...await providers.listAccounts(p.id));
+      const { resolved, unresolved } = resolveComboPreset(preset, providerList, models, accounts, overrides);
+      if (unresolved.length > 0) {
+        throw new AdminError(422, `Unresolved slots: ${unresolved.join(", ")}. Enable a matching provider or pass overrides.`);
+      }
+      if (await repo.getByName(preset.id)) throw new AdminError(409, `Combo '${preset.id}' already exists`);
+      const chain = resolved
+        .map((r) => r.resolved)
+        .filter((m): m is string => !!m);
+      if (chain.length === 0) throw new AdminError(422, "Preset resolved to an empty chain — nothing to save");
+      const combo = await repo.create(preset.id, chain, preset.strategy);
+      await audit.record("created", "combo", combo.id, { name: combo.name, strategy: combo.strategy, source: "preset", preset_id: preset.id });
+      log.info("combo created from preset", { name: combo.name, entries: chain.length, unresolved });
+      return combo;
     });
 }
 

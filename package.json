@@ -1,7 +1,7 @@
 {
 	"name": "mirais",
 	"version": "1.1.1",
-	"description": "Self-hosted AI gateway & router — one local endpoint for all your LLM providers",
+	"description": "Self-hosted AI gateway & router â€” one local endpoint for all your LLM providers",
 	"type": "module",
 	"private": true,
 	"scripts": {
@@ -18,7 +18,8 @@
 		"svc:start": "bun run scripts/cli.ts start",
 		"svc:stop": "bun run scripts/cli.ts stop",
 		"svc:restart": "bun run scripts/cli.ts restart",
-		"svc:status": "bun run scripts/cli.ts status"
+		"svc:status": "bun run scripts/cli.ts status",
+		"tools": "bun run scripts/cli.ts tools"
 	},
 	"dependencies": {
 		"elysia": "^1.2.10",

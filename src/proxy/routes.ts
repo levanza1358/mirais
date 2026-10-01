@@ -20,11 +20,13 @@ import { AliasesRepo, CombosRepo } from "../store/repos/routing";
 import { LogsRepo } from "../store/repos/logs";
 import { DailyUsageRepo } from "../store/repos/usage";
 import { SettingsRepo } from "../store/repos/settings";
-import type { CanonicalRequest, CanonicalResponse, RoutingPolicy, Usage, ReasoningEffort } from "../shared/types";
+import type { CanonicalRequest, CanonicalResponse, EmbeddingRequest, RoutingPolicy, Usage, ReasoningEffort } from "../shared/types";
 import { log } from "../utils/logger";
 import { canonicalResponseToResponses, chatSseToResponses, responsesRequestToCanonical } from "./translator/responses";
 import { ulid } from "../utils/id";
 import type { GatewayKey } from "../shared/types";
+import { embeddingsCreateSchema } from "../shared/schemas";
+import { executeEmbedding } from "./executor";
 
 export function v1Routes(db: Database) {
   const providersRepo = new ProvidersRepo(db);
@@ -378,6 +380,89 @@ export function v1Routes(db: Database) {
     }
   });
 
+  app.post("/embeddings", async ({ request, set }) => {
+    set.headers["x-request-id"] = `req_${ulid()}`;
+    const started = Date.now();
+    const key = await authenticateGatewayKey(db, request.headers.get("authorization"));
+
+    const rawBody = await readJsonBody(request);
+    const parsed = embeddingsCreateSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new GatewayError(400, "invalid_request_error", parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+    }
+    const req: EmbeddingRequest = {
+      model: parsed.data.model,
+      input: parsed.data.input as EmbeddingRequest["input"],
+      encoding_format: parsed.data.encoding_format,
+      dimensions: parsed.data.dimensions,
+      user: parsed.data.user,
+    };
+
+    authorizeModel(key, req.model);
+    const rl = await checkRateLimit(db, key);
+    if (rl.retryAfterSec !== undefined) {
+      if (key.token_budget && (await new LogsRepo(db).keyUsage(key.id)).tokens_total >= key.token_budget) {
+        throw new GatewayError(429, "rate_limit_error", "Your token limit has been reached for this API key", "token_limit_reached");
+      }
+      set.status = 429;
+      set.headers["retry-after"] = String(rl.retryAfterSec);
+      logRequest(key.id === "anonymous" ? null : key.id, "/v1/embeddings", req.model, null, null, 1, "rate_limited", 429, "rate limit", started, undefined, 0, undefined, undefined, "embedding", null);
+      throw new GatewayError(429, "rate_limit_error", "Rate limit exceeded");
+    }
+
+    const routingPolicy = request.headers.get("x-mirais-no-fallback") === "1"
+      ? { ...normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy")), maxAttempts: 1 }
+      : normalizeRoutingPolicy(await settings.getJson<Partial<RoutingPolicy>>("routing_policy"));
+    const route = await router.resolveWithPolicy(req.model, routingPolicy);
+
+    const logKeyId = key.id === "anonymous" ? null : key.id;
+    if (logKeyId) acquireSlot(logKeyId);
+    try {
+      const result = await executeEmbedding(req, route.candidates, {
+        signal: request.signal,
+      }, providersRepo);
+
+      const inputCount = Array.isArray(req.input) ? req.input.length : 1;
+      const requestSummary = JSON.stringify({
+        model: req.model,
+        input_count: inputCount,
+        ...(req.dimensions ? { dimensions: req.dimensions } : {}),
+        ...(req.encoding_format ? { encoding_format: req.encoding_format } : {}),
+      });
+      const responseSummary = JSON.stringify({
+        object: result.response.object,
+        model: result.response.model,
+        embedding_count: result.response.data.length,
+        dimensions: Array.isArray(result.response.data[0]?.embedding) ? result.response.data[0].embedding.length : "base64",
+        usage: result.response.usage,
+        ...(result.encodingMismatch ? { encodingMismatch: true } : {}),
+      });
+
+      await logRequest(logKeyId, "/v1/embeddings", req.model, result.candidate.provider.name, result.candidate.modelId,
+        result.attempts.length, "success", 200, null, started,
+        {
+          prompt_tokens: result.response.usage.prompt_tokens,
+          completion_tokens: 0,
+          total_tokens: result.response.usage.total_tokens,
+        },
+        0,
+        result.attempts,
+        { request: requestSummary, response: responseSummary },
+        "embedding",
+        null,
+      );
+      return result.response;
+    } catch (err) {
+      const status = err instanceof GatewayError ? err.status : 500;
+      const msg = err instanceof Error ? err.message : String(err);
+      await logRequest(logKeyId, "/v1/embeddings", req.model, null, null, 1, status < 500 ? "client_error" : "error", status, msg, started,
+        undefined, 0, undefined, { request: JSON.stringify({ model: req.model }), response: JSON.stringify({ error: msg }) }, "embedding", null);
+      throw err;
+    } finally {
+      if (logKeyId) releaseSlot(logKeyId);
+    }
+  });
+
   app.get("/health", () => ({ status: "ok", cooldowns: cooldownSnapshot() }));
 
   async function logRequest(
@@ -395,7 +480,7 @@ export function v1Routes(db: Database) {
     tokensSaved = 0,
     attemptsDetail?: unknown[],
     payload?: { request?: string | null; response?: string | null },
-    kind: "request" | "warmup" = "request",
+    kind: "request" | "warmup" | "embedding" | "fusion" | "fusion-judge" | "semantic-cache-hit" = "request",
     reasoningEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null = null,
     reasoningTokens: number | null = null,
   ): Promise<void> {
